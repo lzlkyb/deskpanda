@@ -328,6 +328,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app_state = AppState::new(app_config, config_dir);
             app.manage(app_state.clone());
 
+            // 远程电脑后端：Store + RcService 单例 + 事件接线（见 `rc::boot`）。
+            // Windows 专属；非 Windows 构建里 `rc::` 整棵不存在，所以命令层
+            // 也只在 Windows 注册（见下方「命令注册」段）。
+            #[cfg(windows)]
+            rc::boot::boot(&handle)
+                .map_err(|e| std::io::Error::other(format!("远程电脑初始化失败：{e}")))?;
+
             // 注入 AppHandle 供需要发桌面通知的代码用（feature 关闭时不注入）。
             // 中毒恢复而非 unwrap：同 refresh_tray 的理由——一次 panic 不该让后续
             // 每个 setup 路径都连锁 panic。

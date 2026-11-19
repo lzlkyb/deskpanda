@@ -6,6 +6,7 @@
 
 pub mod ask_pop;
 pub mod auto_quality;
+pub mod boot;
 pub mod clipboard;
 pub mod discovery;
 pub mod file_proto;
