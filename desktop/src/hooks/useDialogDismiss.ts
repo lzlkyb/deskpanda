@@ -9,7 +9,7 @@ export function useDialogDismiss(onClose: () => void, open = true) {
   const closingRef = useRef(false);
   const latest = useRef(onClose);
   latest.current = onClose;
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const frame = useRef(0);
   const reduced = usePrefersReducedMotion();
   const active = useViewActive();

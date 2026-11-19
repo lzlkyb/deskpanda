@@ -1,0 +1,142 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render } from "@testing-library/react";
+import { resetRttTrend } from "@/lib/rcRttTrend";
+import { RcHud } from "./RcHud";
+import styles from "./RemoteComputer.module.css";
+
+/** jsdom 无布局：这里只测交互逻辑（点击开合、点外收起、行条件渲染）。 */
+
+const baseProps = {
+  codec: "h264",
+  fps: 30,
+  rttMs: 12,
+  quality: "auto",
+  scope: "virtual",
+  linkState: "connected" as const,
+  pathKind: "lan",
+};
+
+function renderHud(extra: Partial<Parameters<typeof RcHud>[0]> = {}) {
+  return render(<RcHud {...baseProps} {...extra} />);
+}
+
+function panel(container: HTMLElement) {
+  return container.querySelector(`.${styles.hudPanel}`);
+}
+
+function trigger(container: HTMLElement) {
+  return container.querySelector<HTMLButtonElement>(`.${styles.capBtn}`);
+}
+
+describe("RcHud 连接详情入口", () => {
+  it("AV1 画面必须显示 AV1，不能写成 JPEG 兜底", () => {
+    const { container } = renderHud({ codec: "av1", fps: 30 });
+    fireEvent.click(trigger(container)!);
+    const text = panel(container)!.textContent ?? "";
+    expect(text).toContain("AV1 · 30fps");
+    expect(text).not.toContain("JPEG");
+    expect(text).not.toContain("兜底路径");
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 趋势环形缓冲是模块级单例，逐用例清零避免互相喂样本
+    resetRttTrend();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("常驻只有一枚 i 图标按钮，没有面板（遥测不再铺在画面上）", () => {
+    const { container } = renderHud();
+    const btn = trigger(container);
+    expect(btn).not.toBeNull();
+    // 2026-09-24 浮条收编：入口从「Info + 连接详情」文字按钮缩成纯图标（可达性靠 aria-label）
+    expect(btn!.getAttribute("aria-label")).toBe("连接详情");
+    expect(panel(container)).toBeNull();
+    // 常驻 DOM = wrapper + 按钮两个盒子。chip 格子（原来最多 10 格）已收编，
+    // 这是「不常驻铺陈」的守卫：以后想再往画面常驻区塞信息，这条会挡住。
+    expect(container.firstElementChild!.children.length).toBe(1);
+  });
+
+  it("点击入口展开明细；再点收起", () => {
+    const { container } = renderHud({ respMs: 24 });
+    const btn = trigger(container)!;
+    fireEvent.click(btn);
+    expect(panel(container)).not.toBeNull();
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    // 数据驱动的行：有样本的格才有行
+    expect(panel(container)!.textContent).toContain("操作");
+    fireEvent.click(btn);
+    expect(panel(container)).toBeNull();
+  });
+
+  it("鼠标掠过不弹面板（旧的 hover 自动展开已去掉）", () => {
+    const { container } = renderHud();
+    act(() => {
+      fireEvent.mouseEnter(container.firstElementChild!);
+      vi.advanceTimersByTime(2000);
+    });
+    expect(panel(container)).toBeNull();
+  });
+
+  it("打开时点外面（画面上）收起", () => {
+    const { container } = renderHud();
+    fireEvent.click(trigger(container)!);
+    expect(panel(container)).not.toBeNull();
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(panel(container)).toBeNull();
+  });
+
+  it("无样本的格不出行：最小 props 下只有基础四行", () => {
+    const { container } = renderHud({ rttMs: 0, pathKind: "" });
+    fireEvent.click(trigger(container)!);
+    const text = panel(container)!.textContent ?? "";
+    for (const label of ["编码", "画质", "画面", "链路"]) {
+      expect(text).toContain(label);
+    }
+    for (const label of ["分辨率", "往返", "画面龄", "分段", "操作", "丢包", "码率", "路径", "近 60"]) {
+      expect(text).not.toContain(label);
+    }
+  });
+
+  it("有 rtt 样本时面板头部出 60s 趋势卡（对齐稿：趋势是体感视角）", () => {
+    const { container } = renderHud();
+    fireEvent.click(trigger(container)!);
+    expect(panel(container)!.textContent).toContain("往返延迟 · 近 60s");
+  });
+
+  it("有画面尺寸时补出「分辨率」行（稿里有、原来缺的那条）", () => {
+    const { container } = renderHud({ frameSize: { w: 2560, h: 1440 } });
+    fireEvent.click(trigger(container)!);
+    expect(panel(container)!.textContent).toContain("2560×1440");
+  });
+});
+
+describe("RcHud 链路调度相位（P1 link_sched）", () => {
+  it("degraded / recovering 出「调度」行，stable 与空串不出行", () => {
+    // degraded：出行且文案可读
+    const { container: c1 } = renderHud({ linkSched: "degraded" });
+    fireEvent.click(trigger(c1)!);
+    const t1 = panel(c1)!.textContent ?? "";
+    expect(t1).toContain("调度");
+    expect(t1).toContain("链路降级");
+
+    // recovering：出行且文案可读
+    const { container: c2 } = renderHud({ linkSched: "recovering" });
+    fireEvent.click(trigger(c2)!);
+    const t2 = panel(c2)!.textContent ?? "";
+    expect(t2).toContain("链路恢复中");
+
+    // stable：常态不出行（出行就是噪音）
+    const { container: c3 } = renderHud({ linkSched: "stable" });
+    fireEvent.click(trigger(c3)!);
+    expect((panel(c3)!.textContent ?? "")).not.toContain("调度");
+
+    // 空串（后端旧版本/无会话）：不出行
+    const { container: c4 } = renderHud({ linkSched: "" });
+    fireEvent.click(trigger(c4)!);
+    expect((panel(c4)!.textContent ?? "")).not.toContain("调度");
+  });
+});

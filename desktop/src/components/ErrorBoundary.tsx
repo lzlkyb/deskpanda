@@ -10,6 +10,10 @@ import { Button } from "./ui/button";
  */
 interface Props {
   children: ReactNode;
+  /** 出错时替换默认占位页。传函数可拿到真实 error（独立窗口排查全靠它）。 */
+  fallback?: ReactNode | ((error: Error | null) => ReactNode);
+  /** 用于错误文案：告诉用户「哪一块」崩了，而不只是「应用遇到错误」。 */
+  componentName?: string;
 }
 
 interface State {
@@ -25,7 +29,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[ErrorBoundary]", error, info);
+    // 独立窗口（工作台）没有 DevTools 可开，崩溃信息必须同时留在 console 与界面上，
+    // 否则表现就是「窗口白屏，日志里什么都没有」。
+    console.error(`[ErrorBoundary${this.props.componentName ? `/${this.props.componentName}` : ""}]`, error, info.componentStack);
   }
 
   handleRetry = () => {
@@ -40,6 +46,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      const { fallback, componentName } = this.props;
+      if (typeof fallback === "function") return fallback(this.state.error ?? null);
+      if (fallback !== undefined) return fallback;
+      const what = componentName ? `「${componentName}」加载失败` : "应用遇到错误";
       return (
         <div className="eb-mask flex h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
           <div className="eb flex flex-col items-center gap-4 text-center">
@@ -47,7 +57,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <Icon name="alertTriangle" size={32} className="text-destructive-ink" />
             </div>
             <div className="space-y-1.5">
-              <h3 className="text-lg font-semibold text-foreground">应用遇到错误</h3>
+              <h3 className="text-lg font-semibold text-foreground">{what}</h3>
               <p className="max-w-md text-sm text-muted-foreground">
                 页面渲染过程中发生了异常。可以尝试重新加载，如果问题持续请重启应用。
               </p>

@@ -37,7 +37,7 @@ export function Button({
   ...props
 }: ButtonProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const widthRef = useRef<number>();
+  const widthRef = useRef<number | undefined>(undefined);
   // Header 等调用方会在 busy 时移除 children；保留上一帧宽度仍然必要。
   useLayoutEffect(() => {
     if (!isLoading && buttonRef.current) widthRef.current = buttonRef.current.getBoundingClientRect().width;

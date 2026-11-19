@@ -1,0 +1,2286 @@
+
+
+
+.workbench {
+  width: 100vw;
+  height: 100vh;
+  min-width: 760px;
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--app-bg);
+  font-family:
+    "SF Pro Text",
+    "Microsoft YaHei",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+/* ── 标题栏（批7：窗口改 decorations(false)，这一条兼作拖拽区 ＋ 自绘窗口按钮）
+   48px 三格「品牌 | 状态位 | 窗口按钮」，照 A 方案稿 `.titlebar`。
+   🔴 右侧 **不留 padding**：窗口按钮要贴住窗口右边缘（Windows 原生位置），
+      留一条 14px 的缝出来，那条缝会被 drag-region 当成拖动区。 */
+.titleBar {
+  flex: 0 0 48px;
+  height: 48px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding-left: 14px;
+  background: var(--section-bg);
+  border-bottom: 1px solid var(--border-color);
+  /* 不加投影：标题栏与下方页面之间不要凹凸感（A 方案稿此条无 box-shadow，
+     实现史的 shadow-md 让整条看起来浮在内容之上，2026-09-23 按用户反馈去掉） */
+  user-select: none;
+  z-index: 2;
+}
+
+.brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brandIcon {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  /* 稿子写的是纯白；这里用 accent 底上的语义文字色——dark 主题的 accent 变浅，
+     写死白字会糊（本文件禁写死颜色，守卫见 rcA2ThemeTokens.test.ts）。 */
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 8px;
+}
+
+.brandName {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* 与品牌名同号同重，只换色——稿子 `.brand-section` 就是继承过去的 */
+.brandSection {
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* 中间状态位。两种渲染：已启动 = 只读一行；未启动 = 同一位置的可点按钮
+   （自动启动失败时的补救入口，「把状态的唯一出口藏起来」是这类错误的老毛病）。
+   有会话态文案（正在被别人远程 / 已有申请等待）时优先显示它——比通道状态紧急。 */
+.channelStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  min-height: 28px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.channelBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  min-height: 28px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.channelBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-color));
+  color: var(--accent);
+}
+
+.channelBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.channelDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.channelDotOff {
+  background: var(--text-muted);
+}
+
+/* ── 自绘窗口按钮（批7）。尺寸照稿子 `.window-action`：46px 宽 × 满高，
+   `cursor: default`（Windows 原生窗口键不是手形）。hover 灰用主题混色替掉稿子里
+   写死的那个浅灰——工作台跟随主题，暗色下写死浅灰会糊成一片。
+   不留外侧 margin：两条宿主（标题栏 / 会话顶条）都是带 gap 的 flex 或 grid，
+   间距由父容器给；这里再加一份会和「贴住窗口右边缘」的负 margin 打架。 */
+.winControls {
+  justify-self: end;
+  align-self: stretch;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.winBtn {
+  width: 46px;
+  border: 0;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  cursor: default;
+  transition: background 0.12s, color 0.12s;
+}
+
+.winBtn:hover {
+  background: color-mix(in srgb, var(--text-primary) 11%, transparent);
+  color: var(--text-primary);
+}
+
+.winBtn:active {
+  background: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+.winBtn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* 关闭键 hover 红底白字：Windows 原生配色。两个值走 theme.css `:root` 的语义变量
+   ——那是系统级语义，不随主题变（本文件也不许写死颜色）。 */
+.winBtnClose:hover,
+.winBtnClose:active {
+  background: var(--win-close-hover-bg);
+  color: var(--win-close-hover-fg);
+}
+
+.workbenchBody {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+}
+
+.mainSurface {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+
+.mainColumn {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.stageHost {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.stageHost[hidden] { display: none; }
+
+.errorSlot {
+  flex: none;
+  padding: 8px 12px 0;
+  background: var(--app-bg);
+}
+
+.mainSurface > :global(main),
+.mainSurface > :global(section),
+.mainSurface > :global(div) {
+  min-width: 0;
+  flex: 1;
+}
+
+.sessionSurface {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+
+.sidebar {
+  width: 270px;
+  min-width: 270px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--section-bg);
+  border-right: 1px solid var(--border-color);
+}
+
+.sidebarHead {
+  padding: 12px 12px 8px;
+}
+
+.sidebarTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sidebarTitleRow h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 常驻放大镜搜索（RustDesk peer_tab_page：默认只有图标，点开才出输入框） */
+.searchToggle,
+.searchToggleOn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.searchToggle:hover,
+.searchToggleOn {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.searchToggle:focus-visible,
+.searchToggleOn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.searchRow {
+  margin: 0 0 8px;
+}
+
+.searchRow input {
+  width: 100%;
+  padding: 8px;
+  /* ui-rule-ok: 搜索框的轮廓——输入区底色是 --card-bg 与列表同层，V1 的②背景色在这里分不出可输入区 */
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  /* The border itself carries focus; no second outer ring around this field. */
+  outline: none;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.searchRow input:focus-visible {
+  border-color: var(--accent-strong);
+}
+
+/* 名字 + 属性徽章一行（徽章挂名字后，不占副行段位） */
+.deviceNameLine {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.deviceNameLine strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deviceListMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 4px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.deviceListMeta button,
+.deviceLoadError button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.deviceListMeta button:focus-visible,
+.deviceLoadError button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.deviceLoadError {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.deviceLoadError strong { color: var(--danger); }
+.deviceLoadError button { color: var(--danger); }
+
+.deviceList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* 下内边距给到 12px：这一格是滚动容器，末行 hover 的 --shadow-md 向下溢出 12px，
+     留不够会被容器裁掉一条。顶部 4px 是顺手落档。 */
+  padding: 4px 8px 12px;
+}
+
+/* 分组标题（稿 `.list-label`）：左组名、右计数，11px 弱化文字。
+   第一组不吃上边距——上面紧接的是搜索框，再顶 10px 会把搜索与列表拉散。 */
+.listLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.listLabel:first-child {
+  padding-top: 4px;
+}
+
+/* 计数用等宽数字：分组切换时不因位数变化抖动 */
+.listLabel span:last-child {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 方案 A（2026-09-26）：可折叠分组头（在线 / 不在线）。稿 `.devgrp`——
+   10.5px 弱化字 + 折叠 chevron（rotate -90°，只转 transform）。
+   组名用「不在线」不用「离线」：「最近在线 · 未实测」进来不算撒谎。 */
+.groupHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.groupHeader:hover {
+  color: var(--text-secondary);
+}
+
+.groupChev {
+  transform: rotate(-90deg);
+  transition: transform var(--motion-fast) cubic-bezier(0.2, 0, 0, 1);
+}
+
+.groupChevOpen {
+  transform: rotate(0deg);
+  transition: transform var(--motion-fast) cubic-bezier(0.2, 0, 0, 1);
+}
+
+.groupCount {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 静止行贴合侧栏；悬停给近影，选中用主题背景与轮廓常驻标明。 */
+.deviceItem {
+  position: relative; /* 标签色点堆（.tagDots）的定位基准 */
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 4px;
+  background: var(--card-bg);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  box-shadow: none;
+  transition:
+    box-shadow var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    transform var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    border-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    background-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1);
+}
+
+.deviceItem:hover {
+  background: var(--hover);
+  box-shadow: var(--shadow-sm);
+}
+
+/* —— 设备组织（2026-09-26 对齐稿①，RustDesk TagPainter 对应物）——
+   行右上角色点堆：标签不上文字（「每行最多两段文字」不变式），全称进悬停。
+   颜色只走 --rc-tag-* 令牌（theme.css），组件传 data-color 键、不传值。 */
+.tagDots {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  display: inline-flex;
+  gap: 2px;
+  pointer-events: none;
+}
+.tagDots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.tagFilterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+.tagChip,
+.tagChipOn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.tagChip i,
+.tagChipOn i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.tagChipOn {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.tagDots i[data-color="red"],
+.tagChip i[data-color="red"],
+.tagChipOn i[data-color="red"],
+.orgSwatch[data-color="red"],
+.orgSwatchOn[data-color="red"],
+.orgTagItem i[data-color="red"] {
+  background: var(--rc-tag-red);
+}
+.tagDots i[data-color="amber"],
+.tagChip i[data-color="amber"],
+.tagChipOn i[data-color="amber"],
+.orgSwatch[data-color="amber"],
+.orgSwatchOn[data-color="amber"],
+.orgTagItem i[data-color="amber"] {
+  background: var(--rc-tag-amber);
+}
+.tagDots i[data-color="green"],
+.tagChip i[data-color="green"],
+.tagChipOn i[data-color="green"],
+.orgSwatch[data-color="green"],
+.orgSwatchOn[data-color="green"],
+.orgTagItem i[data-color="green"] {
+  background: var(--rc-tag-green);
+}
+.tagDots i[data-color="cyan"],
+.tagChip i[data-color="cyan"],
+.tagChipOn i[data-color="cyan"],
+.orgSwatch[data-color="cyan"],
+.orgSwatchOn[data-color="cyan"],
+.orgTagItem i[data-color="cyan"] {
+  background: var(--rc-tag-cyan);
+}
+.tagDots i[data-color="blue"],
+.tagChip i[data-color="blue"],
+.tagChipOn i[data-color="blue"],
+.orgSwatch[data-color="blue"],
+.orgSwatchOn[data-color="blue"],
+.orgTagItem i[data-color="blue"] {
+  background: var(--rc-tag-blue);
+}
+.tagDots i[data-color="violet"],
+.tagChip i[data-color="violet"],
+.tagChipOn i[data-color="violet"],
+.orgSwatch[data-color="violet"],
+.orgSwatchOn[data-color="violet"],
+.orgTagItem i[data-color="violet"] {
+  background: var(--rc-tag-violet);
+}
+
+/* —— 管理此设备 · 组织编辑区（对齐稿①的虚线编辑盒）—— */
+.orgEditor {
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 10px;
+}
+.orgLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.orgTagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.orgTagItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+}
+.orgTagItem i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.orgTagItem button {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.orgInput {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+.orgSwatches {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.orgSwatch,
+.orgSwatchOn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.orgSwatchOn {
+  border-color: var(--text-primary);
+}
+.orgSave {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* 选中态在悬停结束后仍靠主题背景、描边和左侧标记辨认。 */
+.deviceItemSelected {
+  position: relative;
+  background: var(--card-selected-bg);
+  border-color: var(--card-selected-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.deviceItemSelected:hover {
+  background: var(--card-selected-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.deviceItemSelected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  /* 设计稿此处有 1px 圆角，2px 宽的条上不可见，省一种档外取值 */
+  background: var(--accent);
+}
+
+.deviceSelect {
+  min-width: 0;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 🔴 这三种图标原先共用一条（同一个淡底 + 同一个灰图标）。详情头要变成
+   实色强调块之后必须拆开：不拆的话改一处会把列表头像和空态图标一起改掉。 */
+.deviceIcon,
+.emptyDeviceIcon {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+/* 列表行头像：中性底 + 次级图标色。
+   🔴 2026-09-22 由「--accent-light 底 + --accent-strong 图标」改中性，**有实害**：
+   逐主题比对，--accent-light 与 --card-selected-bg 在 6 套主题里有 5 套**完全同值**
+   （ocean 下前者比选中渐变更蓝），于是每条设备行的头像都长得跟「选中行底」一样
+   —— 「选中」不再独占任何视觉资源，深色主题里尤其明显。
+   取 --hover 而不是 --section-bg：forest 主题里 --section-bg == --accent-light ==
+   --card-selected-bg（同一浅绿，三值全等），换它等于没改；--hover 是唯一在 6/6 主题
+   下都不与选中底撞色的中性表面档（值即「比 --section-bg 深一档的中性」，项目里
+   已有 30+ 处静态表面先例）。
+   在线状态本就由右下圆点色 + 副标题文字双编码（U7 SC 1.4.1 不靠颜色独担），
+   头像不承载信息，把强调色让给真正有语义的地方（选中环、主按钮）。
+   范围只限列表头像：空态 .emptyDeviceIcon 的容器底是 --app-bg 渐变，中性 token
+   在深色/粉橙主题下会融底，且空态区没有可选中行、无撞色实害 —— 保持 accent。
+   详情头 .detailDeviceIcon（实色强调块）与权限行 .factIcon 的蓝都有含义，不动。 */
+.deviceIcon {
+  color: var(--text-secondary);
+  background: var(--hover);
+}
+
+.deviceIcon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.deviceIcon::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  /* 描边必须跟行卡片同色：行变白底之后再用 --section-bg 会显出一圈灰边 */
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--card-bg);
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+/* 在线状态由绿点与文字同时表达；静态显示，窗口闲置时没有常驻动画。 */
+.deviceIcon[data-tone="ok"]::after {
+  background: var(--success);
+}
+
+.deviceIcon[data-tone="checking"]::after {
+  background: var(--warning);
+}
+
+.deviceCopy {
+  min-width: 0;
+}
+
+.deviceCopy strong,
+.deviceCopy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deviceCopy small[data-tone="ok"] { color: var(--success); }
+.deviceCopy small[data-tone="checking"] { color: var(--warning); }
+
+.deviceCopy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.deviceCopy small {
+  /* ui-rule-ok: 设备名与副标题的行间微调；抬到 4px 会把两行撑开，62px 行高的密实节奏就散了 */
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.primaryButton,
+.secondaryButton,
+/* 离线设备行右格：稿子给的是 text-button「检测」（在线行才是 primary「连接」）。
+   视觉更轻——检测只回答「这一台还在不在」，不是主操作。 */
+.probeButton {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  /* 按下动作与其余控件共用 200ms 位移反馈。 */
+  transition:
+    background-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    border-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+  transform var(--motion-base) cubic-bezier(0.2, 0, 0, 1);
+}
+
+.probeButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-color));
+  color: var(--accent);
+}
+
+.probeButton:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.connectButton,
+.connectButtonSec,
+.dangerButton {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    border-color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    color var(--motion-base) cubic-bezier(0.2, 0, 0, 1),
+    transform var(--motion-base) cubic-bezier(0.2, 0, 0, 1);
+}
+
+.primaryButton,
+.connectButton {
+  color: var(--text-on-accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  font-weight: 600;
+}
+
+.secondaryButton {
+  color: var(--text-primary);
+  background: var(--card-bg);
+}
+
+.dangerButton {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border-color));
+}
+
+.connectButton {
+  min-width: 52px;
+  min-height: 28px;
+  padding: 0 10px;
+  /* 4px 与周围卡片的 8px 打架，是「看着不精致」最容易被忽略的一种 */
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.primaryButton:hover:not(:disabled),
+.connectButton:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+}
+
+.dangerButton:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.connectButton:disabled,
+.connectButtonSec:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.dangerButton:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* 操作控件共用按下反馈与键盘焦点环。 */
+.primaryButton:active:not(:disabled),
+.secondaryButton:active:not(:disabled),
+.probeButton:active:not(:disabled),
+.connectButton:active:not(:disabled),
+.connectButtonSec:active:not(:disabled),
+.dangerButton:active:not(:disabled),
+.receiveOn:active:not(:disabled),
+.receiveOff:active:not(:disabled),
+.deviceSelect:active:not(:disabled),
+.helpBtn:active:not(:disabled),
+.toolRow button:active:not(:disabled),
+.selfUno:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.probeButton:focus-visible,
+.connectButton:focus-visible,
+.connectButtonSec:focus-visible,
+.dangerButton:focus-visible,
+.receiveOn:focus-visible,
+.receiveOff:focus-visible,
+.deviceSelect:focus-visible,
+.helpBtn:focus-visible,
+.toolRow button:focus-visible,
+.selfCopy:focus-visible,
+.selfGhost:focus-visible,
+.groupHeader:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sidebarEmpty {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.sidebarEmpty p {
+  margin: 10px 0 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebarEmpty span {
+  margin-bottom: 14px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* 「这台电脑」卡（方案 A 2026-09-26，稿 `.self-card`）：
+   开关 + 无人值守入口收进一张卡；码本体仍在对话框里按需生成（无常驻码）。
+   侧栏内部分割统一走 --status-border：只改一条会让同一个侧栏里两条线深浅不同。 */
+.selfCard {
+  flex: 0 0 auto;
+  margin: 0 8px 8px;
+  padding: 8px 12px;
+  max-height: 56vh;
+  overflow-y: auto;
+  /* ui-rule-ok: 与 .sideFoot 是同一条侧栏分割线，两条必须同深浅；换背景色会让其中一条看起来更浅 */
+  border-top: 1px solid var(--status-border);
+}
+
+.selfHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.selfHead strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selfCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.selfCopy:hover:not(:disabled) {
+  color: var(--accent-solid);
+  background: var(--hover);
+}
+
+.selfCopy:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 码格（拼装稿 .sc-code）：等宽 + 字距，读的就是「像一串码」 */
+.selfCode {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.pairExchange { display: grid; gap: 4px; }
+.pairCodeRow,
+/* 单码会合的两个动作入口。等宽并排：一边是「我出示」一边是「对方给我」，
+   看着就是两条平权的路，不像主/次按钮那样暗示只有一条是对的。 */
+.pairRoleBtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pairRoleBtns button { min-height: 32px; }
+.pairPeerRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pairLabel { flex: 0 0 auto; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.pairShortCode { flex: 1; min-width: 0; color: var(--text-primary); font: 600 17px/1.4 Consolas, monospace; letter-spacing: 0.08em; white-space: nowrap; user-select: text; }
+.pairPeerRow input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font: 12px/1.4 Consolas, monospace;
+  transition: border-color 150ms cubic-bezier(0.2, 0, 0, 1), background-color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.pairPeerRow input:focus-visible { border-color: var(--accent); }
+.pairPrimary,
+.pairSecondary {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pairPrimary { border: 1px solid var(--accent-solid); background: var(--accent-solid); color: var(--text-on-accent); }
+.pairSecondary { border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-primary); }
+.pairPrimary,
+.pairSecondary { transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1); }
+.pairPrimary:active:not(:disabled),
+.pairSecondary:active:not(:disabled) { transform: translateY(1px); }
+.pairPrimary:disabled { opacity: 0.55; cursor: default; }
+.pairPrimary:hover:not(:disabled) { background: var(--accent-strong); }
+.pairSecondary:hover:not(:disabled) { background: var(--hover); }
+.pairSecondary:disabled { opacity: 0.55; cursor: default; }
+.pairNotice,
+.pairNoticeSuccess,
+.pairNoticeError { padding: 6px 8px; border-radius: 8px; font-size: 11px; line-height: 1.35; }
+.pairFeedback { min-height: 24px; }
+.pairHint { color: var(--text-muted); font-size: 11px; line-height: 24px; }
+.pairNotice { color: var(--text-secondary); background: var(--card-bg); }
+.pairNoticeSuccess { color: var(--success); background: var(--success-bg); }
+.pairNoticeError { color: var(--danger); background: var(--danger-bg); }
+.pairNotice:has(.pairCancel) { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pairCancel { flex: 0 0 auto; border: 0; background: transparent; color: var(--accent-solid); font: inherit; text-decoration: underline; cursor: pointer; }
+.selfMore { margin-top: 8px; color: var(--text-secondary); font-size: 11px; }
+.selfMore summary { cursor: pointer; }
+.selfMore .selfCode { margin-top: 8px; font-size: 12px; }
+
+.selfActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.selfGhost {
+  flex: 1;
+  min-height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.selfGhost:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.selfGhost:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.selfGhost:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.selfToggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--card-bg);
+  /* ui-rule-ok: 开关行的轮廓——底色是 .card-bg 与侧栏底同层，去掉边框这一行就与上面的文字糊在一起（违反 L6） */
+  border: 1px solid var(--border-color);
+}
+
+.selfToggleCopy {
+  min-width: 0;
+  flex: 1;
+}
+
+.selfToggleCopy strong,
+.selfToggleCopy small {
+  display: block;
+}
+
+.selfToggleCopy strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.selfToggleCopy small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.receiveOn,
+.receiveOff {
+  min-width: 58px;
+  min-height: 28px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.receiveOn {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border-color));
+}
+
+.receiveOff {
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+}
+
+/* 侧栏底部（方案 A）：单个「帮助」钮 + 工具横排（图标+文字一行，稿 `.side-foot`）。 */
+.sideFoot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  /* ui-rule-ok: 与 .selfCard 是同一条侧栏分割线（两条必须同深浅），换背景色会让其中一条变浅 */
+  border-top: 1px solid var(--status-border);
+}
+
+.helpBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.helpBtn:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.helpBtn small {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.toolRow {
+  display: flex;
+  gap: 8px;
+}
+
+.toolRow button {
+  flex: 1;
+  position: relative;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* ui-rule-ok: 工具按钮的轮廓——去掉后三颗并排按钮会连成一片，看不出是三颗（违反 L6） */
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolRow button:hover,
+.toolRow .toolActive {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.toolRow .toolActive {
+  border-color: var(--card-selected-border);
+}
+
+.detail {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  background: var(--app-bg);
+}
+
+/* 详情头 = 拼装稿 hero（2026-09-26 全量对齐）：min-height 212 是稿值，
+   窄宽下动作组换行、卡片自动长高不裁切（稿「hero 高度」拍板）。 */
+.detailHead {
+  position: relative;
+  min-height: 212px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  padding: 20px 24px;
+  overflow: hidden;
+  /* 渐变只能装在令牌里：本文件禁 gradient 字面量（rcA2ThemeTokens.test.ts），
+     六套主题各一份见 theme.css 的 --rc-head-bg。 */
+  background: var(--rc-head-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* 右上角手写体标语（稿 .slogan）：楷体栈 + 微旋转，下划线是一条渐变笔触。 */
+.heroSlogan {
+  position: absolute;
+  top: 16px;
+  right: 26px;
+  transform: rotate(-5deg);
+  color: var(--accent-strong);
+  font-family: "KaiTi", "STKaiti", "Segoe Script", cursive;
+  font-size: 15px;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+.heroSlogan::after {
+  content: "";
+  display: block;
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: var(--rc-slogan-line);
+  transform: rotate(-1deg);
+}
+
+/* 显示器插画（稿 .hero-device）：屏体/颈/座/光晕台四层，全部吃 hero 令牌。 */
+.heroDevice {
+  position: relative;
+  flex: 0 0 200px;
+  width: 200px;
+  height: 170px;
+}
+
+.heroNativeDevice {
+  position: absolute;
+  left: 34px;
+  top: 6px;
+  color: var(--accent);
+  stroke-width: 1.2;
+}
+
+.heroMonitor {
+  position: absolute;
+  left: 22px;
+  top: 6px;
+  width: 166px;
+  height: 118px;
+  display: block;
+}
+
+.heroScreen {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  border: 3px solid var(--rc-hero-bezel);
+  overflow: hidden;
+  background: var(--rc-hero-screen);
+  box-shadow: 0 14px 30px var(--accent-shadow);
+}
+
+.heroNeck {
+  position: absolute;
+  left: 50%;
+  top: 112px;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 26px;
+  background: var(--rc-hero-neck);
+  clip-path: polygon(22% 0, 78% 0, 100% 100%, 0 100%);
+}
+
+.heroBase {
+  position: absolute;
+  left: 50%;
+  top: 136px;
+  transform: translateX(-50%);
+  width: 74px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--rc-hero-base);
+}
+
+.heroPedestal {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 150px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--rc-hero-pedestal);
+}
+
+/* 稿 .hero-copy：flex-basis 340 是关键——窄宽下宁可让动作组整体换行，
+   也不把文案列挤成竖条（basis 0% 时实测文案列被压到 209px、胶囊竖着叠）。 */
+.detailName {
+  min-width: 0;
+  flex: 1 1 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: rcRiseIn 200ms cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+
+.detailName h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.detailTitleRow,
+.renameForm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detailTitleRow button,
+.renameForm button {
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.detailTitleRow button:hover,
+.renameForm button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--hover);
+  border-color: var(--border-color);
+}
+
+.renameForm input {
+  width: min(280px, 100%);
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  outline: none;
+}
+
+.renameForm input:focus-visible { border-color: var(--accent-strong); }
+
+/* 状态行（稿 .hero-status）：必须 flex——块级 p 里 8px 彩点是行内 span，
+   宽高不生效，实测渲染成 0 宽（点直接消失）。 */
+.detailName p {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 状态行（稿 .hero-status）：彩点承担 tone，? 气泡就地解释。 */
+.heroStatusDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.heroStatusDot[data-tone="ok"] {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+}
+
+.heroStatusDot[data-tone="warn"] {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent);
+}
+
+.heroStatusDot[data-tone="bad"] {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.heroHelp {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+
+/* ？ 点击展开的就地解释（2026-09-27 审计 P2：按钮不能只悬停有反应）。 */
+.heroHelpHint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.onlineText[data-tone="ok"] {
+  color: var(--success);
+}
+
+.onlineText[data-tone="warn"] {
+  color: var(--warning);
+}
+
+.onlineText[data-tone="bad"] {
+  color: var(--danger);
+}
+
+/* 动作组（稿 .hero-actions）：贴右自成一组，窄宽下整体换行到底部右侧。 */
+.detailActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* 方案 A hero：连接是本屏唯一主行动，大钮按稿提到 42px 档。 */
+.detailActions .connectButton,
+.detailActions .connectButtonSec {
+  min-height: 42px;
+  padding: 0 22px;
+  font-size: 13px;
+}
+
+.detailActions .secondaryButton {
+  min-height: 42px;
+  padding: 0 18px;
+  font-size: 13px;
+}
+
+.detailActions .connectButton,
+.detailActions .connectButtonSec,
+.detailActions .secondaryButton {
+  box-shadow: var(--shadow-sm);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), border-color 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.detailActions .connectButton:hover:not(:disabled),
+.detailActions .connectButtonSec:hover:not(:disabled),
+.detailActions .secondaryButton:hover:not(:disabled) {
+  box-shadow: var(--shadow-md);
+}
+
+.detailActions .connectButton:active:not(:disabled),
+.detailActions .connectButtonSec:active:not(:disabled),
+.detailActions .secondaryButton:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.heroChips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 中性信息胶囊保持贴地，状态点和连接按钮承担主要强调。 */
+.heroChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--card-bg);
+  /* ui-rule-ok: 事实胶囊的轮廓——它的底色是 .card-bg（比状态 pill 弱一档是刻意的），去掉边框这排标签就没有边界 */
+  border: 1px solid var(--border-color);
+  box-shadow: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.detailBody {
+  /* ui-rule-ok: 20px 与 .detailHead 的上下内边距对齐，两块内容的左/上呼吸才连得上 */
+  padding: 20px 24px 24px;
+}
+
+.detailBody h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 方案 A（2026-09-26）：四行事实表 → v5 四卡网格（稿 `.facts`）。
+   与稿子的两处刻意不同：卡**不可点**、不出 chevron——真实事实卡没有动作，
+   「长得像能点但点不动」违反 L6。窄屏靠 auto-fit 自然换行，不写断点。 */
+.factList {
+  margin: 0 0 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.factList > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--card-bg);
+  /* ui-rule-ok: 事实卡的轮廓——卡片与详情面底色同层（都是 --card-bg），不画线四张卡会连成一片 */
+  border: 1px solid var(--border-color);
+}
+
+.factList dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.factList dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* 权限项的语义色图标块（C）。只用语义名（U6：新代码禁 --green/--orange 这类色名变量）。
+   项目没有紫色语义令牌，所以「设备身份」那行走中性 —— 它本来就是客观事实，
+   不是状态，用灰反而比硬凑一个紫色更准。 */
+.factIcon {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--accent-strong);
+  background: var(--accent-light);
+}
+
+.factIcon[data-tone="ok"] {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.factIcon[data-tone="file"] {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.factIcon[data-tone="id"] {
+  color: var(--text-secondary);
+  background: var(--section-bg);
+}
+
+/* 🔴 只选**行尾说明** span（div 的直接子），不能写 `.factList span`：
+   裸标签选择器特异 (0,1,1) 会压过 `.factIcon` 的 display:grid（(0,1,0)）——
+   place-items:center 对 flex 无效，图标块里的字形整体偏左。
+   2026-09-22 真机截图实测抓到（.factList span 是 HEAD 既有，.factIcon 是后加，
+   叠加时没查同文件高特异性选择器 —— 老坑：叠 CSS 必查同文件更长选择器）。 */
+.factList > div > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+
+.managementActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px;
+  background: var(--card-bg);
+  border-radius: 12px;
+}
+
+.warningNotice {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
+  border-radius: 0 8px 8px 0;
+}
+
+.emptyDetail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+  background: var(--app-bg);
+}
+
+.emptyDeviceIcon {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 16px;
+  border-radius: 12px;
+}
+
+.emptyDetail h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.emptyDetail p {
+  max-width: 480px;
+  margin: 8px 0 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryButton,
+  .secondaryButton,
+  .connectButton {
+    transition-duration: 0.01ms;
+  }
+}
+
+/* —— 批5：区块标题行 / 最近会话 / 管理动作折叠 ——
+   放在文件末尾是有意的：`.sectionHead h3 { margin: 0 }` 要靠「更靠后」压掉
+   上面 `.detailBody h3 { margin: 0 0 10px }` 的下外边距（两者特异性相同）。 */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.sectionHead h3 {
+  margin: 0;
+}
+
+/* 标题行右侧的文字入口（稿 section-link）：「管理此设备」「查看全部」 */
+.sectionLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sectionLink:hover {
+  text-decoration: underline;
+}
+.sectionLink:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
+/* 最近会话合在一个列表容器内，减少连续卡片带来的视觉噪音。 */
+.recentBlock {
+  margin-top: 24px;
+}
+.recentList {
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+.recentLine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  /* 46 = A 的 5 条能放进 dbody、又容得下 21px 药丸的那个值（60 放不下 5 条） */
+  min-height: 46px;
+  padding: 0 16px;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.recentLine + .recentLine { border-top: 1px solid var(--border-color); }
+.recentLine:hover { background: var(--hover); }
+.manageReveal { animation: rcRiseIn 200ms cubic-bezier(0.05, 0.7, 0.1, 1); }
+.recentLine span {
+  font-variant-numeric: tabular-nums;
+}
+/* 第一列：能力药丸 + 时间。时间在药丸右边而不是单独一列，
+   因为「什么时候」跟着「哪种会话」走，拆两列会让 4 列挤在一行里。 */
+.recentCap {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.capChip {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--section-bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.capChip[data-cap="control"] {
+  color: var(--accent-strong);
+  background: var(--accent-light);
+}
+.recentDuration {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.recentResult {
+  min-width: 104px;
+  color: var(--text-muted);
+  text-align: right;
+}
+/* 结果列四态：档位由 `@/lib/rcHistory` 的 `resultTone` 判（唯一真源），
+   色号与记录页 `.phRes[data-tone]`（RemoteComputer.module.css）一一对应 ——
+   改这里必须同步那边，否则同一个 `reason` 在两个视图里颜色不同。 */
+.recentResult[data-tone="ok"] {
+  color: var(--success);
+}
+.recentResult[data-tone="warn"] {
+  color: var(--warning);
+}
+.recentResult[data-tone="err"] {
+  color: var(--danger);
+}
+.recentResult[data-tone="cancel"] {
+  color: var(--text-muted);
+}
+.recentEmpty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ═══ UX 体检落地（2026-09-23，design/远程电脑-UX体检-操作友好度-设计稿.html）═══ */
+
+/* U1/U5：被禁设备的连接按钮降级为中性描边（deny 挡进不挡出，仍可点击） */
+.connectButtonSec {
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border-color: var(--border-color);
+  font-weight: 600;
+}
+.connectButtonSec:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+}
+/* 设备行属性徽章（对齐 RustDesk peer_card 的 Icons.key 叠角做法）：
+   图标化 + title 全称，行上不排「已禁止连接本机」这类长句。 */
+.attrBadgeDeny,
+.attrBadgeTrust {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  vertical-align: 2px;
+}
+.attrBadgeDeny {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.attrBadgeTrust {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+/* U2：侧栏顶部传输摘要条（离开文件页仍可见，点击回文件页） */
+.xferStrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 8px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+}
+.xferStrip:hover {
+  border-color: var(--accent-solid);
+  color: var(--text-primary);
+}
+.toolRow button {
+  position: relative;
+}
+.toolBadge {
+  position: absolute;
+  top: -4px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--accent-solid);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* U10：免确认设备过滤条（设置页「管理」跳转进来的态） */
+.trustedFilterBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border-color));
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.trustedFilterBar b {
+  color: var(--text-primary);
+}
+.trustedFilterBar span {
+  flex: 1;
+}
+.trustedFilterBar button {
+  font-size: 12px;
+  color: var(--accent-solid);
+  padding: 2px 4px;
+}
+
+/* 入场只播放一次；窗口闲置时不运行持续装饰动效。 */
+
+@keyframes rcShimmer {
+  from {
+    background-position: -180px 0;
+  }
+  to {
+    background-position: 180px 0;
+  }
+}
+
+@keyframes rcRiseIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 3.3 探测中 / 首载 shimmer 骨架：替代「正在加载设备…」纯文本静默。
+   渐变底来自 theme.css 的 --rc-shimmer-bg（A2 禁 gradient 字面量）。 */
+.skeletonBlock {
+  padding: 10px 4px;
+}
+
+.skeletonRow {
+  height: 12px;
+  margin: 10px 2px;
+  border-radius: 8px;
+  background: var(--rc-shimmer-bg);
+  background-size: 360px 100%;
+  animation: rcShimmer 1.3s linear infinite; /* ui-rule-ok: shimmer 位移动画 1.3s 是设计稿 §3.3 规格，仅加载态出现非常驻 */
+}
+
+/* 三条骨架的宽窄节奏照设计稿 §3.3；放 CSS 里拿得到伪类，内联 style 拿不到 */
+.skeletonRow:nth-child(1) { width: 52%; }
+.skeletonRow:nth-child(2) { width: 60%; }
+.skeletonRow:nth-child(3) { width: 40%; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* 大位移与列表加载动效关闭；全局兜底处理其余过渡。 */
+  .primaryButton,
+  .secondaryButton,
+  .probeButton,
+  .connectButton,
+  .connectButtonSec,
+  .deviceItem {
+    /* ui-rule-ok: 0.01ms 是 reduce 兜底的惯用「近零时长」，不是设计档 */
+    transition-duration: 0.01ms;
+  }
+
+  .detailName,
+  .manageReveal,
+  .skeletonRow,
+  .deviceItem {
+    animation: none;
+  }
+}
+
+/* ── 常驻配对卡（2026-09-29 统一入口：`rc/RcNearbyPairPane`）
+   设计稿：design/远程电脑-一键配对-统一入口-设计稿.html §1/§2。
+   位置：设备页主区顶部、设备详情上方——配对入口不再藏在折叠里。 */
+.nearbyCard {
+  flex: 0 0 auto;
+  margin: 12px 12px 0;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+.nearbyCardHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.nearbyCardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.nearbyCardSub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 4px 0 8px;
+}
+
+.nearbyCardList {
+  margin-bottom: 12px;
+}
+
+/* 核对屏在卡内的一层间距。RcPairPin 自带 .lanPairBox 边框，这里只控间距。 */
+.nearbyVerify {
+  margin-top: 8px;
+}
+
+/* 主按钮永远在：附近为空时它就是第一行动（U3：空态要说清怎么让它不空）。 */
+.nearbyCardMainBtn {
+  width: 100%;
+  min-height: 32px;
+}
+
+.nearbyCardFoot {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-top: 8px;
+}
+
+/* 通道未启动的一行小字。卡照渲、按钮仍是第一行动，不开门也不引导。 */
+.nearbyChannelHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+/* 暂停接收的门控提示。🔴 文案只说真实行为：rc_enabled 挡的是「别人连你」，
+   不挡局域网招呼包（问候包由 presence 线程发，与开关无关）——所以写的是
+   「仍能配对、连不上」，不是「看不到你」。 */
+.nearbyPaused {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+/* 暂停提示里那个「去开启」。U7：点击目标 ≥24×24——高度钉 24px，
+   不跟随 11.5px 字号缩成一条线。 */
+.nearbyPausedBtn {
+  margin-left: auto;
+  flex: none;
+  min-height: 24px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning);
+  background: transparent;
+  border: 1px solid currentcolor;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.nearbyPausedBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.nearbyPausedBtn:focus-visible {
+  outline: 2px solid var(--warning);
+  outline-offset: 2px;
+}
+
+.nearbyPausedBtn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* 配对收尾态：这一轮没成（对方取消 / 超时）。给原因 + 重新发起，
+   不静默弹回列表——那正是 U3 说的「失败被渲染成空」。 */
+.nearbyEnded {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.nearbyEndedBtns {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ── 配对码遮罩 / 亮码 / 读秒（2026-09-29 设计稿 §1） ──
+   遮罩态用虚线 + 灰底，明说「这里有一颗码但没亮」——不是空着让用户猜。
+   码值亮着时是等宽大字 + 读秒；读秒 < 60s 转警示色但不弹不跳。 */
+.pairCodeBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 8px);
+  background: var(--card-bg);
+}
+.pairCodeBarMasked {
+  border-style: dashed;
+  background: var(--section-bg);
+}
+.pairMaskedLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pairDigits {
+  flex: 1;
+  min-width: 0;
+  font: 700 22px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: 4px;
+  color: var(--accent);
+  white-space: nowrap;
+  user-select: text;
+}
+/* tabular-nums：读秒每 250ms 变一次，等宽数字才不会左右抖 */
+.pairTtl {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.pairTtlHot { color: var(--warning); font-weight: 600; }
+.pairGhostSm {
+  flex: none;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  border-radius: var(--radius-md, 8px);
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.pairGhostSm:disabled { opacity: 0.5; }
+
+/* 会合码二维码（RcShortCodeQr）：画好才显示，画不出来不占位（明文码兜底） */
+.pairQr {
+  display: block;
+  margin: 8px auto 0;
+  border-radius: 8px;
+}
+.pairQr[data-ready="0"] { display: none; }
+
+/* 二维码弹框（2026-10-01 用户拍板：默认藏，点了再弹）。
+   遮罩用前景色半透明，六套主题下都成立（不写死颜色）。 */
+.pairQrBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--text-primary) 30%, transparent);
+}
+.pairQrDialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  padding: 18px 22px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-md, var(--shadow-sm));
+}
+.pairQrTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.pairQrDialog .pairQr { margin: 4px 0 0; }
+.pairQrDigits {
+  font: 700 18px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: 4px;
+  color: var(--accent);
+  user-select: text;
+}
+
+/* 码行 + 动作行分两排：270px 侧栏一行塞「码+读秒+两个按钮」会互相挤压
+   （2026-10-01 联调反馈「全部重叠」）。 */
+.pairCodeActs {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- R0 网络诊断折叠段（RcNetDiagCard，selfCard 内）---- */
+.netDiag {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.netDiagToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 0 6px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.netDiagToggle:hover { color: var(--text-primary); }
+
+.netDiagBadge {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+}
+
+.netDiagBadge[data-tone="ok"] {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.netDiagBadge[data-tone="warn"] {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.netDiagBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 8px;
+}
+
+.netDiagRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.netDiagRow span { color: var(--text-muted); }
+.netDiagRow strong { font-weight: 600; color: var(--text-primary); }
+
+.netDiagNote {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 取数失败：同 .netDiagNote 的字号档，语义色走 --danger（U6 只认令牌） */
+.netDiagError {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.netDiagRefresh {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.netDiagRefresh:hover:not(:disabled) { color: var(--text-primary); }
+.netDiagRefresh:disabled { opacity: 0.6; cursor: default; }
+
+.netDiagSpin { animation: netDiagSpin 400ms linear infinite; }
+@keyframes netDiagSpin { to { transform: rotate(360deg); } }

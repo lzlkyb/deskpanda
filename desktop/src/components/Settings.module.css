@@ -1,0 +1,1249 @@
+/* 未读红点：关于 tab 有更新可用时显示 */
+.tabDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger, #DC2626);
+  box-shadow: 0 0 4px var(--danger, #DC2626);
+  flex-shrink: 0;
+
+}
+
+/* ❗ 这里**故意不写** outline: none。
+   globals.css 的键盘焦点兜底用的是 :where()（零特异性），任何自己写了 outline 的规则
+   都会盖过它；本控件（「添加笔记类型」下拉）又没有 :focus 替代样式，
+   写了就等于 Tab 到它完全没有落点提示。 */
+.settingsSelect {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  font-family: inherit;
+}
+
+.btnPrimary {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 白字压 --accent 对比度不足 4.5:1，实心主按钮背景改用加深版 --accent-solid */
+  background: var(--accent-solid);
+  color: #fff;
+  border: none;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+}
+
+.btnPrimary:active {
+  transform: scale(var(--control-press-scale));
+}
+
+.btnDanger {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger, #DC2626);
+  color: #fff;
+  border: none;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+}
+.btnDanger:hover {
+  background: var(--danger-hover, #B91C1C);
+}
+.btnDanger:active {
+  transform: scale(var(--control-press-scale));
+}
+
+.btnSecondary {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.btnSecondary:hover {
+  background: var(--section-bg);
+}
+
+@keyframes pp-skel {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* Section header — S1 分区卡片头（扁平片段 + :has 收口，不包 wrapper 以免破坏搜索/scroll-spy）
+
+   🔴 sticky 头**不能自带 margin-top**：margin 在元素盒外，吸顶后那条缝会透出
+   下面滚过的内容（截图里「通用」上方漏出上一分区残字）。间距改由 ::before
+   不透明条盖住，高度与旧 margin 一致。 */
+.sSection {
+  margin-top: 0;
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  /* 实底而不是渐变卡头：吸顶时要能完全盖住滚过的内容 */
+  background: var(--section-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+/* 卡片间距：盖在上一卡与本头之间，吸顶时也挡内容 */
+.sSection::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -12px;
+  height: 12px;
+  background: color-mix(in srgb, var(--section-bg) 35%, var(--dialog-bg));
+  pointer-events: none;
+}
+
+/* B: settings remain readable immediately; search and scroll do not replay row entrances. */
+.settingsSections > * { animation: none; }
+
+.settingsSearchIcon {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+/* 搜索框本体：与其余 7 处搜索框同一套“外框拥有边框，内部 input 透明”结构。
+   之前是 input 自己带一整圈边框，叠在上面 .settingsSearch 的 border-bottom 之上，
+   视觉上形成两层边框（即用户反馈的“内边框”）。现把边框/背景/圆角改到包裹层上，
+   input 自身变透明，高度保持不变（padding 从 input 换到包裹层，视觉高度一致）。 */
+.settingsSearchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--search-border);
+  background: var(--search-bg);
+  transition:border-color var(--motion-base), box-shadow var(--motion-base);
+}
+.settingsSearchBox:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-shadow, rgba(2, 132, 199, 0.15));
+}
+.settingsSearchInput {
+  flex: 1;
+  padding: 0;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+.settingsSearchClear {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.settingsSearchClear:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+/* 搜索命中计数。文本由 useSettingsData 直接写入 DOM（该 span 不渲染子节点，
+   React 不会覆盖），所以这里不能给它加 content 之类的伪元素文本 */
+.settingsSearchCount {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* 命中行：左侧 accent 条 + 淡底。条子用 scaleX，比 inset box-shadow 更合成器友好 */
+.settingsHit {
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+  position: relative;
+  transition:background var(--motion-fast) var(--ease-standard);
+}
+.settingsHit::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  transform-origin: left center;
+  animation: pp-hit-bar-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  pointer-events: none;
+}
+@keyframes pp-hit-bar-in {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+/* 关键词高亮（注入的 mark） */
+.searchMark {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* 搜索结果条：粘在内容区顶，写清命中数与分区分布 */
+.settingsContentCol {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settingsSearchBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+  animation: pp-float-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.settingsSearchBanner svg {
+  color: var(--accent-strong, var(--accent));
+  flex-shrink: 0;
+}
+.settingsSearchBannerText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settingsSearchSummary {
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+/* ══ 设置从弹框改为主窗口视图（第 3 步） ══
+   ≥600px：左导航 + 右内容双栏；<600px：一级导航 ↔ 二级内容下钻。
+   门槛取 600 而不是 800：默认窗口正好 600 宽，取 800 的话绝大多数用户永远看不到双栏。
+   档位判定在 JS（useMediaQuery）而不是纯 CSS：下钻需要两套不同的 DOM。 */
+.settingsView {
+  /* 🔴 flex: 1 + min-width: 0 不能省：父容器 .contentArea 是 flex **行**，
+     不写 flex-grow 的话默认 0、基准 auto，本视图只会占内容宽度，右边留一大块空白。
+     旁边「记录」模式的 .cardPanel 写的就是 flex: 1 + min-width: 0，同一个道理。 */
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--dialog-bg);
+}
+.settingsViewHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+/* 标题不抢 flex：中间那块空间要留给搜索框（.settingsSearchBox 自带 flex: 1）。
+   窗口真窄时让标题先被压，而不是把搜索框挤没。 */
+.settingsViewTitle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* lucide 图标默认 vertical-align 会比文字基线高一点，flex 对齐后再微调颜色 */
+.settingsViewTitle svg { color: var(--text-muted); flex-shrink: 0; }
+/* 返回按钮：规格对齐 .sAction（5px 12px / 6px 圆角 / 11px / 600），
+   让它看上去就是软件里那一类按钮，而不是一个裸箭头。 */
+.settingsViewBack {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.settingsViewBack:hover {
+  background: var(--section-bg);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+.settingsViewBack:active { transform: translateY(1px); }
+/* 双栏主体 */
+.settingsViewBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+/* 菜单宽度：占 20%，但上下夹住。
+   下限 128px 是量出来的：最长标签「局域网同步」5 个汉字 @12.5px ≈ 62px，
+   加图标 16 + 间距 8 + 左右内边距 28 ≈ 115px——低于这个文字就要被截。
+   上限 220px 是防宽屏：1920px 下 20% = 384px，一栏菜单不需要那么宽。
+   用百分比 + 夹值就不需要断点判断了，文字始终显示。 */
+.settingsNav {
+  flex: 0 0 20%;
+  min-width: 128px;
+  max-width: 220px;
+  border-right: 1px solid var(--border-color);
+  background: var(--section-bg);
+  overflow-y: auto;
+  /* 同 `.settingsContent`：只写 y 的话 x 会被计算成 auto。
+     菜单项文字已经是 `text-overflow: ellipsis`（见 `.settingsNavLabel`），
+     本就不该横向溢出，这里只是把同类隐患一并堵上。 */
+  overflow-x: hidden;
+  padding: 6px 0;
+}
+
+.settingsNavItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-left: 3px solid transparent;
+  transition:background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+.settingsNavItem:hover { background: var(--hover); }
+.settingsNavItem:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* 选中：左侧 accent 指示条 + 淡底，比整条重色块更轻（对齐侧栏选中语言） */
+.settingsNavItemActive {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent-strong, var(--accent));
+  font-weight: 600;
+  border-left-color: var(--accent);
+}
+.settingsNavIcon { font-size: 14px; flex-shrink: 0; }
+/* 标签单行，真装不下时省略号而不是折行——折行会把菜单项高度撞不齐 */
+.settingsNavLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settingsNavGroup {
+  padding: 12px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 小节保持直接子节点，层级用留白和字重表达，不与一级标题争夺吸顶位置。 */
+.sSection[data-settings-parent]:not([data-label]) {
+  position: static;
+  padding: 12px 16px 8px;
+  border-radius: 0;
+  border-top: none;
+  border-bottom: none;
+  background: var(--card-bg);
+  box-shadow: none;
+  letter-spacing: normal;
+}
+.sSection[data-settings-parent]:not([data-label])::before { content: none; }
+
+.sWideSelect { width: 132px; }
+/* 🔴 这里不能写 display: flex + flex-direction: column。
+   AboutTabContent / HelpTabContent 的根用的是全局 .dialog-body，而那个类带着
+   `flex: 1` + `overflow-y: auto`（为弹框内布局设计的）。一旦父容器是 flex 列，
+   它就只分到「剩余高度」并在内部另开一个滚动区——表现为「关于页显示不全」。
+   块级排布下 `flex: 1` 失效，它们按内容高度展开，由本容器统一滚动。 */
+.settingsContent {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* 🔴 必须 relative：分区头是 sticky，getBoundingClientRect 在吸顶时量到的是
+     「卡住后的视觉位置」而不是文档流位置。有了 positioned 祖先后，
+     useSettingsNav 可以用 offsetTop 链算出不受 sticky 影响的布局偏移。 */
+  position: relative;
+  /* 🔴 `overflow-x` 必须显式写。只写 `overflow-y: auto` 不等于「x 不滚」：
+     CSS 规范里一轴为非 visible 时，另一轴的 `visible` 会被**计算成 `auto`**。
+     所以任何一个比容器宽一点点的子元素（哪怕只溢出几个像素）
+     都会让整个设置页冒出一条横向滚动条。
+     2026-09-05 把窗口从 600 调到 540 后，每个分页都出现了这条横条。
+
+     ⚠ 这不是「把内容裁掉了事」：**真需要横向空间的块必须自带滚动容器**，
+     现有的 `.mcpCode`（JSON 配置）与 `.mcpAuditList` 就是这么做的。
+     新增宽内容时照办，别回头把这行去掉。 */
+  overflow-x: hidden;
+  /* S1：内容限宽居中，宽屏下设置行不再无限拉长 */
+  padding: 4px 16px 20px;
+  background: color-mix(in srgb, var(--section-bg) 35%, var(--dialog-bg));
+}
+.settingsContent > * {
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.settingsNoResult {
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* 空态得回答「怎么让它出现」，而不是只说「没找到」——
+   这正好属于「用户有动作能让它不空」（清掉搜索）那一类。 */
+.settingsNoResultHint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.settingsNoResultBtn {
+  margin-top: 12px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+}
+.settingsNoResultBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-light);
+}
+
+/* 空态里「整块页面」那四个跳转按钮：横排一行，间距由这里给。
+   子按钮自带的 margin-top:12 在这里会变成每行都多 12px，压掉。 */
+.settingsNoResultPages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+}
+.settingsNoResultPages .settingsNoResultBtn {
+  margin-top: 0;
+}
+
+/* Setting row — S1：行落在分区卡片内（左右下描边），可点行有 hover */
+.sRow {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+  background: var(--card-bg);
+  /* 与 sSection 左右边对齐，拼成一张卡 */
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  transition:background var(--motion-fast) var(--ease-standard);
+}
+.sRow:hover {
+  background: color-mix(in srgb, var(--accent) 4%, var(--card-bg));
+}
+.sRow:last-child { border-bottom: 1px solid var(--border-color); }
+/* 后面直接跟 lanPanel 时去掉行底边，由面板 border-top 接管，接缝只一条线 */
+.sRow:has(+ .lanPanel) { border-bottom: none; }
+/* 分区末行（下一个是标题）与整页末行：补下圆角，卡片才闭合 */
+.sRow:has(+ .sSection:not([data-settings-parent])),
+.sRow:has(+ .sSection[data-label]),
+.settingsSections > .sRow:last-child,
+.settingsContent > .sRow:last-child {
+  border-radius: 0 0 12px 12px;
+  box-shadow: var(
+    --glass-card-elev,
+    0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 16px rgba(15, 23, 42, 0.07)
+  );
+}
+
+/* 行右控件列：胶囊/按钮统一右对齐，最小宽保证「哪行有控件」可扫（E2）。
+   🔴 排除 .sToggle：开关自己就是 last-child，吃掉 min-width:72 会把 44×26
+   轨道撑成 72px 长胶囊（旋钮贴边、字挤），和设计稿对不上。
+   🔴 排除 .sRowBody：本规则管的是「行末那颗控件」，而**没有行末控件的行，它的 last-child
+   就是文字列自己**。2026-10-02 全页审计量出来的「应用排除名单」行（全仓唯一的这种行）：
+   body 被改成 `display:flex; justify-content:flex-end; flex-shrink:0` 之后，
+   标题/说明/输入框在 340–800 **五档里全部横排成一行**，输入框永远拿不到整幅。
+   加排除后回到竖排三段（行高 103→135 是输入框自己占的一行，属本意），其余行逐格不变。
+   🔴 不写 gap / flex-wrap：子控件自己的间距（sCleanup 4px、sSegGroup 2px）
+   特异性压不过本规则，写了会把它们盖掉。（下面那条降级规则的 flex-wrap 加在 `.sRow`
+   自己身上，不是这条的 `:last-child`，两者不冲突。）
+   🔴 排除 [data-stack]：本规则是 0-5-0（.sRow + :last-child + 三个 :not()），
+   分区里那些「整块纵向内容恰好排在行末」的子节点（灵动岛的停靠六宫格、透度滑杆、
+   外观的主题卡阵）自己的 0-1-0 规则必输，`display:grid/column` 会被拍成右对齐单行——跨 module 也没法
+   靠顺序翻盘。这类子节点显式挂 data-stack 退出本规则，而不是去堆类名权重。 */
+.sRow > :last-child:not(.sToggle):not(.sRowBody):not([data-stack]) {
+  flex-shrink: 0;
+  min-width: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* 行末控件挤掉描述时的降级（2026-10-02「右列挤爆」三案实测的甲案）。
+   上面那条 `flex-shrink: 0` 是对的——控件不该被压扁；但它遇上 5 档胶囊（实测实占 222px）
+   就会反过来饿死描述列：460px 内容列下 `.sRowBody` 只剩 140px，一句话折成 3 行，
+   380px（用户截图那档）折成 6 行、整行 151px 高。
+
+   降级：控件与文字挤不进同一行时，让**整块控件**落到描述下方，描述独享整幅。
+
+   🔴 触发条件是「行末那个多选一控件有 ≥4 档」，不是「行末有控件」。第一版写成
+   `.sRow:has(> .sCleanup:last-child), .sRow:has(> .sSegGroup:last-child)`，四种行原型实测
+   把 2 档的「表头 / 来源图标」也从 65px 抬到 147px——那些行的描述本来一行读完，纯属误伤。
+   按档数收口后实测：≥4 档行降级（自动清理 5 / 笔记回收站 5 / 栈容量 4），2·3 档行逐像素不动。
+   全量清点 11 个行末分段控件（grep `sSegGroup|sCleanup`）：2 档 6 个（拆行格式、表头、来源图标、
+   OCR 选字模式、面板布局、RC 能力上限）+ 3 档 1 个（Hover 模式）留在并排，4 档 1 个 + 5 档 2 个降级。
+   仍用 `:has()` 而不是逐个调用点加类名，是因为「第 5 个宽控件行」一定会被写出来（规则 #11.1）。
+
+   ❌ 也试过让每行按自己描述的长度决定保底宽（`flex: 1 1 min(320px, max-content)`）：
+   Chromium 判 `flex-basis` 里的 `min()` 含**内在关键字**为非法，整条声明被丢弃＝等于没写
+   （`CSS.supports('flex-basis','min(320px, max-content)')` 为 false）。
+   但 `min()` 配长度/百分比是合法的——下面那条就用它兜住了窄窗。
+
+   🔴 `320px` 是量出来的，不是凑的：浏览器实测（`Range.getClientRects()` 数行数）扫过
+   280/310/330/360 四档——basis 280 时「控件能并排」与「并排且描述单行」之间留了 18px
+   的尴尬档（那 18px 里描述照旧折行、等于这条没生效）；≥310 两个临界点重合。
+   取 320 留余量（本区最长描述 27 字 ≈ 312px）。
+   宽窗口（内容列 ≥640）下实测与改前**逐像素相同**：文字列 320px、行高 65px 两档一致。
+
+   🔴 保底宽必须封顶到 `100% - 52px`（52 = `.sRowIcon` 40 + `.sRow` 的 gap 12）：
+   写死 320 时，内容列 <372 的窄窗（**含用户截图那档 380**）里 `.sRowBody` 自己就挤不进
+   图标那一行，换列算法把它整块甩到第二行 ⇒ 图标单独悬在顶上、三行堆叠 150px。
+   实测封顶后：340/380 档图标与文字同行、行高 113px（描述 2 行），460–620 档 101px 不变，
+   ≥640 档 65px 与现状逐像素相同。
+
+   🔴 降下来的控件靠 `margin-left: auto` 回到右列（对齐 16px 内边距），**不是**靠
+   `.sRow > :last-child` 那条的 `justify-content: flex-end`——那条管的是控件**自己内部**的
+   子元素，挪不动控件本身；第一版没写这条，胶囊落在行首（跟图标左缘齐平），
+   设计稿里「默认右对齐」的说法当时是假的。实测 `margin-left:auto` 在并排档（≥640）
+   是零影响：那一行的剩余空间先被 `flex-grow:1` 的文字列吃光，auto 外边距分到 0。
+   🔴 门改看**结构**，不再列类名（2026-10-02 全页审计）：上面这段原来写死
+   `:is(.sCleanup, .sSegGroup)`，于是灵动岛「提醒横幅停留」那颗 4 档分段（类名是分区自己的
+   `Island.module.css .seg`）根本不在门眼里——340 档实测描述折 **25 行、整行 556px 高**。
+   这正是规则 #11.1 说的「第 5 个宽控件行一定会被写出来」，只不过它换了个 module 的类名。
+   🔴 门**不**排除 `<select>`：我一开始写了 `:not(select)`，理由是「option 不是档位」，
+   实测把这条判据打死了——动作链下拉有 4 个 option 时，「门看不见 select」那档实测 148px / 描述 5 行，
+   让 select 进门才 115px / 2 行：那颗下拉（右列实占 110px）和长描述本来就挤不进同一行，正是本规则要救的情形。
+   全仓当过行末 last-child 的 `<select>` 只有那一个（MCP 与笔记模板里的都在对话框里），
+   所以这里不存在「短描述被无辜加高」的误伤面。纵向块走 `data-stack` 逃生口（主题卡阵本轮已挂）。 */
+.sRow:has(> :last-child:not([data-stack]):not(.sRowBody) > :nth-child(4)) {
+  flex-wrap: wrap;
+}
+.sRow:has(> :last-child:not([data-stack]):not(.sRowBody) > :nth-child(4)) > .sRowBody {
+  flex: 1 1 min(320px, 100% - 52px);
+}
+.sRow:has(> :last-child:not([data-stack]):not(.sRowBody) > :nth-child(4)) > :last-child:not(.sToggle) {
+  margin-left: auto;
+}
+
+/* emoji + 彩砖 + 白圆盘（最终稿：圆盘必须是真实 DOM，不能用 ::before） */
+.sRowIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--ic-brand);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 1px 3px rgba(15, 23, 42, 0.10);
+}
+.sRowIconGlyph {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  font-style: normal;
+  flex-shrink: 0;
+}
+.icSystem  { background: var(--ic-system); }
+.icCapture { background: var(--ic-capture); }
+.icSave    { background: var(--ic-save); }
+.icEditor  { background: var(--ic-editor); }
+.icPrivacy { background: var(--ic-privacy); }
+.icSync    { background: var(--ic-sync); }
+.icPaste   { background: var(--ic-paste); }
+.icBrand   { background: var(--ic-brand); }
+
+/* 分区头之后的非标题块（statsPanel / AiTab 内容 / sSectionDesc…）：
+   接上卡片左右边，避免「只有标题是卡片、身体散在外面」。
+   🔴 排除 .lanPanel：它要自己接在开关行下面（同卡续页），不能吃内缩浮卡样式。 */
+.sSection ~ :not(.sSection):not(.lanPanel) {
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+.sSection ~ :not(.sSection):not(.lanPanel):has(+ .sSection),
+.settingsSections > *:last-child:not(.lanPanel),
+.settingsContent > *:last-child:not(.lanPanel) {
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0 0 12px 12px;
+  box-shadow: var(
+    --glass-card-elev,
+    0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 16px rgba(15, 23, 42, 0.07)
+  );
+}
+
+.sRowBody { flex: 1; min-width: 0; }
+.sRowLabel { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.sRowDesc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* Toggle switch — iOS style（紧凑 44×26，不吃右列 min-width:72） */
+.sToggle {
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition:background var(--motion-base);
+  padding: 0;
+  vertical-align: middle;
+}
+.sToggle.off { background: var(--toggle-off-bg); }
+.sToggle.on  { background: var(--green); }
+/* 折叠组里的行会被「被控上限」的通道闸禁用（`.rcPanelOff` 只管变灰，交互靠这里）。
+   判据同 `.lanRefreshBtn:disabled`：降透明 + 明确不是可点态。 */
+.sToggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.sToggle .sToggleThumb {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition:transform var(--motion-base) var(--ease-standard);
+}
+.sToggle.off .sToggleThumb { transform: translateX(2px); }
+.sToggle.on  .sToggleThumb { transform: translateX(20px); }
+/* 「开 / 关」两个字是开关**唯一不依赖颜色**的状态信息（SC 1.4.1 的那份保险），
+   所以它必须自己读得清：
+   · 9px 低于正文字号下限 11px，先提到 11px（44px 轨道 + 22px 旋钮仍放得下，不会被旋钮压住）；
+   · 「开」态原来写死 #fff，而深色两套主题的 --green 是亮绿 #4ADE80，白字只有 1.74:1，
+     改走 --toggle-on-label（浅色四套 = #fff，深色两套 = 深色字）。
+   · 「关」态用的 --toggle-off-label 已在 theme.css 里按 ≥4.5:1 重新取值，这里不用动。
+   副作用是「关」会比以前显眼——这是要的结果，不是回归。 */
+.sToggle .sToggleLabel {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
+.sToggle.on  .sToggleLabel { left: 7px;  color: var(--toggle-on-label); }
+.sToggle.off .sToggleLabel { left: auto; right: 6px; color: var(--toggle-off-label); }
+/* 美乐蒂皮肤：开关白色旋钮内嵌一颗粉色爱心（绿色 on 轨道语义保留不变） */
+:global([data-theme="blossom"]) .sToggle .sToggleThumb::after {
+  content: "♥";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: #F0568C;
+}
+
+/* Hotkey / KBD button */
+.sKbd {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'SF Mono', Consolas, monospace;
+  border: 1.5px solid var(--border-color);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  min-width: 100px;
+  text-align: center;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  white-space: nowrap;
+}
+.sKbd:hover {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  /* accent 压 accent-light 浅色主题下对比度不足 4.5:1，改用加深版 --accent-strong */
+  color: var(--accent-strong);
+}
+.sKbd.recording {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  /* accent 压 accent-light 浅色主题下对比度不足 4.5:1，改用加深版 --accent-strong */
+  color: var(--accent-strong);
+  box-shadow: 0 0 0 2px var(--accent-shadow);
+}
+
+/* Value badge */
+.sVal {
+  font-size: 12px;
+  font-weight: 600;
+  /* accent 压 accent-light 浅色主题下对比度不足 4.5:1，改用加深版 --accent-strong */
+  color: var(--accent-strong);
+  padding: 3px 8px;
+  background: var(--accent-light);
+  border-radius: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+  border: none;
+}
+.sVal:hover {
+  opacity: 0.85;
+}
+
+/* Action button */
+.sAction {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+  white-space: nowrap;
+}
+.sAction:hover {
+  border-color: var(--accent);
+  /* accent 压 accent-light 浅色主题下对比度不足 4.5:1，改用加深版 --accent-strong */
+  color: var(--accent-strong);
+  background: var(--accent-light);
+}
+.sAction:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sAction:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sAction.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.sAction.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.sActionLoading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.sActionLoading::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: sActionSpin 0.6s linear infinite;
+}
+@keyframes sActionSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* 设置行内展开的文本输入（应用排除名单）。
+   原先写成内联 style：拿不到 :focus 伪类，outline:none 之后键盘用户看不到焦点环。 */
+.sTextInput {
+  margin-top: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.sTextInput:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+}
+
+/* Cleanup options — S1 胶囊多选一（与查找卡/工具箱开关同语言） */
+.sCleanup { display: flex; gap: 4px; flex-wrap: wrap; }
+.sCleanupOpt {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  font-family: inherit;
+  background: var(--card-bg);
+  color: var(--text-muted);
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+}
+.sCleanupOpt.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.sCleanupOpt:not(.active):hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-color));
+  background: color-mix(in srgb, var(--accent) 6%, var(--card-bg));
+}
+
+/* 分段控件（复刻 tabBar 风格） */
+.sSegGroup {
+  display: flex;
+  background: var(--seg-bg, var(--section-bg));
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.sSegOpt {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.sSegOpt:hover:not(.sSegActive) {
+  color: var(--text-primary);
+}
+/* 文字分段按钮（拆行格式 / 表头 / OCR 选字模式等文字多选一）：
+ * .sSegOpt 是 32px 固定宽的图标按钮（配 .sSegEmoji），文字放不下会溢出；
+ * 本样式 auto 宽 + 左右 padding，hover/active 态与 .sSegOpt 完全一致，
+ * 容器仍是 .sSegGroup——同类"多选一"控件视觉统一。 */
+.sSegText {
+  min-width: 40px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  position: relative;
+}
+.sSegText:hover:not(.sSegActive) {
+  color: var(--text-primary);
+}
+.sSegActive {
+  background: var(--seg-active-bg, var(--card-bg));
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.sSegEmoji {
+  font-size: 14px;
+  line-height: 1;
+}
+/* tooltip */
+.sSegOpt::after {
+  content: attr(title);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition:opacity var(--motion-fast);
+  z-index: 10;
+}
+.sSegOpt:hover::after {
+  opacity: 1;
+}
+
+/* Settings footer — 方案 B 紧凑两行：
+   行1 = 恢复默认设置（左·链接）+ 关闭设置（右·紧凑实心按钮）
+   行2 = 自动保存提示 + 版本徽章（居中合并）
+   底部圆角修复：.dialog-box 有 16px 圆角但无 overflow:hidden（防裁剪其他弹框浮层），
+   自带背景色的 footer 须自行加底部圆角，否则直角溢出弹框圆角之外 */
+.sFooter {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-color);
+  background: var(--section-bg);
+  border-radius: 0 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sFooterRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sSaveBtn {
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: none;
+  /* 白字压 --accent 对比度不足 4.5:1，实心主按钮背景改用加深版 --accent-solid */
+  background: var(--accent-solid);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px var(--accent-shadow);
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.sSaveBtn:hover {
+  box-shadow: 0 4px 12px var(--accent-shadow);
+  transform: translateY(-1px);
+}
+.sSaveBtn:active {
+  transform: scale(0.98);
+}
+
+.sFooterMeta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sResetBtn {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border-color);
+  cursor: pointer;
+  padding: 0 0 1px;
+  transition:color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+.sResetBtn:hover {
+  color: var(--danger);
+  border-bottom-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.sRowRecommend {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* ══ 以下这组 class 名字带 lan / kbPair 前缀，但**不是局域网同步专属**，
+      是三个功能共用的「设备列表行 + 面板框 + 配对提示」词汇，所以 2026-09-16
+      拆体量时**故意留在核心文件**，没跟其余同前缀的类一起去 Lan.module.css：
+
+        .lanPanel / .lanPanelHeader / .lanStatus / .lanStatusText / .lanDot
+        .lanRefreshBtn / .lanTestBtn
+              → 局域网同步 + MCP 服务面板(McpServerPanel) + 远程电脑(RcAllowPanel/RcSection)
+        .lanDeviceList / .lanDeviceItem / .lanDeviceAvatar / .lanDeviceName
+        .lanDeviceTime / .lanDeviceInfo
+              → 设备列表行：局域网同步 + 知识库同步 + 远程电脑
+        .kbPairFp / .kbPairNote / .kbPairPeer / .kbPairWarn
+              → 配对核对卡：知识库配对 + 远程电脑的同步邀约(RcSyncOffers)
+
+      ⚠️ 清死 CSS 时别按前缀一起处理；它们每个都有 3-5 个消费者，删了会造成跨功能掉样式。
+      将来若要归位，正确做法是**重命名成中性名**（如 .devRow / .panelFrame / .pairNotice），
+      不是搬去某个功能模块。 */
+
+/* 开关开启后的详情面板：接在同一张分区卡里（修复与开关行「断节」）。
+   不留 margin、不另起圆角；底部圆角/阴影由「下一个是 sSection / 末块」那套规则补。 */
+.lanPanel {
+  margin: 0;
+  border-radius: 0;
+  padding: 14px 16px 16px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--card-bg));
+  border: none;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+}
+/* 下一分区 / 页尾 / 自身容器末尾：补下圆角 + 卡片阴影，与 sRow 末行同一收口。
+   last-child 覆盖 McpTab（包在 LazyMount 里、后面没有 sSection 兄弟）的情况。 */
+.sSection ~ .lanPanel:has(+ .sSection),
+.settingsSections > .lanPanel:last-child,
+.settingsContent > .lanPanel:last-child,
+.lanPanel:last-child {
+  border-radius: 0 0 12px 12px;
+  box-shadow: var(
+    --glass-card-elev,
+    0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 16px rgba(15, 23, 42, 0.07)
+  );
+}
+.lanPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.lanStatus {
+  display: flex; align-items: center; gap: 8px;
+}
+.lanDot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 40%, transparent);
+}
+.lanDot.off { background: var(--text-muted); box-shadow: none; animation: none; }
+.lanStatusText {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  /* 计数后缀整段不拆，避免「记住了 3 / 台」断在数字和单位之间 */
+}
+.lanStatusText span { white-space: nowrap; }
+/* 状态行后缀：主句说「监听中」但某条通道其实没通时用（规则 15.1——反馈要和它的
+   触发待在同一可见性域，否则折叠区里的告警等于没有）。用 --warning 而不是 --danger：
+   这不是错误，是「一个能力当前不可用」。 */
+.lanStatusWarn {
+  color: var(--warning);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.lanTestBtn {
+  margin-top: 10px; width: 100%; padding: 6px 0; border-radius: 8px;
+  border: 1px solid var(--border-color); background: var(--card-bg);
+  color: var(--accent); font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+}
+.lanTestBtn:hover { background: var(--hover); border-color: var(--accent); }
+
+/* LAN 设备列表 */
+.lanDeviceList {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lanDeviceItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+}
+.lanDeviceAvatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.lanDeviceInfo {
+  flex: 1; min-width: 0;
+}
+.lanDeviceName {
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+}
+.lanDeviceTime {
+  font-size: 10px; color: var(--text-muted);
+}
+.lanRefreshBtn {
+  background: none; border: 1px solid var(--border-color); border-radius: 6px;
+  padding: 2px 8px; font-size: 11px; color: var(--text-secondary);
+  cursor: pointer; font-family: inherit;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.lanRefreshBtn:hover { background: var(--hover); }
+.lanRefreshBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* lanPauseToggle.on 已迁到 Lan.module.css（与基础类同文件，否则 CSS modules 哈希对不上） */
+
+/* ===== MCP 服务面板（M4 步骤 4）=====
+   设计稿：design/知识库MCP服务-设置面板-设计稿.html
+   容器直接复用 .lanPanel / .lanPanelHeader / .lanStatus / .lanDot / .lanStatusText，
+   下面只补 MCP 独有的部分。 */
+
+/* 启动失败横幅。用横幅不用 toast：开机自启失败发生在设置页打开之前，
+   toast 早就飘走了，而用户需要看到「端口被占」才知道该改端口。
+
+   ❗ 这个类**故意留在核心文件**、没跟其余 mcp* 一起搬去 Mcp.module.css：
+   局域网同步面板（LanSyncPanel）也在用它（注释见上方「监听失败横幅」那句）。
+   属于跨功能复用，搬走会让局域网面板被迫 import 一个 MCP 模块。
+   清死 CSS 时注意别把它当无人引用的类删掉。 */
+.mcpAlert {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.mcpAlert span {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.mcpAlert button {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--danger);
+  white-space: nowrap;
+  font-family: inherit;
+  opacity: 0.8;
+}
+
+/* ── M5 写权限开关 ── */
+
+/* ===== 可写入的范围（项目②）。设计稿：design/MCP文件夹写白名单-真实稿.html ===== */
+
+/* ===== 知识库配对向导（KbPairDialog / KbPairSteps）=====
+   样式收在 CSS 而不是写成 tsx 里的内联对象：向导有 6 屏，
+   内联会把两个组件都顶过 300 行（规则 #7）。 */
+
+/* kbPairStep.on / .done 已迁到 Lan.module.css（与基础类同文件） */
+
+/* kbPairMono.bad 已迁到 Lan.module.css（与基础类同文件） */
+
+/* 指纹：等宽 + 拉开字距，人肉逐位核对靠这个 */
+.kbPairFp {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px;
+  letter-spacing: 2px;
+  font-weight: 700;
+}
+
+/* 三种提示框：橙（安全）/ 绿（已读到）/ 红（解析失败）*/
+.kbPairWarn {
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: var(--orange-bg);
+  border: 1px solid var(--orange-border);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* 对端身份卡（名字 + 指纹）*/
+.kbPairPeer { background: var(--input-bg); border-radius: 10px; padding: 12px; }
+
+/* kbPairPulse.done 已迁到 Lan.module.css（与基础类同文件） */
+@keyframes kbPairBreathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: none; opacity: .75; }
+}
+
+.kbPairNote { font-size: 11px; color: var(--text-muted); line-height: 1.7; margin: 0; }
+
+/* ===== MCP 接入面板（2026-09-06 重排：接入提到第一屏） ===== */

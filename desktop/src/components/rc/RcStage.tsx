@@ -1,0 +1,282 @@
+/**
+ * RcStage — 「远程电脑」页主区的四态分派（从 RcWorkbench 抽出，2026-09-19）。
+ *
+ * 抽的原因：v4 布局给 RcWorkbench 加了导航态 + 顶栏 + 三页分派，原文件 296 行
+ * 已贴红线（.tsx ≤ 300）。四态判据本身在 `lib/rcWorkbench`（纯函数），这里只做
+ * 「按态渲染」。2026-09-24 B 方案：被控视图降为轻量说明（RcInboundView 删除），
+ * 常驻信息面收进主窗胶囊横幅（RcControlBanner）。
+ *
+ * 2026-09-21（A 方案稿对账）：去掉空闲态的装饰层——欢迎插画 / 极光 / 扫光 /
+ * 悬浮，等待态只留「一句话 + 小贴士」。那层装饰带 4 条常驻 infinite 动画，
+ * 而本项目有 4 个窗口各挂一份 DOM（AGENTS 规则 8.1 / 8.2），稿债与性能账同源。
+ */
+import { rcCanControl } from "@/lib/rcCapability";
+import { useMemo } from "react";
+import { Lightbulb } from "lucide-react";
+import { fingerprintOf } from "@/lib/fingerprint";
+import { rcDisplayName } from "@/lib/rcDevice";
+import { formatDuration } from "@/lib/rcSessionStats";
+import type { UseRc } from "@/hooks/useRc";
+import { useRcLaunch } from "@/hooks/useRcLaunch";
+import { useToast } from "@/components/Toast";
+import { confirmDialog } from "@/lib/confirm";
+import { rcErrorRetryable } from "@/lib/rcDeny";
+import { RcSessionView } from "./RcSessionView";
+import { RcPendingWait } from "./RcPendingWait";
+import { RcErrorPanel } from "./RcErrorPanel";
+import { RcEmptyGuide } from "./RcEmptyGuide";
+import { RcControlBanner } from "./RcControlBanner";
+import { useRcInboundControls } from "@/hooks/useRcInboundControls";
+import { workbenchMainMode } from "@/lib/rcWorkbench";
+import styles from "./RemoteComputer.module.css";
+
+export function RcStage({
+  rc,
+  capFor,
+  lastAttempt,
+  doRequest,
+  onPair,
+  onHelpMe,
+  onHelpOther,
+  onUnoJoin,
+}: {
+  rc: UseRc;
+  /** 发起档取值口（useRcLaunch.capOf）：按设备记忆优先，全局默认兜底。 */
+  capFor: (id: string) => ReturnType<typeof useRcLaunch>["cap"];
+  lastAttempt: ReturnType<typeof useRcLaunch>["lastAttempt"];
+  doRequest: ReturnType<typeof useRcLaunch>["doRequest"];
+  /** 空态引导的入口（配对 / 方案甲两条 / Q2 接入码直连），弹层由 RcPairLayer 挂。 */
+  onPair: () => void;
+  onHelpMe: () => void;
+  onHelpOther: () => void;
+  onUnoJoin: () => void;
+}) {
+  const { toast } = useToast();
+
+  const session = rc.status?.session ?? null;
+  const mode = workbenchMainMode(rc.status);
+  const inbound = mode === "inbound";
+  const rcEnabledSelf = rc.status?.enabled ?? false;
+  const hasTargets = rc.targets.length > 0;
+
+  // P1-1（2026-09-27 审计）：被控的止血动作收口在 useRcInboundControls，工作台
+  // inbound 视图与主窗 RcOverlay 挂同一份 RcControlBanner——被控者停在任何窗口
+  // 都能直接结束会话，不再指路另一扇窗（规则 15.1：触发与反馈同可见性域）。
+  const inboundControls = useRcInboundControls(rc);
+
+  const pendingName = useMemo(() => {
+    if (!session) return "";
+    // 统一显示名（备注优先）；会话没带名字时退到 targets 里那行，再退指纹。
+    return (
+      rcDisplayName(session) ||
+      rcDisplayName(rc.targets.find((t) => t.node_id === session.peer) ?? {}) ||
+      fingerprintOf(session.peer)
+    );
+  }, [session, rc.targets]);
+
+  // 2026-09-27 方案 A：会话态画面满幅贴边——wbMain 的 12px 纸面内边距在
+  // 会话态收掉（否则四周露一圈白边，画面没有真正接管窗口）。空闲/等待/
+  // 被控态仍是「页」，纸面边距保留。
+  const inSession = mode === "outbound" && Boolean(session);
+
+  // B 方案（2026-09-24）：被控视图从「中央大卡片」降为轻量说明——常驻信息面
+  // 已收进主窗口顶部的胶囊横幅（RcControlBanner），工作台不再重复摆同一份事实。
+  // trusted 补刷副作用随 RcInboundView 一起退役（RcOverlay 那份仍在跑）。
+  const inboundName = useMemo(() => {
+    if (!session) return "";
+    return (
+      rcDisplayName(session) ||
+      rcDisplayName(rc.targets.find((t) => t.node_id === session.peer) ?? {}) ||
+      fingerprintOf(session.peer)
+    );
+  }, [session, rc.targets]);
+
+  // B2：重试按钮只给「再点一次可能成功」的错误——判据收口在 lib/rcDeny.rcErrorRetryable
+  // （RcWorkbench 设备页错误槽共用同一份，U3）。
+  const retryable = rc.error != null && rcErrorRetryable(rc.error);
+
+  // 🔴 甲-③（2026-09-29，=C2）：会话态这条必须**搬进**全屏元素里。浏览器只渲染
+  // 全屏元素的子树，而全屏目标正是 RcSessionView 的 `.sessionWrap`——面板继续挂在
+  // `<main>`（子树之外）就等于「全屏时错误一个字都不说」。
+  const errorPanel = rc.error ? (
+    <RcErrorPanel
+      error={rc.error}
+      onRetry={
+        rc.isOpError
+          ? retryable && lastAttempt
+            ? () => void doRequest(lastAttempt, capFor(lastAttempt))
+            : undefined
+          : () => void rc.refresh()
+      }
+      onDismiss={() => rc.clearError()}
+    />
+  ) : null;
+
+  return (
+    <main
+      className={`${styles.wbMain} ${inSession ? styles.wbMainFlush : ""}`}
+      data-rc-session-main={inSession || undefined}
+    >
+      {/* 会话态的错误走 `errorSlot` 下传给 RcSessionView（挂进 .sessionWrap），
+          这里不再摆——双挂会出两条，而下面那条在全屏里根本看不见。 */}
+      {!inSession && errorPanel}
+      {inbound && session ? (
+        <div className={styles.wbHero}>
+          {(() => {
+            // 与主窗 RcOverlay 同判据：deny 优先级高于免确认（后端如此），禁了就不摆入口
+            const peerTarget = rc.targets.find((t) => t.node_id === session.peer);
+            const peerDenied = peerTarget?.denied ?? false;
+            return (
+              <RcControlBanner
+                session={session}
+                busy={rc.busy}
+                trusted={peerTarget?.trusted ?? false}
+                onTrust={
+                  peerDenied
+                    ? undefined
+                    : () =>
+                        void inboundControls.enableTrust(
+                          session.peer,
+                          rcDisplayName(session, fingerprintOf(session.peer)),
+                        )
+                }
+                scopeNotice={rc.scopeNotice}
+                onDismissScopeNotice={rc.clearScopeNotice}
+                streamNotice={rc.streamNotice}
+                onDismissStreamNotice={rc.clearStreamNotice}
+                audioLocalMute={inboundControls.audioLocalMute}
+                onToggleAudioLocalMute={inboundControls.toggleAudioLocalMute}
+                spkMutedByPeer={inboundControls.spkMutedByPeer}
+                onRestoreSpk={inboundControls.restoreSpk}
+                quality={rc.status?.quality}
+                activeQuality={rc.status?.active_quality}
+                captureScope={rc.status?.capture_scope}
+                inputHold={inboundControls.inputHold}
+                onToggleInputHold={inboundControls.toggleInputHold}
+                lockGranted={inboundControls.lockGranted}
+                lockActive={inboundControls.lockActive}
+                onToggleLockGrant={inboundControls.toggleLockGrant}
+                inputPills={rc.status?.input_pills}
+                videoPaused={inboundControls.videoPaused}
+                onToggleVideoPause={inboundControls.toggleVideoPause}
+                onEnd={inboundControls.endSession}
+              />
+            );
+          })()}
+          <div className={styles.heroTitle}>
+            正在被「{inboundName}」远程{rcCanControl(session.capability) ? "控制" : "查看"}
+          </div>
+          <div className={styles.heroLead}>
+            本机画面正在推送给对方。指纹 / 画质 / 免确认等详情可展开上方胶囊查看，随时可立即结束。
+          </div>
+        </div>
+      ) : mode === "outbound" && session ? (
+        <RcSessionView
+          session={session}
+          busy={rc.busy}
+          onEnd={() => {
+            // 终值收束（审计 2026-09-27）：结束成功给一次轻量收尾——「事情办完了」
+            // 的松弛点 + 元数据去向；时长在 end 前取（end 成功后 session 会被收口）。
+            const dur = formatDuration(Date.now() - session.started_ms);
+            void rc.end().then((ok) => {
+              // 失败必须说出来：静默失败时用户以为已断开，对方却还挂着
+              if (!ok) toast("结束会话失败，请重试", "error");
+              else toast(`已结束远程会话 · 本次 ${dur} · 已记入记录`, "success");
+            });
+          }}
+          onReconnect={async () => {
+            // P3-8：重连会掐断当前画面，先短确认（可撤销类操作不该静默一键断连）
+            const name = rcDisplayName(session, fingerprintOf(session.peer));
+            const ok = await confirmDialog({
+              title: "重新连接",
+              message: `将断开与「${name}」的当前连接并重新发起。`,
+              confirmText: "重连",
+            });
+            if (!ok) return;
+            toast("正在重连", "info");
+            const ended = await rc.end();
+            // end 失败必须中止：继续 doRequest 会变成「连上又立刻被自己掐掉」
+            if (!ended) {
+              toast("结束当前会话失败，已中止重连", "error");
+              return;
+            }
+            await doRequest(session.peer, session.capability);
+          }}
+          /** B-1 会话内提权：重新协商式（结束 + 重新申请「可控」）。 */
+          onRequestControl={async () => {
+            // 与上面重连同一判据：end 失败继续 doRequest 会变成「连上又被自己掐掉」
+            const ended = await rc.end();
+            if (!ended) {
+              toast("结束当前会话失败，已中止提权申请", "error");
+              return;
+            }
+            await doRequest(session.peer, "control");
+          }}
+          rc={rc}
+          quality={rc.status?.quality ?? "auto"}
+          captureScope={rc.status?.capture_scope ?? "virtual"}
+          errorSlot={errorPanel}
+        />
+      ) : mode === "pending" && session ? (
+        <RcPendingWait
+          peerName={pendingName}
+          capability={session.capability}
+          startedMs={session.started_ms}
+          busy={rc.busy}
+          onCancel={() => {
+            void rc.cancel().then((ok) => {
+              if (!ok) toast("取消申请失败，请重试", "error");
+            });
+          }}
+          /** 等待态改档零成本——作废重发，对端只看到一次新敲门。 */
+          onRaise={
+            !rcCanControl(session.capability)
+              ? async () => {
+                  // cancel 失败还重发 = 旧申请没作废就敲第二下，busy_local
+                  const cancelled = await rc.cancel();
+                  if (!cancelled) {
+                    toast("取消原申请失败，已中止改档", "error");
+                    return;
+                  }
+                  await doRequest(session.peer, "control");
+                }
+              : undefined
+          }
+        />
+      ) : (
+        !rc.error &&
+        (hasTargets ? (
+          // 装饰层已删（2026-09-21）：只留文字。数据与原 wbIdle 完全一致，纯表现层。
+          <div className={styles.wbHero}>
+            <div className={styles.heroTitle}>正在等待远程会话连接</div>
+            <div className={styles.heroLead}>
+              在左侧选择一台设备发起远程；或保持「允许被远程」开启，等待对方申请接入。
+            </div>
+            <div className={styles.heroTip}>
+              <Lightbulb size={14} aria-hidden="true" />
+              <span>
+                小贴士：选择合适画质可获得更好的远程体验，弱网环境建议「流畅」。
+              </span>
+            </div>
+          </div>
+        ) : (
+          // 空态的教学内容放主区：三步并排要有横向空间，侧栏那 272px 放不下
+          // （见 RcEmptyGuide 顶部说明）。
+          <div className={styles.wbEmptyWrap}>
+            {/* 1A 的「先打开允许被远程」提示条就在这里失效过：组件默认
+                selfEnabled=true，而调用方一直没传，于是那条 orange 提示从来没有
+                渲染出来过（tsc / vitest 都看不见这种漏传）。这里把两个入参补齐。 */}
+            <RcEmptyGuide
+              onPair={onPair}
+              onHelpMe={onHelpMe}
+              onHelpOther={onHelpOther}
+              onUnoJoin={onUnoJoin}
+              selfEnabled={rcEnabledSelf}
+              onEnableSelf={() => void rc.setEnabled(true)}
+            />
+          </div>
+        ))
+      )}
+    </main>
+  );
+}

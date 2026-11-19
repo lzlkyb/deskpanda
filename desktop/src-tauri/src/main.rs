@@ -492,6 +492,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         commands::get_app_info,
         commands::start_update,
         commands::check_update,
+        commands::copy_only,
+        commands::read_clipboard_text,
         // —— 远程电脑 · 配对与设备 ——
         commands::rc_status,
         commands::rc_identity,
@@ -594,6 +596,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         commands::get_app_info,
         commands::start_update,
         commands::check_update,
+        commands::copy_only,
+        commands::read_clipboard_text,
     ]);
 
     builder

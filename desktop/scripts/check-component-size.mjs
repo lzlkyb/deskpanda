@@ -37,14 +37,25 @@ const MAX_HOOKS = 8;
  * 存量超标登记（棘轮基线）。键 = 仓库相对路径（POSIX 分隔符）。
  * `lines` / `hooks` 是**当前允许的上限**，不是目标值。目标永远是上面两个常量。
  *
- * 2026-10-27：整表清空。此前登记的 7 项（VersionHistoryModal / AboutGroup /
- * useSshTerminalSession / PerfCharts / useSshTransfer / CommandPalette /
- * BackupCleanupDialog）全部来自业务代码——壳子抽离时这些文件
- * 没有跟过来，登记项全部指向**不存在的路径**，留着只会误导后来者
- * "这些文件超标但被豁免了"。当前壳子全部文件都在默认上限内（门禁实跑通过）。
- * 将来壳子自己的文件真超标了，再按棘轮登记。
+ * 2026-11-19：远程工作台（`src/components/rc`、`src/components/settings/Rc*`、
+ * 相关 hooks）整树从 pastePanda 迁入，**逐字节照搬**（拆分属于后续迭代，先保证
+ * 行为一致）。它们在原仓就是走棘轮登记的存量，这里按迁入时的实测值登记同一批；
+ * 数字取实测而不是原仓基线——原仓数字是各自最后一次拆分后的值，照抄会与这里的
+ * 代码对不上。新写的文件仍然必须直接合规，登记项只许变小。
  */
-const BASELINE = {};
+const BASELINE = {
+  "src/components/rc/RcA2PairExchange.tsx": { lines: 300, hooks: 12 },
+  "src/components/rc/RcAskPop.tsx": { lines: 241, hooks: 13 },
+  "src/components/rc/RcFileAsk.tsx": { lines: 346, hooks: 8 },
+  "src/components/settings/RcPairPastePane.tsx": { lines: 258, hooks: 9 },
+  "src/components/settings/RcUnoJoinPane.tsx": { lines: 239, hooks: 9 },
+  "src/components/Toast.tsx": { lines: 306, hooks: 4 },
+  "src/hooks/usePairCodeVisibility.ts": { lines: 216, hooks: 9 },
+  "src/hooks/useRcCapsuleReveal.ts": { lines: 440, hooks: 13 },
+  "src/hooks/useRcFrames.ts": { lines: 519, hooks: 19 },
+  "src/hooks/useRcInboundControls.ts": { lines: 140, hooks: 10 },
+  "src/hooks/useRcInput.ts": { lines: 452, hooks: 9 },
+};
 
 function walk(dir, out = []) {
   let items;

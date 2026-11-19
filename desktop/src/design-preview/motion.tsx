@@ -22,7 +22,7 @@ function MotionPreview() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("connect");
   const [saved, setSaved] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { toast } = useToast();
   const count = useCountUp(42, { duration: 500 });
   const navigate = (value: string) => transitionPage(() => setTab(value), value !== tab);

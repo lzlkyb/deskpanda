@@ -5,12 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DeskPanda</title>
     <script>
-      // 抢先定主题。主题本来是 main.tsx 里打的 class，也就是说 JS bundle 加载完
+      // 抢先定主题。主题本来是 main.tsx 里打的属性，也就是说 JS bundle 加载完
       // 之前页面永远是浅色（窗口 backgroundColor 写死为 #F4F6F9）——深色用户每次开窗
       // 都先挨一下白屏。同步 script 会阻塞渲染，所以不会有中间态。
       // 与 main.tsx 里那行不冲突（重复置为同一值，幂等）。
+      //
+      // ⚠️ 主题键是 **6 套配色的 key**（ocean / ocean-dark / midnight / …），不是
+      // 壳子时代的 "dark"/"light"：只认 "dark" 会让所有暗色主题的用户都先闪一帧浅色。
+      // 这里同时写 `data-theme`（工作台 `var(--*)` 的来源）与 `.dark`（首帧骨架屏与
+      // 壳子遗留 Tailwind 组件用），两边都不能等 JS。
       try {
-        if (localStorage.getItem("theme") === "dark") {
+        var saved = localStorage.getItem("theme");
+        var valid = ["ocean", "ocean-dark", "midnight", "forest", "blossom", "dawn"];
+        // 老值折算：壳子存过 "dark" / "light"，值得当别名而不是丢弃。
+        if (saved === "dark") saved = "ocean-dark";
+        else if (saved === "light" || !saved) saved = "ocean";
+        if (valid.indexOf(saved) < 0) saved = "ocean";
+        document.documentElement.setAttribute("data-theme", saved);
+        if (saved === "ocean-dark" || saved === "midnight") {
           document.documentElement.classList.add("dark");
         }
       } catch (_) {

@@ -1,0 +1,424 @@
+/**
+ * 远程电脑 IPC 命令封装（对应 `src-tauri/src/commands/rc.rs`）。
+ *
+ * 从 `src/lib/api/rc.ts` 拆分而来，仅搬代码、不改行为；原始 `rc.ts` 现为本文件的
+ * re-export 门面，所有 `from "@/lib/api/rc"` 的引用继续原样工作。
+ * 失败由调用方 toast，这里不吞。
+ */
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  RcAskHost,
+  RcAskMode,
+  RcAskNote,
+  RcCapability,
+  RcInboundKnock,
+  RcDeviceTag,
+  RcExchangeStarted,
+  RcIdentity,
+  RcInvite,
+  RcInviteCreated,
+  RcMonitorInfo,
+  RcSession,
+  RcStatus,
+  RcSyncOffer,
+  RcTargetDevice,
+  RcUnoCreated,
+} from "./rcTypes";
+import type {
+  RcCaptureScope,
+  RcEncodeCaps,
+  RcHistoryItem,
+  RcInputEvent,
+  RcQuality,
+} from "./rcFrameTypes";
+
+export function rcStatus(): Promise<RcStatus> {
+  return invoke<RcStatus>("rc_status");
+}
+
+export function rcIdentity(): Promise<RcIdentity> {
+  return invoke<RcIdentity>("rc_identity");
+}
+
+export function rcTargets(): Promise<RcTargetDevice[]> {
+  return invoke<RcTargetDevice[]>("rc_targets");
+}
+
+/** 按需探活：短超时拨一次，通了后端会刷 last_seen。 */
+export function rcProbeTargets(nodeIds: string[]): Promise<Record<string, boolean>> {
+  return invoke<Record<string, boolean>>("rc_probe_targets", { nodeIds });
+}
+
+export function rcSyncOffers(): Promise<RcSyncOffer[]> {
+  return invoke<RcSyncOffer[]>("rc_sync_offers");
+}
+
+export function kbSyncAllowFromRc(nodeId: string, name: string): Promise<void> {
+  return invoke("kb_sync_allow_from_rc", { nodeId, name });
+}
+
+export function kbSyncDenyFromRc(nodeId: string): Promise<void> {
+  return invoke("kb_sync_deny_from_rc", { nodeId });
+}
+
+export function rcInviteCreate(name: string): Promise<RcInviteCreated> {
+  return invoke<RcInviteCreated>("rc_invite_create", { name });
+}
+
+/** 主动作废当前邀请窗口（码已发出但还没人配成时提前关门，不用干等 TTL）。 */
+export function rcInviteRevoke(): Promise<void> {
+  return invoke("rc_invite_revoke");
+}
+
+export function rcExchangeBegin(code: string): Promise<RcExchangeStarted> {
+  return invoke<RcExchangeStarted>("rc_exchange_begin", { code });
+}
+
+export function rcShortPairCode(): Promise<RcInviteCreated> {
+  return invoke<RcInviteCreated>("rc_short_pair_code");
+}
+
+export function rcShortPairBegin(ownCode: string, peerCode: string): Promise<RcExchangeStarted> {
+  return invoke<RcExchangeStarted>("rc_short_pair_begin", { ownCode, peerCode });
+}
+
+export function rcShortPairCancel(): Promise<void> {
+  return invoke<void>("rc_short_pair_cancel");
+}
+
+/**
+ * 单枚 8 位码会合（两端各输同一个数）。
+ *
+ * `listen` 如实传用户动作：出示方 true，输入方 false。两端必须是**相反**的
+ * 两个角色——同一枚码派生出两个临时身份，同角色只会自己连自己。
+ * 安全等级 ≈ 27 bit（低于两码版的 ≈ 53 bit），换取用户只记一个数；
+ * 说明写在 `src-tauri/src/rc/short_pair.rs` 的 `exchange_pin` 上。
+ */
+export function rcPinPairBegin(code: string, listen: boolean): Promise<RcExchangeStarted> {
+  return invoke<RcExchangeStarted>("rc_pin_pair_begin", { code, listen });
+}
+
+export function rcExchangeCheck(nodeId: string): Promise<"waiting" | "paired"> {
+  return invoke<"waiting" | "paired">("rc_exchange_check", { nodeId });
+}
+
+export function rcInvitePreview(code: string): Promise<RcInvite> {
+  return invoke<RcInvite>("rc_invite_preview", { code });
+}
+
+export function rcPair(code: string): Promise<RcInvite> {
+  return invoke<RcInvite>("rc_pair", { code });
+}
+
+export function rcForget(nodeId: string): Promise<void> {
+  return invoke("rc_forget", { nodeId });
+}
+
+/** A1：设置设备的本地备注名。空串 = 清除（显示回落对端自报名）。 */
+export function rcDeviceRename(nodeId: string, note: string): Promise<void> {
+  return invoke("rc_device_rename", { nodeId, note });
+}
+
+/** 设备彩色标签（2026-09-26 对齐稿①）。整组覆盖式保存；空数组 = 清空。 */
+export function rcDeviceTagsSet(nodeId: string, tags: RcDeviceTag[]): Promise<void> {
+  return invoke("rc_device_tags_set", { nodeId, tags });
+}
+
+/** 设备描述性备注（长文本）。空串 = 清除；与改名别名互不串扰。 */
+export function rcDeviceRemarkSet(nodeId: string, remark: string): Promise<void> {
+  return invoke("rc_device_remark_set", { nodeId, remark });
+}
+
+export function rcJoinApprove(nodeId: string, name: string): Promise<void> {
+  return invoke("rc_join_approve", { nodeId, name });
+}
+
+export function rcJoinDeny(nodeId: string): Promise<void> {
+  return invoke("rc_join_deny", { nodeId });
+}
+
+export function rcSetEnabled(enable: boolean): Promise<void> {
+  return invoke("rc_set_enabled", { enable });
+}
+
+/** 工具箱一键起通道：不要求「允许被远程」（方案 A）。 */
+export function rcStartChannel(): Promise<void> {
+  return invoke("rc_start_channel");
+}
+
+export function rcSetCapability(capability: RcCapability): Promise<void> {
+  return invoke("rc_set_capability", { capability });
+}
+
+export function rcSetDeviceAllowed(nodeId: string, allowed: boolean): Promise<void> {
+  return invoke("rc_set_device_allowed", { nodeId, allowed });
+}
+
+export function rcRequestSession(
+  nodeId: string,
+  capability: RcCapability,
+  unoCode?: string,
+  /** 固定接入密码（Q2 方案 C）。与 unoCode 互斥携带。 */
+  unoPass?: string,
+): Promise<RcSession> {
+  return invoke("rc_request_session", {
+    nodeId,
+    capability,
+    unoCode: unoCode ?? null,
+    unoPass: unoPass ?? null,
+  });
+}
+
+/** 生成无人值守接入码（Q2 方案 B，被控端）。`ttlSecs` 只认 900 / 86400。 */
+export function rcUnoGenerate(p: {
+  ttlSecs: number;
+  unlimited: boolean;
+  capability: RcCapability;
+  alsoTrust: boolean;
+}): Promise<RcUnoCreated> {
+  return invoke<RcUnoCreated>("rc_uno_generate", {
+    ttlSecs: p.ttlSecs,
+    unlimited: p.unlimited,
+    capability: p.capability,
+    alsoTrust: p.alsoTrust,
+  });
+}
+
+/** 撤销全部无人值守接入码。返回撤销数量。 */
+export function rcUnoRevoke(): Promise<number> {
+  return invoke<number>("rc_uno_revoke");
+}
+
+/** 开启 / 换无人值守固定密码（Q2 方案 C，被控端）。 */
+export function rcUnoPassEnable(p: {
+  password: string;
+  capability: RcCapability;
+  allowWan: boolean;
+}): Promise<void> {
+  return invoke("rc_uno_pass_enable", {
+    password: p.password,
+    capability: p.capability,
+    allowWan: p.allowWan,
+  });
+}
+
+/** 一键全局关闭无人值守固定密码（幂等）。 */
+export function rcUnoPassDisable(): Promise<void> {
+  return invoke("rc_uno_pass_disable");
+}
+
+/** 只改「允许跨网」开关，不动密码本体。 */
+export function rcUnoPassSetWan(allow: boolean): Promise<void> {
+  return invoke("rc_uno_pass_set_wan", { allow });
+}
+
+export function rcCancelRequest(): Promise<void> {
+  return invoke("rc_cancel_request");
+}
+
+export function rcClearOutboundError(): Promise<void> {
+  return invoke("rc_clear_outbound_error");
+}
+
+/**
+ * 批准一条入站申请。
+ *
+ * 🔴 丙-①「分两次授权」：`grant="view"` 是**只降级不升级**——对方申请可控时
+ * 同意成只看（后端 `approve_inbound_as` 只认这一种收窄）；申请本来就只看的，
+ * 传不传 "view" 结果一样。绝不存在「传 control 把只看升成可控」这条路。
+ */
+export function rcApproveInbound(nodeId: string, capability?: "view"): Promise<RcSession> {
+  return invoke("rc_approve_inbound", { nodeId, capability: capability ?? null });
+}
+
+export function rcDenyInbound(nodeId: string): Promise<void> {
+  return invoke("rc_deny_inbound", { nodeId });
+}
+
+/**
+ * 丙-①②：桌面浮层（独立置顶窗口 `rc-ask`）取当前形态与内容。
+ *
+ * 挂载时主动问一次，**这一步顺带解决创建竞态**：Rust 先建窗、事件后到也没关系。
+ * `note` 在 TTL 内每次都给；`host` 只在**正被远程**时非空（角标的那三项）。
+ * `mode` 由 Rust 算（判据全在 `RcService`，而主窗可能整场没打开），前端只按它分流。
+ */
+export function rcAskState(): Promise<{
+  mode: RcAskMode;
+  pending: RcInboundKnock[];
+  note: RcAskNote | null;
+  host: RcAskHost | null;
+}> {
+  return invoke("rc_ask_state");
+}
+
+/** 浮层被用户关掉（不答复）：只收确认卡，pending 照旧活到超时；角标不收。 */
+export function rcAskHide(): Promise<void> {
+  return invoke("rc_ask_hide");
+}
+
+/** 改主意了：重新打开被「先不理它」收起的待答申请（角标上的「待答 N」入口）。 */
+export function rcAskReopen(): Promise<void> {
+  return invoke("rc_ask_reopen");
+}
+
+/** 方案 D：设置某台设备的「免确认直连」。`trusted=false` 即恢复每次询问。 */
+export function rcDeviceTrustSet(nodeId: string, trusted: boolean): Promise<void> {
+  return invoke("rc_device_trust_set", { nodeId, trusted });
+}
+
+/**
+ * 决策 10：设置某台设备的「自动接收文件」。`on=false` 即恢复每次确认。
+ *
+ * 🔴 它**只影响要不要弹确认条，不影响门禁**：被禁用 / 未配对的设备照样进不来。
+ * 🔴 只对**推送**方向生效（对方发给本机）。取回方向是「我挑文件发给对方」，
+ *    没有可自动的东西，所以那一边不显示这个开关。
+ */
+export function rcDeviceAutoAcceptSet(nodeId: string, on: boolean): Promise<void> {
+  return invoke("rc_device_auto_accept_set", { nodeId, on });
+}
+
+export function rcEndSession(): Promise<void> {
+  return invoke("rc_end_session");
+}
+
+export function rcRequireActive(): Promise<RcSession> {
+  return invoke<RcSession>("rc_require_active");
+}
+
+// ── G3 音频 ─────────────────────────────────────────────────────────────
+
+/** G3：会话中开关系统声音（被控端有可见提示）。 */
+export function rcAudioToggle(on: boolean): Promise<void> {
+  return invoke("rc_audio_toggle", { on });
+}
+
+/**
+ * G3：被控端**本机**静音系统声音（一票否决——对端开着也听不到）。
+ *
+ * ❗ 2026-09-20（G3-B）之后它**不再只是本机状态**：切换时会推一条 `host_audio`
+ * 帧给对端，对端据此显示「对方已静音（不发送声音）」。在此之前对端只能感到
+ * 声音没了、无从判断是不是坏了。
+ *
+ * 跨会话保持（隐私开关不做自动回退），应用重启回到默认「可被听」。
+ */
+export function rcSetAudioLocalMute(muted: boolean): Promise<void> {
+  return invoke("rc_set_audio_local_mute", { muted });
+}
+
+/**
+ * G3-C：被控端**本机**设置主机扬声器静音（对端操作过之后的一键恢复入口）。
+ *
+ * 与 `rcSendInput({ kind: "set_host_mute" })` 的分工：那个是发起端请对端静音，
+ * 这个是本机自己改。**不影响**环回采集——发起端照样听得到（同 Parsec /
+ * GameStream 的「mute host speakers」：让主机本地闭嘴，不改变串流）。
+ */
+export function rcHostMuteSet(on: boolean): Promise<void> {
+  return invoke("rc_host_mute_set", { on });
+}
+
+/**
+ * 乙-③：被控者**暂时收回自己的键鼠**（对端此刻的输入一拍都不进本机）。
+ *
+ * 与「锁定对方」是两把独立的闸：这条挡的是**对方注入的手**，不吞你本人的物理输入
+ * ——吞了你连「恢复」都点不到。收回后 10 分钟无本机操作自动归还。
+ *
+ * 返回改后的状态（前端据此切按钮，不做乐观置位）。
+ */
+export function rcInputHold(on: boolean): Promise<boolean> {
+  return invoke<boolean>("rc_input_hold", { on });
+}
+
+/**
+ * 乙-③：勾选 / 取消「允许对方锁定我的输入」（**本次会话**的授权，不落盘）。
+ *
+ * 取消会顺手解开已经生效的锁——授权是锁的唯一来源，撤了授权还锁着就是假反馈。
+ */
+export function rcInputLockGrant(on: boolean): Promise<void> {
+  return invoke("rc_input_lock_grant", { on });
+}
+
+/**
+ * 丙-③：暂停 / 恢复**对方看到的画面**（会话不断，只是不再出帧）。
+ *
+ * 与「暂时收回我的键鼠」正交：这条挡的是对方的**眼睛**——本机屏幕照常用、键鼠照用、
+ * 剪贴板照走，对方那边停在最后一帧并常驻显示「对方已暂停画面」。只在当场会话有效，
+ * 会话结束自动恢复推流。
+ *
+ * 返回改后的状态（前端据此切按钮，不做乐观置位）。
+ */
+export function rcVideoPauseSet(on: boolean): Promise<boolean> {
+  return invoke<boolean>("rc_video_pause_set", { on });
+}
+
+export function rcSendInput(event: RcInputEvent): Promise<void> {
+  return invoke("rc_send_input", { event });
+}
+
+export type RcSettingKey = "quality" | "audio" | "key_mode";
+export type RcPeerSettingKey = RcSettingKey | "codec";
+export type RcSettingResult = { status: "accepted" | "unconfirmed"; value: string };
+/** Only a correlated peer receipt establishes acceptance; transport success alone does not. */
+export function rcApplySetting(sessionId: string, key: RcPeerSettingKey, value: string): Promise<RcSettingResult> {
+  return invoke("rc_apply_setting", { sessionId, key, value });
+}
+
+export function rcSessionDisplay(sessionId: string, on: boolean, landscape: boolean, orientation: "system" | "portrait" | "landscape" = "system"): Promise<void> {
+  return invoke("rc_session_display", { sessionId, on, landscape, orientation });
+}
+
+/**
+ * RC 会话前台服务保活开关（B 方案方案叠加，2026-10-02）：Android 上会话
+ * 期间持前台服务 + WifiLock，进程不被冻结/杀掉，后台想挂多久挂多久；
+ * 桌面 no-op。调用方是 `useRcSessionKeepalive`（唯一收口），失败静默——
+ * 保活失败只损失后台时长，不值得打断会话。
+ */
+export function rcKeepaliveSet(on: boolean, title: string): Promise<void> {
+  return invoke("rc_keepalive_set", { on, title });
+}
+
+export function rcPushClipboard(text: string): Promise<void> {
+  return invoke("rc_push_clipboard", { text });
+}
+
+/** 后端等回包（最长约 4s）；空串 = 对方剪贴板真空白。C5 起超时/失败直接 reject，
+ *  不再折叠成 null（null 与「拉到了但没内容」必须可区分）。 */
+export function rcPullClipboard(): Promise<string | null> {
+  return invoke("rc_pull_clipboard");
+}
+
+export function rcSessionHistory(): Promise<RcHistoryItem[]> {
+  return invoke("rc_session_history");
+}
+
+export function rcHistoryClear(): Promise<void> {
+  return invoke("rc_history_clear");
+}
+
+export function rcSetQuality(quality: RcQuality): Promise<void> {
+  return invoke("rc_set_quality", { quality });
+}
+
+/** Q5：保存发起端「码率倍率」偏好（50–200，100 = 跟随链路）。 */
+export function rcSetBitratePct(pct: number): Promise<void> {
+  return invoke("rc_set_bitrate_pct", { pct });
+}
+
+export function rcEncodeCaps(): Promise<RcEncodeCaps> {
+  return invoke<RcEncodeCaps>("rc_encode_caps");
+}
+
+export function rcSetCaptureScope(scope: RcCaptureScope): Promise<void> {
+  return invoke("rc_set_capture_scope", { scope });
+}
+
+/**
+ * 被控端「会话防休眠」开关（Windows 专属；非 Windows 后端直接报错，不静默成功）。
+ * 生效时机是下一场入站会话——锁在推流启动那一刻才拿，会话中改不动已跑的锁。
+ */
+export function rcSetKeepAwake(enable: boolean): Promise<void> {
+  return invoke("rc_set_keep_awake", { enable });
+}
+
+export function rcListMonitors(): Promise<RcMonitorInfo[]> {
+  return invoke("rc_list_monitors");
+}

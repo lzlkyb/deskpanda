@@ -18,7 +18,7 @@ export function InlineNum({
 }) {
   const [value, setValue] = useState(initial);
   const initialized = useRef(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     if (!initialized.current) {
       setValue(initial);

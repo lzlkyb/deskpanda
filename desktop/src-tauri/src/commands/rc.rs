@@ -1640,77 +1640,21 @@ pub async fn rc_apply_setting(
     svc.apply_setting(&session_id, &key, &value).await
 }
 
-/// 打开「远程电脑」独立工作台窗口（2A 配套，2026-09-18）。
+/// 把「远程电脑」工作台拿到用户眼前。
 ///
-/// 为什么是独立窗口：主窗口只有 550×700，会话视图 960px 在里面被压成 ~534px，
-/// 画面区根本不够用。独立窗口默认 1200×780（min 960×640），按主窗所在显示器居中。
+/// 🔴 与 pastePanda 的差异：那边工作台是**独立窗口** `rc-workbench`（主窗口只有
+/// 550×700，会话画面在里面被压成 ~534px，不够用）；本产品没有「剪贴板主界面」，
+/// 工作台**就是主窗口** `main`（开机即工作台，decorations(false) 自绘标题栏）。
 ///
-/// - 已存在：`present_window`（最小化状态也能拉回）+ 聚焦，不重建。
-/// - async command：同步 command 里建 WebviewWindow 会死锁（tauri#13963，
-///   与 `open_fullscreen_editor` 同一条教训）。
+/// 命令名与调用方语义保持不变（入站申请、托盘菜单都调它），行为收成
+/// [`present_window`](crate::present_window)：已最小化也能拉回，且不会重建窗口。
+/// 保持 `async` 签名：调用方都是 `invoke(...)`，且这段历史上踩过同步建窗死锁
+/// （tauri#13963）——现在不建窗了，改回同步没有任何收益，只多一次调用点改动。
 #[tauri::command]
 pub async fn rc_open_workbench(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("rc-workbench") {
-        crate::present_window(&window);
-        return Ok(());
-    }
-    let builder = tauri::webview::WebviewWindowBuilder::new(
-        &app,
-        "rc-workbench",
-        tauri::WebviewUrl::App("rc.html".into()),
-    )
-    .title("远程电脑")
-    .inner_size(1200.0, 780.0)
-    .min_inner_size(960.0, 640.0)
-    .resizable(true)
-    // 自绘标题栏（批7，2026-09-22）：去掉系统标题栏，由前端 `RcA2TitleBar` 承担
-    // 品牌 / 通道状态 / 最小化·最大化·关闭。三条要点：
-    // ① 拖拽与「双击拖动区最大化」是 Tauri 内置能力（`data-tauri-drag-region`
-    //    + 注入的 drag.js 打 `start_dragging` / `internal_toggle_maximize`），
-    //    前端不必自己实现；`decorations(false)` 后这些才真正生效。
-    // ② **会话态**（画面铺满、标题栏隐去）必须另挂一条拖拽区，否则那一态既拖不动
-    //    也关不掉——见 `RcSessionTop` 的 drag-region 与 `chromeHidden` 分支。
-    // ③ `.resizable(true)` 要保留：`decorations(false)` 仍带 WS_THICKFRAME，
-    //    边框拖拽调整大小、Aero Snap 都还在（需真机确认，见批7 验收清单）。
-    // 防闪黑（方案 A，照 md-editor / 截图窗先例）：
-    // ① 先隐藏建窗——Tauri 默认 visible=true，`build()` 返回时 HWND 已上屏，
-    //    WebView 尚未 paint，Windows 客户区会露出系统默认黑底（整窗闪一下黑框）。
-    // ② 客户区底色对齐主窗 `backgroundColor: #F4F6F9`，隐藏阶段也不会是黑的。
-    .visible(false)
-    .background_color(tauri::window::Color(244, 246, 249, 255)); // #F4F6F9
-                                                                 // 自绘标题栏（decorations=false）是桌面窗口概念：mobile 全屏页面无装饰位。
-                                                                 // 上面 ①③ 两条注释描述的拖拽/边框行为在桌面侧不变。
-    #[cfg(desktop)]
-    let mut builder = builder.decorations(false);
-
-    // 按主窗口所在显示器（回退主显示器）居中——照 md-editor 的先例
-    let monitor = app
+    let window = app
         .get_webview_window("main")
-        .and_then(|w| w.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten());
-    if let Some(monitor) = monitor {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let mon_w = size.width as f64 / scale;
-        let mon_h = size.height as f64 / scale;
-        let win_w = 1200.0_f64.min(mon_w * 0.94);
-        let win_h = 780.0_f64.min(mon_h * 0.9);
-        let pos = monitor.position();
-        let x = pos.x as f64 / scale + (mon_w - win_w) / 2.0;
-        let y = pos.y as f64 / scale + (mon_h - win_h) / 2.0;
-        builder = builder.inner_size(win_w, win_h).position(x, y);
-    } else {
-        // 居中是桌面窗口定位概念（mobile 页面默认铺满，无窗口定位；尺寸取链首 inner_size）
-        #[cfg(desktop)]
-        {
-            builder = builder.center();
-        }
-    }
-    let window = builder
-        .build()
-        .map_err(|e| format!("创建远程电脑窗口失败: {}", e))?;
-    // 先隐藏建窗再显示，避免创建瞬间的闪烁（与 open_fullscreen_editor 同款纪律）。
-    // async command 已规避 tauri#13963 死锁；present_window 含 unminimize + show + focus。
+        .ok_or_else(|| "主窗口不存在".to_string())?;
     crate::present_window(&window);
     Ok(())
 }

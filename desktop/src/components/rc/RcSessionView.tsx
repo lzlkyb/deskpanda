@@ -1,0 +1,284 @@
+/**
+ * RcSessionView — 会话壳。只做编排：调用 hooks、组合画面区与控端浮条。
+ *
+ * 拆分史（`.tsx ≤ 300` 红线）：
+ * - 2026-09-18：抽出 RcScreenCanvas；
+ * - 2026-09-21：抽出 useRcSessionPrefs / useRcSessionAudio / useRcDisplayMode 与
+ *   RcSessionStage（原 394 行）。画面区块的 props 一律**整组**接收 hook 返回值
+ *   （`input` / `link` / `frames`），不再逐个摊平——摊平只是把解构搬个家。
+ * - 2026-09-24 控端态浮条收编：RcSessionBar（底栏）、recentRow（申请控制权行）
+ *   退场，非全屏的会话控制收进 RcSessionCapsule 一条会隐藏的胶囊；画质/画面/码率
+ *   的乐观更新+失败回滚抽成 useRcRemoteSend。
+ *
+ * 确认一律用 ConfirmDialog（非 window.confirm，见 lib/confirm）。
+ */
+import { rcCanControl } from "@/lib/rcCapability";
+import { useCallback, useEffect, useRef } from "react";
+import { confirmDialog } from "@/lib/confirm";
+import { useRcOutcome } from "@/hooks/useRcOutcome";
+import { useRcClipAutoPref } from "@/hooks/useRcClipAutoPref";
+import { useRcKeyMode } from "@/hooks/useRcKeyMode";
+import type { RcSession } from "@/lib/api/rc";
+import type { UseRc } from "@/hooks/useRc";
+import { useRcFrames } from "@/hooks/useRcFrames";
+import { useRcCursor } from "@/hooks/useRcCursor";
+import { useRcInput } from "@/hooks/useRcInput";
+import { useRcLinkState } from "@/hooks/useRcLinkState";
+import { useRcSessionNotices } from "@/hooks/useRcSessionNotices";
+import { useRcClipboardAuto } from "@/hooks/useRcClipboardAuto";
+import { useRcSessionPrefs } from "@/hooks/useRcSessionPrefs";
+import { useRcSessionAudio } from "@/hooks/useRcSessionAudio";
+import { useRcDisplayMode } from "@/hooks/useRcDisplayMode";
+import { useRcRemoteSend } from "@/hooks/useRcRemoteSend";
+import { useRcWindowFit } from "@/hooks/useRcWindowFit";
+import { RcSessionStage } from "./RcSessionStage";
+import { RcSessionCapsule } from "./RcSessionCapsule";
+import { RcSessionDetails } from "./RcSessionDetails";
+import { useRcCodecChoice } from "@/hooks/useRcCodecChoice";
+import styles from "./RemoteComputer.module.css";
+
+export function RcSessionView({
+  session,
+  busy,
+  onEnd,
+  onReconnect,
+  onRequestControl,
+  rc,
+  quality,
+  captureScope,
+  errorSlot,
+}: {
+  session: RcSession;
+  busy: boolean;
+  onEnd: () => void;
+  onReconnect?: () => void;
+  /** B-1：会话内申请升级为可控。实现口径 = 结束当前会话 + 重新申请（重新协商式），
+   *  复用 RemoteComputerDialog 既有的 end→request 链路；协议层无中途信令通道，
+   *  无缝提权（B-2）明确不做，见 design/远程电脑-交互精简-B方案-设计稿.html §3。 */
+  onRequestControl?: () => void;
+  rc: UseRc;
+  quality: string;
+  captureScope: string;
+  /**
+   * 🔴 甲-③（=C2）：连接类错误面板由父级（RcStage）构造后**下传**到这里渲染。
+   * 原因不是排版偏好：全屏目标是 `.sessionWrap`，而浏览器只渲染全屏元素的子树——
+   * 面板继续挂在 `<main>` 就等于全屏时「错误一个字都不说」。构造留在父级是因为
+   * 重试链路（lastAttempt / doRequest / capFor）只在那里，这里只负责承载。
+   */
+  errorSlot?: React.ReactNode;
+}) {
+  // 甲-②（2026-09-29）：会话里所有「一件事的结果」走 `say`——toast 之外再进常驻
+  // 出口条一次。全屏态 toast 在 `.sessionWrap` 子树**之外**（挂在 rc-main 树根），
+  // 那条通道在全屏里等于没说；出口条住在 `.capZone` 直系，两态都在。
+  const { say } = useRcOutcome(session.id);
+  // 剪贴板自动同步（B 方案，2026-09-25 拍板）：**默认开 + 记住关闭**，切换即持久化。
+  // 读写与失败回滚收口在 useRcClipAutoPref（只看会话的双重门控不在那里）。
+  const { clipAuto, toggleClipAuto } = useRcClipAutoPref(say);
+  // 全屏目标 = 会话壳（见 useRcDisplayMode 注释）；screenRef 仍是输入坐标的基准
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // P4：每次输入发出的本地时刻（useRcInput 写、useRcFrames 读），操作延迟 HUD 用
+  const inputEpochRef = useRef(0);
+  const canControl = rcCanControl(session.capability);
+  // 乙-①（2026-09-30）：打字 / 直传两档显式切换（不做自动判定，对标 §6.7）。
+  // 偏好持久化 + 「告诉对端」都在 hook 里，这里只把档位分发给输入链和胶囊。
+  const { keyMode, pickKeyMode } = useRcKeyMode({ canControl, sessionId: session.id, say });
+
+  // 显示模式（缩放 / 全屏 / 非全屏提示 + 换会话清理）、声音开关、会话内可调项
+  // （画质 / 范围 / 码率）各自独立成 hook，见 hooks/useRc*.ts。
+  const display = useRcDisplayMode(session.id, wrapRef);
+  // 方案 A Q4（2026-09-28）：进全屏把 1:1 降回「适应」必须说一句——静默改用户的
+  // 显示档会被读成「我明明选了 1:1」（规则 15：改动与反馈同可见性域）。
+  const fitDowngradeTick = display.fitDowngradeTick;
+  useEffect(() => {
+    if (fitDowngradeTick > 0) say("1:1 在全屏会超出屏幕，已切回「适应」", "info");
+  }, [fitDowngradeTick, say]);
+  const { audioOn, toggleAudio } = useRcSessionAudio(session.id, say, rc.status?.peer_audio?.err);
+  const prefs = useRcSessionPrefs({
+    sessionId: session.id,
+    quality,
+    captureScope,
+    bitratePct: rc.status?.bitrate_pct,
+    peerFps120: rc.status?.peer_fps120,
+  });
+
+  const frames = useRcFrames(session.id, canvasRef, {
+    // P0-1 A3：时钟偏差校准（后端 pong 估算）；未校准时为 0，延迟显示带「≈」
+    clockSkewMs: rc.status?.clock_skew_ms ?? 0,
+    lastInputAt: inputEpochRef,
+    // D4：fps120 档解码配置要抬 H.264 level（1080p120 超出 L4.2 规格）
+    qualityHint: prefs.qPick,
+    // §17.3：首帧前的等待按阶段说实话（拨号/等批准/编码器起帧），占位文案取
+    // rcWaitStage——桌面占位本来就有 Loader 动画，缺的一直是阶段文案
+    phase: session.phase,
+  });
+  // P1-6：远端光标形状（非箭头形状换用本地系统光标渲染）
+  const cursorShape = useRcCursor(session.id);
+
+  // 方案A（2026-09-25）：会话窗按对方画面比例自适应（首帧 / 切屏·改范围时
+  // 各调一次，同比例不重调；全屏态不参与）。失败要有声音，不静默。
+  const fitNotify = useCallback((m: string, k: "error") => say(m, k), [say]);
+  useRcWindowFit({
+    sessionId: session.id,
+    size: frames.size,
+    active: !display.fullscreen,
+    notify: fitNotify,
+  });
+
+  // C-UI3：自动同步剪贴板失败要说人话，禁止静默 catch。
+  const onAutoFailToast = useCallback(
+    (e: string) => say(`自动同步剪贴板失败：${e}`, "error"),
+    [say],
+  );
+  // B5：基线由 hook 在开启时自动建立，这里只切开关，不手动 reset
+  const clip = useRcClipboardAuto({
+    enabled: clipAuto,
+    canControl,
+    sessionId: session.id,
+    onFailToast: onAutoFailToast,
+  });
+
+  const requestEnd = useCallback(async () => {
+    const ok = await confirmDialog({
+      title: "结束远程会话",
+      message: "将断开与对方的画面与控制。对方也会立刻失去连接。",
+      confirmText: "结束会话",
+      variant: "danger",
+    });
+    if (ok) onEnd();
+  }, [onEnd]);
+
+  // B-1：会话内申请升级为可控。乙方案 §6（2026-09-26）删掉了这道确认——
+  // 双保险已经够重（会话断开会立刻可见，且对方那头还要再确认一次），
+  // 一键直发 + 预告一句就够；真正的反馈由发起链路自己的结果出口承担。
+  const requestControl = useCallback(async () => {
+    if (!onRequestControl) return;
+    say("正在重新申请可控，等对方确认…", "info");
+    onRequestControl();
+  }, [onRequestControl, say]);
+
+  const input = useRcInput({
+    canControl,
+    hasFrame: frames.hasFrame,
+    contentRef: frames.contentRef,
+    canvasRef,
+    screenRef,
+    onConfirmEnd: () => void requestEnd(),
+    fit: display.fit,
+    // P4：高帧率档鼠标采样跟随档位节拍（datagram 不排队，纯采样密度问题）——
+    // fps144 档 7ms / fps165 档 6ms，与各自帧间隔对齐
+    moveThrottleMs:
+      prefs.qPick === "fps165" ? 6 : prefs.qPick === "fps144" ? 7 : prefs.qPick === "fps120" ? 8 : 16,
+    inputEpochRef,
+    keyMode,
+  });
+
+  // 会话内不停发心跳（窗口失焦也发，否则对方 3.5s 后暂停推流，像断线）。
+  // 活性判定 / 画面静止 / 操作未响应三条判据各用各的数据源，全在 hook 里。
+  const link = useRcLinkState({
+    sessionId: session.id,
+    hasFrame: frames.hasFrame,
+    lastFrameAt: frames.lastFrameAt,
+    lastActionAt: input.lastActionAt,
+    rttMs: rc.status?.rtt_ms ?? 0,
+    backendPongAgeMs: rc.status?.pong_age_ms ?? null,
+    reconnecting: busy,
+  });
+
+  // 会话内的一次性通知（对端注入失败 / 路径自动切换 relay↔直连）收口在 hook 里——
+  // 这两条都是「说一次就够」的消息，留在会话壳里会把这个文件推过 300 行红线。
+  const notify = useCallback((m: string, kind?: "error") => say(m, kind), [say]);
+  useRcSessionNotices({
+    pathNotice: rc.pathNotice,
+    onPathConsumed: rc.clearPathNotice,
+    notify,
+  });
+
+  // 会话内可调项的远程链路：乐观更新 + 失败回滚（原 RcSessionBar 口径整体搬迁）
+  const send = useRcRemoteSend({
+    rc,
+    quality: prefs.qPick,
+    captureScope: prefs.scopePick,
+    bitrate: prefs.bitratePick,
+    onPickQuality: prefs.setQPick,
+    onPickScope: prefs.setScopePick,
+    onPickBitrate: prefs.setBitratePick,
+    onStatus: (m, k) => say(m, k),
+  });
+
+  const codecChoice = useRcCodecChoice({
+    sessionId: session.id, peerHevc: rc.status?.peer_hevc, peerAv1: rc.status?.peer_av1,
+    actualCodec: frames.hasFrame ? frames.codec : "", quality: prefs.qPick, connected: link.state === "connected",
+    onQuality: prefs.setQPick, onStatus: say,
+  });
+
+  return (
+    <div className={styles.sessionWrap} ref={wrapRef}>
+      {/* 错误面板住在全屏元素的子树里（见 errorSlot 注释），收起/关闭都归它自己 */}
+      {errorSlot}
+      <RcSessionStage
+        session={session}
+        busy={busy}
+        input={input}
+        link={link}
+        frames={frames}
+        cursorShape={cursorShape}
+        fit={display.fit}
+        fullscreen={display.fullscreen}
+        onToggleFullscreen={display.toggleFullscreen}
+        fsHintDismissed={display.fsHintDismissed}
+        onDismissFsHint={display.dismissFsHint}
+        qPick={prefs.qPick}
+        screenRef={screenRef}
+        wrapRef={wrapRef}
+        canvasRef={canvasRef}
+        onReconnect={onReconnect}
+        onRequestEnd={() => void requestEnd()}
+      />
+
+      {/* 会话浮条（方案 A，2026-09-28）：**窗口态与全屏态同一条**——原先全屏换成
+          RcFullscreenHotbar，画质/画面/⋯/ⓘ/质量读数五类入口整组丢失。非全屏
+          首显 15s 后隐藏、顶边 3px 热区停 180ms 唤出（甲方案 2026-09-29）；全屏同参数，
+          另在右端补最小化/关闭。
+          放在 Stage 之后：同为 sessionWrap 子元素，后写的兄弟盖在画面上。 */}
+      <RcSessionCapsule
+        session={session}
+        rc={rc}
+        busy={busy}
+        canControl={canControl}
+        link={link}
+        input={input}
+        send={send}
+        codecChoice={codecChoice}
+        quality={prefs.qPick}
+        scopePick={prefs.scopePick}
+        bitrate={prefs.bitratePick}
+        rttMs={link.rttMs}
+        fps={frames.fps}
+        audioOn={audioOn}
+        onToggleAudio={toggleAudio}
+        clipAuto={clipAuto}
+        onToggleClipAuto={toggleClipAuto}
+        lastAutoAt={clip.lastAutoAt}
+        autoFail={clip.autoFail}
+        onStatus={(m, k) => say(m, k)}
+        fit={display.fit}
+        onFit={display.setFit}
+        keyMode={keyMode}
+        onPickKeyMode={pickKeyMode}
+        fullscreen={display.fullscreen}
+        onToggleFullscreen={display.toggleFullscreen}
+        onRequestEnd={() => void requestEnd()}
+        onReconnect={onReconnect}
+        onRequestControl={onRequestControl ? () => void requestControl() : undefined}
+        stageRef={screenRef}
+        detail={
+          <RcSessionDetails session={session} rc={rc} frames={frames} link={link}
+            quality={prefs.qPick} scope={prefs.scopePick} pointerLocked={input.pointerLocked}
+            linkSched={rc.status?.link_sched ?? ""} />
+        }
+      />
+    </div>
+  );
+}

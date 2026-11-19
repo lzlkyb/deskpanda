@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, memo } from "react";
-import { getStoredTheme, toggleTheme } from "../../lib/theme";
+import { useMemo, memo } from "react";
+import { isDarkTheme, toggleTheme } from "../../lib/theme";
+import { useThemeMode } from "../../hooks/useThemeMode";
 import { headerSecurityBadges, type SecurityFlags } from "../../lib/headerSecurityBadges";
 import { Button } from "../ui/button";
 import { Icon } from "../ui/icon";
@@ -29,15 +30,8 @@ function HeaderImpl({
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }) {
-  const [dark, setDark] = useState(() => getStoredTheme() === "dark");
-
-  // 主题由 lib/theme 统一管理，这里只同步图标状态
-  useEffect(() => {
-    const onTheme = (e: Event) =>
-      setDark((e as CustomEvent<"dark" | "light">).detail === "dark");
-    window.addEventListener("themechange", onTheme);
-    return () => window.removeEventListener("themechange", onTheme);
-  }, []);
+  // 主题由 lib/theme 统一管理，这里只按亮暗出图标（6 套配色都在这个二档里归一）。
+  const dark = isDarkTheme(useThemeMode());
 
   const securityBadges = useMemo(() => headerSecurityBadges(flags), [flags]);
 

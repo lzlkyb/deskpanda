@@ -1,0 +1,86 @@
+/**
+ * 无人值守接入码（Q2 方案 B）——前端侧的解析与格式化。
+ *
+ * 两种可粘贴形态：
+ * - 展示码 `XXXX-XXXX`（电话可读）：只够授权，**定位不了机器**——
+ *   只在同一局域网（附近设备列表里能看见对方）时可用；
+ * - 完整接入串 `PPU-XXXX-XXXX-<node_id>`：跨网传递的正身，
+ *   微信/剪贴板复制粘贴，node_id 必须随码一起走。
+ *
+ * 后端（`rc/uno.rs`）做真正的校验（归一化 + 摘要比对）；这里只做
+ * 「把用户粘进来的一坨字拆成结构」和基本形状检查，错误信息给得能指导动作。
+ */
+
+export interface ParsedUno {
+  /** 8 位展示码（大写、无分隔符）。 */
+  code: string;
+  /** 对端设备号。完整接入串才有；裸码没有（要靠局域网发现补上）。 */
+  nodeId?: string;
+}
+
+/**
+ * 从粘贴内容里抠出接入码（与可选设备号）。
+ *
+ * 🔴 **不能把整串大写化**：node_id 是 base32 小写、大小写敏感，
+ * 只有 `PPU` 前缀与码的部分不区分大小写。宽容规则与邀请码一致：
+ * 用户大概率连「接入码：」一起粘进来，前后杂质直接忽略。
+ */
+export function parseUnoInput(raw: string): ParsedUno | null {
+  const s = raw.trim();
+  if (!s) return null;
+  // 完整接入串：PPU-XXXX-XXXX-<node_id>（分隔横杠可有可无，前后允许杂质）
+  const full = /PPU[- ]?([0-9A-Za-z]{4})[- ]?([0-9A-Za-z]{4})[- ](\S+)/i.exec(s);
+  if (full) {
+    return { code: (full[1] + full[2]).toUpperCase(), nodeId: full[3] };
+  }
+  // 裸码：8 位（可有横杠/空格分组）。先抽掉「接入码」之类的引导词再试。
+  const compact = s.replace(/^.*?(接入码|码)[:：]?\s*/i, "").trim();
+  const bare = /^([0-9A-Za-z]{4})[- ]?([0-9A-Za-z]{4})$/.exec(compact);
+  if (bare) return { code: (bare[1] + bare[2]).toUpperCase() };
+  return null;
+}
+
+/** 码的形状检查（去分隔符后 8 位、字符集合规）。真正的校验在收到码的那台机器。 */
+export function unoCodeShapeOk(code: string): boolean {
+  return /^[0-9A-HJ-NP-TV-Z]{8}$/.test(code.toUpperCase().replace(/O/g, "0").replace(/[IL]/g, "1"));
+}
+
+/** 方案 C：固定密码最短长度（与后端 `unop::PASS_MIN_CHARS` 同值，前后端一个口径）。 */
+export const UNO_PASS_MIN_CHARS = 6;
+
+/** 密码最长长度（与后端 `unop::PASS_MAX_CHARS` 同值）。 */
+export const UNO_PASS_MAX_CHARS = 64;
+
+/**
+ * 密码长度按**字符数**数（与后端 `unop::hash_password` 的 `chars().count()` 同口径）。
+ * 🔴 不能用 `String.length`：它数 UTF-16 单元，emoji 一个算 2——前端放行、
+ * 后端拒绝的「看着合法却存不下去」又会回来（`rcDevice` 的 NOTE 教训同源）。
+ */
+export function unoPassCharsOk(pass: string): boolean {
+  const n = [...pass.trim()].length;
+  return n >= UNO_PASS_MIN_CHARS && n <= UNO_PASS_MAX_CHARS;
+}
+
+/**
+ * 限时无人值守码：「X 小时后过期 / X 分钟后过期」的文案（取最近到期的那个码）。
+ *
+ * 原先这段是 `RcSection` 里的一段 IIFE，搬成函数有两个原因：设置页的组头摘要
+ * 也要用同一个口径（收起态得看得见还有几个码生效），而这段判据（整小时向下取整、
+ * 不足一小时也至少报 1 分钟）值得被无环境测试钉住。
+ * `now` 显式传入而不是内部读 `Date`——同 `rcHistory` 的判据风格。
+ * 空列表返回 `null`：由调用方决定「这半句不写」，不在这里编出「0 分钟后过期」。
+ */
+export function unoExpiryText(expiresMs: readonly number[], now: number): string | null {
+  if (expiresMs.length === 0) return null;
+  const left = Math.max(0, Math.max(...expiresMs) - now);
+  if (left >= 3_600_000) return `${Math.floor(left / 3_600_000)} 小时后过期`;
+  return `${Math.max(1, Math.floor(left / 60_000))} 分钟后过期`;
+}
+
+/**
+ * iroh node_id 的形状：52 位 base32。大小写都收（粘贴容错），
+ * 真正的解析在被控端拨号时（`bad_node_id`）。
+ */
+export function nodeIdShapeOk(raw: string): boolean {
+  return /^[0-9A-Za-z]{52}$/.test(raw.trim());
+}

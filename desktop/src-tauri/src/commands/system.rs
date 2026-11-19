@@ -115,6 +115,57 @@ pub fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("打开链接失败: {e}"))
 }
 
+/// 复制纯文本到系统剪贴板。
+///
+/// 🔴 前端复制**一律先走这条**，不要直接用 `navigator.clipboard.writeText`：
+/// WebView2 的 Web Clipboard 会 resolve 却什么都没写，界面显示「✓ 已复制」而
+/// 粘出来是旧内容。原生通道还多一道**写后回读**校验——写入被别的剪贴板管理器
+/// 抢占时「set 成功」也不能算成功。
+#[tauri::command]
+pub async fn copy_only(text: String) -> Result<(), String> {
+    copy_only_impl(text).await
+}
+
+/// 读取剪贴板纯文本。失败返回空串而不是 Err：调用方只是拿它预填输入框，
+/// 拿不到就留空，不该阻断流程（也避免 WebView 弹「是否允许读取剪贴板」）。
+#[tauri::command]
+pub async fn read_clipboard_text() -> String {
+    read_clipboard_text_impl().await
+}
+
+#[cfg(windows)]
+async fn copy_only_impl(text: String) -> Result<(), String> {
+    crate::rc::input::set_clipboard_text_async(text.clone()).await?;
+    let back = crate::rc::input::get_clipboard_text_async().await?;
+    if back != text {
+        // 报这句原文是有意的：前端 `copyToClipboard` 靠 `回读不一致` 这个子串
+        // 判定「写入没落地」，从而**不**回落 Web API、直接告诉用户失败。
+        return Err(format!(
+            "回读不一致：写入 {} 字节，读回 {} 字节",
+            text.len(),
+            back.len()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn read_clipboard_text_impl() -> String {
+    crate::rc::input::get_clipboard_text_async()
+        .await
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+async fn copy_only_impl(_text: String) -> Result<(), String> {
+    Err("当前平台尚未实现原生剪贴板写入".to_string())
+}
+
+#[cfg(not(windows))]
+async fn read_clipboard_text_impl() -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

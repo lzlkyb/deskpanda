@@ -5,7 +5,7 @@
   "identifier": "com.pastepanda.deskpanda",
   "build": {
     "beforeDevCommand": "npm run vite:dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1430",
     "beforeBuildCommand": "npm run vite:build",
     "frontendDist": "../dist"
   },
@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "DeskPanda",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 560,
-        "minHeight": 600,
+        "width": 1200,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 640,
         "decorations": false,
         "visible": false,
         "center": true,

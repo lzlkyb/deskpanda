@@ -23,6 +23,29 @@ pub struct AppConfig {
     /// 开机自启（与 tauri-plugin-autostart 同步的镜像值，供前端读取）。
     #[serde(default)]
     pub autostart_enabled: bool,
+
+    // ── 远程会话（rc）偏好 ────────────────────────────────────────────────
+    // 这三项**只影响本机界面行为**，不参与任何协议与鉴权判断，后端也不读它们
+    // （`rc_enabled` / `rc_keep_awake` 是另一套：真值在 SQLite `config` 表，
+    // 由 `rc_set_enabled` / `rc_set_keep_awake` 命令写，别往这里塞）。
+    //
+    // 放在这里的理由：前端 `save_config` 一次提交整份 config，若结构体不认识这些
+    // 键，serde 会在反序列化时静默丢弃 → 写盘后重启偏好全丢（实测过）。所以字段
+    // 必须在结构体里「登记」，值由前端算。
+    /// 会话内剪贴板自动同步（默认开）。读取口径见前端 `lib/rcClipAuto.ts`。
+    #[serde(default = "default_true")]
+    pub rc_clip_auto: bool,
+    /// 控端浮条顶缘 hover 唤出（默认开）。读取口径见前端 `lib/rcHoverReveal.ts`。
+    #[serde(default = "default_true")]
+    pub rc_hover_reveal: bool,
+    /// 控端键盘模式：`type`（打字，可输中文，默认）/ `direct`（直传扫描码）。
+    /// 非法值由前端 `lib/rcKeyMode.ts` 的 `rcKeyModeOf` 收敛，这里存字符串不改语义。
+    #[serde(default = "default_rc_key_mode")]
+    pub rc_key_mode: String,
+}
+
+fn default_rc_key_mode() -> String {
+    "type".to_string()
 }
 
 fn default_true() -> bool {
@@ -34,6 +57,9 @@ impl Default for AppConfig {
         Self {
             release_webview_on_close: true,
             autostart_enabled: false,
+            rc_clip_auto: true,
+            rc_hover_reveal: true,
+            rc_key_mode: default_rc_key_mode(),
         }
     }
 }
