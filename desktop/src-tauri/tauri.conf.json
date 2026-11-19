@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DeskPanda",
+  "version": "0.1.1",
+  "identifier": "com.pastepanda.deskpanda",
+  "build": {
+    "beforeDevCommand": "npm run vite:dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run vite:build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DeskPanda",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 560,
+        "minHeight": 600,
+        "decorations": false,
+        "visible": false,
+        "center": true,
+        "resizable": true,
+        "backgroundColor": "#F4F6F9"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://lzlkyb.github.io/deskpanda/updater.json",
+        "https://github.com/lzlkyb/deskpanda/releases/latest/download/updater.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1RDZEOEE5MzVGQzgyMDgKUldRSWd2dzFxZGpXWmR3K3VML1VYOFp1bFZBK2ltVXlmZjFjWVIxSnNMTkZRend6TXladUVvbzIK",
+      "windows": {},
+      "dangerousInsecureTransportProtocol": true,
+      "active": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp",
+        "installerHooks": "./installer-hooks.nsh"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
