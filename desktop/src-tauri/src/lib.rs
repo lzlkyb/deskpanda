@@ -13,8 +13,23 @@
 pub mod branding;
 pub mod commands;
 pub mod config;
+#[cfg(windows)]
+pub mod dpapi;
+#[cfg(windows)]
+pub mod net;
+pub mod paths;
+#[cfg(windows)]
+pub mod platform;
+// 🔴 远程桌面当前**只交付 Windows**：采集（DXGI Desktop Duplication）、编码
+// （Media Foundation）、音频（WASAPI）、输入注入全是 Win32 绑定。
+// macOS 分支（`mac_capture` / AV1 / 录屏）在原仓里依赖一整套 `.m` + `.c` 桥接，
+// 尚未迁入 ⇒ 本模块按平台门控，macOS 构建只出壳子，不会假装有远程桌面。
+// 见 `docs/DeskPanda-拆分方案-2026-11-19.md` 的 S6。
+#[cfg(windows)]
+pub mod rc;
 pub mod security;
 pub mod state;
+pub mod store;
 
 // main.rs 用 `use deskpanda::*;` 一把引入；AppState 是最常被引用的托管状态，
 // 在根上再导出，避免 main.rs 里写 `use deskpanda::state::AppState` 的长路径。

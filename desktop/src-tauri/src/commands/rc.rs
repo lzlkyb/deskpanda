@@ -1,0 +1,2134 @@
+//! 远程电脑命令层（方案 A）。
+//!
+//! 配对与同步**完全分开**：邀请码格式共用，信任表是 `rc_devices`。
+//! 通道在 `rc_enabled` 时由 `RcService::start` 自建，不依赖知识库同步。
+
+use serde::Serialize;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::data_store::DataStore;
+use crate::rc::join;
+// 本机设备名的唯一来源在 rc 域：局域网配对要把名字随握手包自报给对方
+// （`rc/pin.rs` + `rc/discovery.rs`），命令层只是也用它显示。见 `rc/mod.rs`。
+use crate::rc::local_device_name;
+use crate::rc::protocol::Capability;
+use crate::rc::service::{RcService, RcStatus};
+use crate::rc::short_pair;
+use crate::rc::uno;
+use crate::rc::video::FrameCodec;
+use crate::rc::session::{
+    is_rc_online_for, rc_presence_level, Session, CFG_CAPABILITY, CFG_DEVICE_DENY, CFG_ENABLED,
+};
+use crate::sync::identity::NodeIdentity;
+use crate::sync::invite::{self, Invite};
+
+fn app_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录：{}", e))
+}
+
+/// 备注名长度上限，**按字符数**计（不是字节、也不是 UTF-16 单元）。
+///
+/// 🔴 这里曾经用 `note.len()`（字节数）：60 字节只够 20 个汉字，而前端
+///    `maxLength` / `slice` 数的是 UTF-16 单元 —— 于是 21~60 个汉字的备注
+///    在前端**看着完全合法**、存下去必然被后端拒掉。两边口径分开还会继续漂，
+///    所以前端 `lib/rcDevice.ts` 有一份同值常量与同一个截断函数。
+pub const NOTE_MAX_CHARS: usize = 60;
+
+/// 备注名归一化：trim + 按**字符**截断到上限。前后端同一口径的唯一实现处。
+/// 空串是合法值（= 清除备注，显示回落对端自报名）。
+pub fn normalize_note(raw: &str) -> String {
+    raw.trim().chars().take(NOTE_MAX_CHARS).collect()
+}
+
+/// 设备显示名的**唯一真源**：备注（起过才用）→ 对端自报名。
+///
+/// 🔴 前端曾有 6 份手写的 `note?.trim() || name || …` 与 8 处只认自报名的直显，
+///    用户改了备注后历史页 / 会话横幅 / 托盘仍显示旧设备名（2026-09-23）。
+///    收口方案是后端统一算好 `display_name` 随每份数据下发（方案 B），
+///    本函数就是那个「一处」——前端只剩无脑显示 + 旧载荷兜底。
+pub fn display_name_of(note: &str, name: &str) -> String {
+    let note = note.trim();
+    if note.is_empty() {
+        name.to_string()
+    } else {
+        note.to_string()
+    }
+}
+
+fn emit_changed(app: &AppHandle, svc: &RcService) {
+    let _ = app.emit("rc-session-changed", svc.status());
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RcTargetDevice {
+    pub node_id: String,
+    pub name: String,
+    pub conn_state: String,
+    pub last_seen: i64,
+    pub denied: bool,
+    /// `rc` = 远程配对；`sync` = 仅同步配对（方案 A：可直接发起远程）。
+    pub source: String,
+    /// 可达性档位：`live` / `recent` / `seen` / `never`（设计稿）。
+    pub presence: String,
+    /// 上一次会话**实测**走的路径（`lan` / `direct` / `relay`；空串 = 还没连过）。
+    /// 只有远程配对（`source == "rc"`）有实测值；仅同步配对的设备恒为空串。
+    pub last_path: String,
+    /// 用户起的本地备注名（A1）。空串 = 没起过，前端回落显示 `name`。
+    /// 仅同步配对的设备没有备注入口——它的行还没进 rc 表。
+    pub note: String,
+    /// 统一显示名：`display_name_of(&note, &name)`（备注优先，见函数说明）。
+    /// 前端各显示点只读它，不再各自拼 `note || name`。
+    pub display_name: String,
+    /// 方案 D「免确认直连」：这台设备发起远程时跳过人工同意。默认 false。
+    pub trusted: bool,
+    /// 对端**自报的系统**短标签（`Windows 11` / `macOS` / `Linux`）。
+    ///
+    /// 来源是会话 `Accept` 帧（`rc/protocol.rs`）；空串 = 还没建立过会话，
+    /// 或对端是旧版 / 采不到——前端据空串**不渲染这一格**，不编默认值。
+    /// 仅同步配对的设备恒为空串（它从没跑过 rc 会话）。
+    pub os: String,
+    /// 彩色标签（设备组织，2026-09-26 对齐稿①）。本机私产；仅同步配对恒为空数组。
+    pub tags: Vec<crate::data_store::rc_device::DeviceTag>,
+    /// 描述性备注长文本（悬停/详情显示）。与 `note`（改名别名）分开：
+    /// note 进 display_name 顶替设备名，remark 只做补充说明。空串 = 没写过。
+    pub remark: String,
+}
+
+#[derive(Serialize)]
+pub struct RcInviteCreated {
+    pub code: String,
+    pub expires_at: i64,
+}
+
+#[derive(Serialize)]
+pub struct RcExchangeStarted {
+    pub node_id: String,
+    pub name: String,
+    pub expires_at: i64,
+}
+
+#[derive(Serialize)]
+pub struct RcIdentity {
+    pub node_id: String,
+    pub fingerprint: String,
+    pub device_name: String,
+    pub running: bool,
+}
+
+#[tauri::command]
+pub fn rc_status(svc: State<'_, Arc<RcService>>) -> Result<RcStatus, String> {
+    Ok(svc.status())
+}
+
+#[tauri::command]
+pub async fn rc_identity(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<RcIdentity, String> {
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    Ok(RcIdentity {
+        node_id: me.node_id(),
+        fingerprint: me.fingerprint(),
+        device_name: local_device_name(),
+        running: svc.is_running(),
+    })
+}
+
+/// 远程可发起目标 = rc_devices ∪ 同步 devices（方案 A 单向继承）。
+/// `presence` 四档：live / recent / seen / never（见 `rc_presence_level`）。
+#[tauri::command]
+pub fn rc_targets(
+    store: State<DataStore>,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<Vec<RcTargetDevice>, String> {
+    let deny = svc.device_deny();
+    let live: std::collections::HashSet<String> = svc.presence_live_ids().into_iter().collect();
+    let session_peer = svc.active_session_peer();
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut out: Vec<RcTargetDevice> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for d in store.rc_device_list()? {
+        seen.insert(d.node_id.clone());
+        let level = rc_presence_level(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
+        // 🔴 2026-09-21：不再把库里的 `d.conn_state` 传进去——那个字段只写 online
+        //    从不写 offline，读它必然产生假在线（详见 `is_rc_online_for` 的说明）。
+        let online = is_rc_online_for(
+            &d.node_id,
+            d.last_seen,
+            &live,
+            session_peer.as_deref(),
+            now,
+        );
+        out.push(RcTargetDevice {
+            denied: deny.get(&d.node_id).copied().unwrap_or(false),
+            display_name: display_name_of(&d.note, &d.name),
+            node_id: d.node_id,
+            name: d.name,
+            conn_state: if online {
+                "online".into()
+            } else {
+                "offline".into()
+            },
+            last_seen: d.last_seen,
+            source: "rc".into(),
+            presence: level.as_str().into(),
+            last_path: d.last_path,
+            note: d.note,
+            trusted: d.trusted,
+            os: d.os,
+            tags: d.tags,
+            remark: d.remark,
+        });
+    }
+    for d in store.device_list()? {
+        if seen.contains(&d.node_id) {
+            continue;
+        }
+        seen.insert(d.node_id.clone());
+        let level = rc_presence_level(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
+        // 🔴 2026-09-21：不再把库里的 `d.conn_state` 传进去——那个字段只写 online
+        //    从不写 offline，读它必然产生假在线（详见 `is_rc_online_for` 的说明）。
+        let online = is_rc_online_for(
+            &d.node_id,
+            d.last_seen,
+            &live,
+            session_peer.as_deref(),
+            now,
+        );
+        out.push(RcTargetDevice {
+            denied: deny.get(&d.node_id).copied().unwrap_or(false),
+            // 仅同步配对还没提升进 rc 表，没有备注入口 → display_name 恒等于自报名。
+            display_name: d.name.clone(),
+            node_id: d.node_id.clone(),
+            name: d.name,
+            conn_state: if online {
+                "online".into()
+            } else {
+                "offline".into()
+            },
+            last_seen: d.last_seen,
+            source: "sync".into(),
+            presence: level.as_str().into(),
+            // 同步设备表（`devices`）没有路径列——它只做笔记同步，从没跑过 rc 会话。
+            // 空串 = 前端不显示这一格（而不是编一个「绕中继」出来）。
+            last_path: String::new(),
+            // 仅同步配对还没提升进 rc 表，没有备注入口。
+            note: String::new(),
+            // 仅同步配对还没提升进 rc 表，无从谈「免确认」——恒 false。
+            trusted: false,
+            // 同理：它从没跑过 rc 会话，没有 Accept 帧可读系统，恒空串。
+            os: String::new(),
+            // 标签/描述备注同属 rc 表的组织信息，仅同步配对没有落点，恒空。
+            tags: Vec::new(),
+            remark: String::new(),
+        });
+    }
+    // C1：最近用过的在前。live 的 last_seen 本来就最新，纯 last_seen 排序
+    // 自然把「正在会话/刚见过」的浮到顶；纯同步设备 last_seen=0 沉底（从未连过）。
+    out.sort_by_key(|d| std::cmp::Reverse(d.last_seen));
+    Ok(out)
+}
+
+/// 按需探活：对名单里的节点短超时拨一次，通了刷 last_seen。
+/// 返回 node_id → 是否可达。打开设备列表 / 用户点刷新时调用。
+#[tauri::command]
+pub async fn rc_probe_targets(
+    svc: State<'_, Arc<RcService>>,
+    node_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, bool>, String> {
+    if node_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    Ok(svc.probe_peers(&node_ids).await)
+}
+
+/// 已远程配对、尚未允许同步笔记的设备（方案 A 反向门）。
+#[derive(Debug, Clone, Serialize)]
+pub struct RcSyncOffer {
+    pub node_id: String,
+    pub name: String,
+    pub paired_at: String,
+}
+
+pub const CFG_SYNC_OFFER_DENIED: &str = "rc_sync_offer_denied";
+
+#[tauri::command]
+pub fn rc_sync_offers(store: State<DataStore>) -> Result<Vec<RcSyncOffer>, String> {
+    let denied: Vec<String> = store
+        .get_config()
+        .ok()
+        .and_then(|c| {
+            c.get(CFG_SYNC_OFFER_DENIED)
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+        })
+        .unwrap_or_default();
+    let sync_ids: std::collections::HashSet<String> = store
+        .device_list()?
+        .into_iter()
+        .map(|d| d.node_id)
+        .collect();
+    Ok(store
+        .rc_device_list()?
+        .into_iter()
+        .filter(|d| !sync_ids.contains(&d.node_id) && !denied.contains(&d.node_id))
+        .map(|d| RcSyncOffer {
+            node_id: d.node_id,
+            name: d.name,
+            paired_at: d.paired_at,
+        })
+        .collect())
+}
+
+/// 用户同意：远程配对设备允许同步笔记。
+#[tauri::command]
+pub async fn kb_sync_allow_from_rc(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    sync: State<'_, crate::sync::service::SyncService>,
+    node_id: String,
+    name: String,
+) -> Result<(), String> {
+    let n = if name.trim().is_empty() {
+        "新设备".to_string()
+    } else {
+        name.trim().to_string()
+    };
+    store.device_pair(&node_id, &n, "")?;
+    // 🔴 P1-2（2026-09-23 审计）：先把设备列表刷出去，再接同步循环。
+    //
+    // 原来 emit 排在最后：`add_peer` 一失败（旧代码只 warn，见下）连这条刷新都
+    // 跑不到，界面上表现为「点了没反应」，而**同步配对其实已经写进库了**——
+    // 用户只能再点一次，或去设置页里找那台根本不存在的设备。
+    let _ = app.emit("kb-sync-devices-changed", ());
+    if sync.is_running().await {
+        // `add_peer` 失败是「这台配好了但笔记根本不同步」，属于功能不可用，
+        // 不是可以咽掉的告警：咽掉的表现是用户以为同步已开，很久之后才发现
+        // 对面拿到的是旧笔记。**不回滚**上面的配对——那是用户刚做出的授权，
+        // 而且抹掉设备行比「重试一次同步接入」更糟（规则 #15.3：报错要说清哪半件成了）。
+        if let Err(e) = sync.add_peer(&node_id).await {
+            log::warn!("[Sync] 从远程配对接入后起同步循环失败：{e}");
+            return Err(format!("配对已写入，但同步接入启动失败：{e}，请稍后重试"));
+        }
+    }
+    // 同步通道没在跑：不报错也不强行拉起——启动它归 `sync` 自己的开关管，
+    // 这台已经写进设备表，通道下次起来自然会带上它。
+    Ok(())
+}
+
+/// 用户拒绝：不再为这台提示「允许同步」。
+#[tauri::command]
+pub fn kb_sync_deny_from_rc(store: State<DataStore>, node_id: String) -> Result<(), String> {
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    let mut list: Vec<String> = obj
+        .get(CFG_SYNC_OFFER_DENIED)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    if !list.contains(&node_id) {
+        list.push(node_id);
+    }
+    obj.insert(
+        CFG_SYNC_OFFER_DENIED.to_string(),
+        serde_json::to_value(list).map_err(|e| e.to_string())?,
+    );
+    store.save_config(&config)
+}
+
+/// RC 邀请门开放时长（毫秒）。
+///
+/// 🔴 **由 [`invite::RC_TTL_SECS`] 派生，不另写一个数**：码的有效期与门的时长
+/// 必须是**同一个口径**——否则用户永远撞在门上，却拿到一句 `not_paired`
+/// （「尚未远程配对」），指不到「回去重新生成一个」这个唯一正确的动作。
+/// 两个各自独立的字面量就是把口径交给未来去漂（2026-09-17 修的正是这个）。
+///
+/// 同宽这条由本文件末尾的 `mod tests` 钉住（`commands::rc` 是私有模块，
+/// 别的测试文件够不到这个常量）。
+const RC_INVITE_DOOR_MS: i64 = invite::RC_TTL_SECS * 1000;
+
+/// 首页常驻的八位码仅存在内存，不启动通道；进入页面或重开页面可取回同一份码。
+#[tauri::command]
+pub fn rc_short_pair_code(svc: State<'_, Arc<RcService>>) -> Result<RcInviteCreated, String> {
+    let code = svc.joins().short_code(chrono::Utc::now().timestamp_millis())?;
+    Ok(RcInviteCreated { code: code.code, expires_at: code.expires_at })
+}
+
+/// 双方确认后派生临时 P2P 会合身份，再交换真正的设备身份。
+#[tauri::command]
+pub async fn rc_short_pair_begin(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    own_code: String,
+    peer_code: String,
+) -> Result<RcExchangeStarted, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    if !svc.joins().valid_short_code(&own_code, now) {
+        return Err("本机配对码已过期，请重新复制新的码".into());
+    }
+    if !short_pair::valid_code(&peer_code) || peer_code == own_code {
+        return Err("请输入对方的八位配对码，不能使用自己的码".into());
+    }
+    let (_attempt, mut cancelled) = svc.joins().begin_short()?;
+    let expires_at = svc.joins().short_code(now)?.expires_at;
+    svc.start(&app_dir(&app)?, true).await?;
+    join::open_door(&store, expires_at)?;
+    let endpoint = svc.short_pair_endpoint().ok_or("远程通道未启动")?;
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    let (node_id, name, addr) = tokio::select! {
+        result = short_pair::exchange(endpoint, &me, &own_code, &peer_code, expires_at) => result?,
+        _ = cancelled.changed() => return Err("已取消配对".into()),
+    };
+    if node_id == me.node_id() {
+        return Err("不能与本机配对".into());
+    }
+    svc.arm_exchange_addr(&node_id, &name, expires_at, addr)?;
+    Ok(RcExchangeStarted { node_id, name, expires_at })
+}
+
+#[tauri::command]
+pub fn rc_short_pair_cancel(svc: State<'_, Arc<RcService>>) {
+    svc.joins().cancel_short();
+}
+
+/// 单枚 8 位码会合（两端各输同一个数）。
+///
+/// 与 `rc_short_pair_begin` 的分工：那边要**两枚**码（双方各出示一枚），
+/// 强度 ≈ 53 bit；这边只要一枚，强度 ≈ 27 bit（见 `rc/short_pair.rs` 的
+/// `exchange_pin` 安全等级说明）。`listen` 由调用方按用户动作如实传：
+/// 出示方传 true（监听），输入方传 false（拨号），传反了两端永远连不上。
+#[tauri::command]
+pub async fn rc_pin_pair_begin(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    code: String,
+    listen: bool,
+) -> Result<RcExchangeStarted, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let code = code.trim().to_string();
+    if !short_pair::valid_code(&code) {
+        return Err("配对码必须是 8 位数字".into());
+    }
+    let (_attempt, mut cancelled) = svc.joins().begin_short()?;
+    // 会合窗口与两码版同源（同一份 short_code 的过期时刻），不另立一套口径。
+    let expires_at = svc.joins().short_code(now)?.expires_at;
+    svc.start(&app_dir(&app)?, true).await?;
+    join::open_door(&store, expires_at)?;
+    let endpoint = svc.short_pair_endpoint().ok_or("远程通道未启动")?;
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    let (node_id, name, addr) = tokio::select! {
+        result = short_pair::exchange_pin(endpoint, &me, &code, listen, expires_at) => result?,
+        _ = cancelled.changed() => return Err("已取消配对".into()),
+    };
+    if node_id == me.node_id() {
+        return Err("不能与本机配对".into());
+    }
+    svc.arm_exchange_addr(&node_id, &name, expires_at, addr)?;
+    Ok(RcExchangeStarted { node_id, name, expires_at })
+}
+
+/// 生成远程配对邀请码（开门，等对方粘贴后敲门）。
+#[tauri::command]
+pub async fn rc_invite_create(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    name: String,
+) -> Result<RcInviteCreated, String> {
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let code = invite::encode(&me, name.trim())?;
+    // 门与码同宽（两者都由 `invite::RC_TTL_SECS` 定）：码在窗口内才有效，
+    // 门在窗口内才受理。配对成功后门会被提前关掉（见 `RcService::approve_join`）。
+    let expires_at = now + RC_INVITE_DOOR_MS;
+    // 🔴 P1-2（2026-09-23 审计）：这里原来是 `log::warn!` 然后照样把码返回给界面
+    // ——「功能不可用」的失败不能咽。门没开 = 对方粘完码敲门必被拒，
+    // 而用户手里已经拿到一份看起来合法的码，只能反复试、完全不知道卡在哪。
+    // 现在直接报错：码根本不发出去，用户看到的是「生成失败，请重试」，
+    // 而不是「生成了但连不上」。
+    if let Err(e) = join::open_door(&store, expires_at) {
+        return Err(format!("邀请窗口没能打开：{e}，对方会连不上，请重试"));
+    }
+    // 开门同时拉起通道：否则对端敲门时本机 accept 循环没在跑
+    if let Err(e) = svc.start(&app_dir(&app)?, true).await {
+        // 通道起不来 = 这份码发出去也没人接。门已经开了，**必须补一步关门**，
+        // 否则会把一道「没人监听但有效期还在」的门留在配置里。
+        // 关门本身失败只记日志：此刻已经要报错了，再叠一个错误只会盖掉真原因。
+        if let Err(e2) = join::close_door(&store) {
+            log::warn!("[RC] 通道启动失败后的补救关门也失败：{e2}");
+        }
+        return Err(format!("远程通道启动失败：{e}，邀请码没有生成，请重试"));
+    }
+    emit_changed(&app, &svc);
+    Ok(RcInviteCreated { code, expires_at })
+}
+
+#[tauri::command]
+pub fn rc_invite_preview(code: String) -> Result<Invite, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    invite::decode(&code, now, invite::RC_TTL_SECS)
+}
+
+/// 主动作废当前邀请窗口（2026-10-16 对标 p2wlan 差距 2）。
+///
+/// 「配对成功即关门」早已实现（`approve_join` → `join::close_door`）；这里补的
+/// 是另一半：码发出去但**还没人配成**时，用户可以提前关门，不用干等 TTL。
+/// `close_door` 写配置键、天然幂等——门本来没开也返回 Ok，作废一枚已过期的码
+/// 不该报错（对用户来说结果一样：这枚码已经没用了）。
+#[tauri::command]
+pub fn rc_invite_revoke(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<(), String> {
+    join::close_door(&store)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 首页互换码：记录本机选择的对端，尚不建立信任。
+#[tauri::command]
+pub async fn rc_exchange_begin(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    code: String,
+) -> Result<RcExchangeStarted, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let inv = invite::decode(&code, now, invite::RC_TTL_SECS)?;
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    if inv.node_id == me.node_id() {
+        return Err("不能粘贴本机自己的配对码".into());
+    }
+    if !svc.enabled() || !join::door_open(&store, now) {
+        return Err("请先开启本机接收并生成自己的配对码".into());
+    }
+    let name = if inv.name.trim().is_empty() { "新设备" } else { inv.name.trim() };
+    let expires_at = join::door_until(&store);
+    svc.arm_exchange(&inv.node_id, name, expires_at)?;
+    Ok(RcExchangeStarted { node_id: inv.node_id, name: name.to_string(), expires_at })
+}
+
+/// 配对轮询的取值口径（纯判断，抽出来给单测钉不变量）。
+///
+/// 🔴 2026-09-30 真机实证：本地配对行**不能**在交换进行中当成「已配对」用。
+///    手机第一轮（18:18）配对成功、PC 侧随后手动删了设备行，但手机行还在；
+///    第二轮手机端 `rc_exchange_check` 首行就撞见本地行 → 秒回 `paired` →
+///    收卡停轮询，PC 侧永远等不到它的确认（表现：手机「配对成功」、
+///    PC 挂「等待中」。对端删了我们，本地残留行就是假阳性）。
+/// 正确口径：**交换进行中以对端 PairCheck 为准**；本地行只在没有进行中的
+/// 交换意图时（重进配对流的老配对）才可作数。
+#[derive(Debug, PartialEq, Eq)]
+enum PairPollVerdict {
+    /// 没有进行中的交换且本地有行：老配对，直接算已配对。
+    AlreadyPaired,
+    /// 交换进行中且门还开着：必须等对端 PairCheck 确认。
+    NeedPeerCheck,
+    /// 窗口已结束：让前端提示重新交换码。
+    WindowEnded,
+}
+
+fn pair_poll_verdict(has_local_row: bool, intent_active: bool, door_open: bool) -> PairPollVerdict {
+    if intent_active {
+        if door_open {
+            PairPollVerdict::NeedPeerCheck
+        } else {
+            PairPollVerdict::WindowEnded
+        }
+    } else if has_local_row {
+        PairPollVerdict::AlreadyPaired
+    } else {
+        PairPollVerdict::WindowEnded
+    }
+}
+
+#[tauri::command]
+pub async fn rc_exchange_check(
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+) -> Result<&'static str, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let intent_active = svc.exchange_intent(&node_id, now).is_some();
+    match pair_poll_verdict(store.rc_device_get(&node_id)?.is_some(), intent_active, join::door_open(&store, now)) {
+        PairPollVerdict::AlreadyPaired => return Ok("paired"),
+        PairPollVerdict::WindowEnded => {
+            return Err("本次配对窗口已结束，请重新交换配对码".into())
+        }
+        PairPollVerdict::NeedPeerCheck => {}
+    }
+    match svc.pair_check(&node_id).await {
+        Ok(true) => {
+            svc.confirm_exchange(&node_id)?;
+            Ok("paired")
+        }
+        Err(e) if e.starts_with("[pair_failed]") => Err(e),
+        _ => Ok("waiting"),
+    }
+}
+
+/// 粘贴对方邀请码 → 写入 rc_devices（远程配对，不写同步 devices）。
+#[tauri::command]
+pub async fn rc_pair(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    code: String,
+) -> Result<Invite, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    // 与 `rc_invite_create` 同一个窗口：粘贴时先在这里被拦下，
+    // 比「连上了再被门拒」早一步，也早一步把话说清楚。
+    let inv = invite::decode(&code, now, invite::RC_TTL_SECS)?;
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    if inv.node_id == me.node_id() {
+        return Err("这是本机自己的邀请码，不能和自己配对。请把它粘到**另一台**设备上。".into());
+    }
+    let name = if inv.name.trim().is_empty() {
+        "新设备".to_string()
+    } else {
+        inv.name.trim().to_string()
+    };
+    store.rc_device_pair(&inv.node_id, &name)?;
+    // 配对成功即拉起通道（发起不必等打开「允许被远程」）
+    // 🔴 P1-2（2026-09-23 审计）：配对已经落库了，通道起不来就是「配上了但用不了」
+    // —— 咽进 warn 等于让用户以为一切正常，直到第一次发起远程才撞墙。
+    // 报错但**把话说清**：配对本身已生效，失败的是通道，用户不需要重配一次码。
+    // （不能回滚配对：那是用户刚建立的信任关系，且对方那侧也已经写了它那份。）
+    if let Err(e) = svc.start(&app_dir(&app)?, true).await {
+        emit_changed(&app, &svc);
+        return Err(format!(
+            "已与该设备配对，但远程通道启动失败：{e}。设备已保存，修好网络后直接发起即可。"
+        ));
+    }
+    emit_changed(&app, &svc);
+    Ok(inv)
+}
+
+/// A1：设置设备的本地备注名。空串 = 清除（回落显示对端自报名）。
+/// 纯本地展示属性，不发信令、不动配对状态。
+///
+/// 超长**不报错而是按字符截断**（`normalize_note`）：前端输入框已经在同一口径上
+/// 截断，后端再拒一次只会让「看着合法却存不下去」的怪状态回来。
+#[tauri::command]
+pub async fn rc_device_rename(
+    store: State<'_, DataStore>,
+    node_id: String,
+    note: String,
+) -> Result<(), String> {
+    store.rc_device_note_set(&node_id, &normalize_note(&note))
+}
+
+/// 设备彩色标签（2026-09-26 对齐稿①）。纯本地组织信息，不发信令。
+/// 清洗（上限 6 / 去重 / 色板白名单）收口在 `normalize_tags`，命令层不重复判。
+#[tauri::command]
+pub async fn rc_device_tags_set(
+    store: State<'_, DataStore>,
+    node_id: String,
+    tags: Vec<crate::data_store::rc_device::DeviceTag>,
+) -> Result<(), String> {
+    store.rc_device_tags_set(&node_id, tags)
+}
+
+/// 设备描述性备注（长文本，悬停/详情显示）。空串 = 清除。与改名别名互不串扰。
+#[tauri::command]
+pub async fn rc_device_remark_set(
+    store: State<'_, DataStore>,
+    node_id: String,
+    remark: String,
+) -> Result<(), String> {
+    store.rc_device_remark_set(&node_id, &remark)
+}
+
+#[tauri::command]
+pub async fn rc_forget(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+) -> Result<(), String> {
+    // 🔴 P1-1（2026-09-23 审计）：忘记设备 = 撤销信任，正在跑的会话必须一起收。
+    //
+    // 原来只删表 + 有条件停通道：只要还有别的配对设备（或本机开着被控），
+    // 通道就留着，于是「已经被忘掉」的那台还在控这台机器（或还在看这台屏幕），
+    // 设备行都没了、会话还挂着。两个方向都收：不管是谁在控谁，
+    // 信任已经撤销，就不该有一条输入路径还通向它。
+    // 顺序也有讲究：先收会话（End 帧要发给对方、历史要落），再考虑停通道。
+    if let Some(id) = svc.session_id_for_peer(&node_id) {
+        log::info!("[RC] 忘记设备，当场结束与它的会话：{node_id}");
+        svc.force_end_if_session(&id, "设备已从信任列表移除").await;
+    }
+    store.rc_device_forget(&node_id)?;
+    svc.forget_peer_addr(&node_id)?;
+    // 忘掉最后一台且未开被控 → 收通道
+    if !svc.needs_channel() {
+        svc.stop().await;
+    }
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 生成方：放行敲门（已核对指纹）。
+#[tauri::command]
+pub async fn rc_join_approve(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    name: String,
+) -> Result<(), String> {
+    svc.approve_join(&node_id, &name)?;
+    // 生成方放行后也要能收会话；通道若未起则拉起
+    // 🔴 P1-2（2026-09-23 审计）：放行已经写进白名单了，通道起不来对方就是敲不开门。
+    // 咽掉的话用户会以为「我已经同意了，为什么他还连不上」。
+    // 同 `rc_pair`：报错但不回滚放行——那是用户刚做出的授权，撤它得再点一次。
+    if let Err(e) = svc.start(&app_dir(&app)?, true).await {
+        emit_changed(&app, &svc);
+        return Err(format!(
+            "已放行该设备，但远程通道启动失败：{e}。放行已保存，修好网络后对方重试即可。"
+        ));
+    }
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_join_deny(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+) -> Result<(), String> {
+    svc.deny_join(&node_id);
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_set_enabled(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    enable: bool,
+) -> Result<(), String> {
+    let mut config = store.get_config()?;
+    let obj = config
+        .as_object_mut()
+        .ok_or("配置文件不是一个对象，开关没能保存")?;
+    obj.insert(CFG_ENABLED.to_string(), serde_json::Value::Bool(enable));
+    store.save_config(&config)?;
+
+    if enable {
+        // relay=true：R3 异地路径（与同步同一 n0 relay）；LAN 仍优先直连
+        svc.start(&app_dir(&app)?, true).await?;
+    } else {
+        // 🔴 P1-1（2026-09-23 审计）：关开关必须**当场收掉正在进行的被控会话**。
+        //
+        // 原来这里只写配置 + 有条件停通道，注释还说「入站已由 gate_inbound 拒掉」
+        // ——那句只对**新**的连接成立。`handle_inbound_input` 的门禁读的是
+        // **会话建立时**快照下来的能力档，不看 `rc_enabled`，于是：
+        // 用户在自己机器上点「不再允许被远程」→ 配置存了、通道可能还开着
+        // （还有别的配对设备要发起）→ **对方还在继续控这台机器的键鼠**，
+        // 横幅还挂着，用户以为已经断了。这是撤销授权，不是设置项。
+        //
+        // 收口走 `force_end_if_session`（按 session id 认领）→ `end_session` 这条
+        // 唯一漏斗：补发 up（`release_all`）、发 End 帧、标离线、落历史一次做完。
+        //
+        // ❗ 只收 `InboundActive`（别人控我），不动用户自己发起的出站会话——
+        // 那个开关管的是「别人能不能控我」，与「我去控别人」无关。
+        if let Some(id) = svc.inbound_active_session_id() {
+            log::info!("[RC] 关闭「允许被远程」，当场结束进行中的被控会话");
+            svc.force_end_if_session(&id, "「允许被远程」已关闭").await;
+        }
+        // 关「允许被远程」≠ 关通道：若还有远程配对（还要发起），通道留着。
+        if !svc.needs_channel() {
+            svc.stop().await;
+        }
+    }
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 工具箱「开启远程通道」：不要求 `rc_enabled`（方案 A）。
+#[tauri::command]
+pub async fn rc_start_channel(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<(), String> {
+    svc.start(&app_dir(&app)?, true).await?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 启动时按「需要通道」拉起。给 lib.rs boot 用。
+/// ❗ 不能叫 `boot`：`kb_sync::boot` 已占用该名，两个 `pub use *` 会撞。
+pub fn rc_boot(app: &AppHandle) {
+    let Some(store) = app.try_state::<DataStore>() else {
+        return;
+    };
+    let enabled = crate::rc::cfg_enabled(&store);
+    let has_rc_devices = matches!(store.rc_device_list(), Ok(list) if !list.is_empty());
+    // 方案 A：仅同步配对的设备也可直接发起远程（同一 iroh 身份/端点），
+    // 漏了它用户看得见设备（source="sync"）却发不起（B9）。
+    let has_sync = matches!(store.device_list(), Ok(list) if !list.is_empty());
+    if !enabled && !has_rc_devices && !has_sync {
+        log::info!("[RC] 未开被控、无远程配对、无同步配对，启动时不起远程通道");
+        return;
+    }
+    let Ok(dir) = app_dir(app) else {
+        log::warn!("[RC] 拿不到应用数据目录，远程通道没起来");
+        return;
+    };
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(svc) = app2.try_state::<Arc<RcService>>() else {
+            log::warn!("[RC] RcService 还没就绪");
+            return;
+        };
+        if let Err(e) = svc.start(&dir, true).await {
+            log::warn!("[RC] 启动远程通道失败：{}", e);
+        }
+        // 🔴 Android 不预热确认浮层（2026-10-03 回归撤除）：wry 在 Android 上
+        // 每个 Activity 只有一块 webview，建第二块窗走 `setContentView` 会把
+        // 主界面整块顶掉（打开 App 白屏的真因）。手机端敲门确认走主界面设备页
+        // 的内联申请卡（RcInboundAskCard），不需要任何第二块窗。
+    });
+}
+
+#[tauri::command]
+pub async fn rc_set_capability(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    capability: String,
+) -> Result<(), String> {
+    let cap = Capability::parse(&capability).ok_or("能力档只能是 view 或 control")?;
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        CFG_CAPABILITY.to_string(),
+        serde_json::Value::String(cap.as_str().to_string()),
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_set_device_allowed(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    allowed: bool,
+) -> Result<(), String> {
+    // 🔴 拉黑 = 撤销信任，正在跑的会话必须当场收（2026-10-16 对标 p2wlan 差距 1）。
+    // `rc_forget` 早在 09-23（P1-1 审计）就是这么做的；当时只补了「忘记设备」
+    // 这一个入口，拉黑这条漏了——已建立的会话会一直活到对端自己断开。
+    // 顺序与 rc_forget 同款：先收会话（End 帧要发给对方、历史要落），再写表。
+    if !allowed {
+        if let Some(id) = svc.session_id_for_peer(&node_id) {
+            log::info!("[RC] 拉黑设备，当场结束与它的会话：{node_id}");
+            svc.force_end_if_session(&id, "设备已被禁止连接").await;
+        }
+    }
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    let mut deny: serde_json::Map<String, serde_json::Value> = obj
+        .get(CFG_DEVICE_DENY)
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if allowed {
+        deny.remove(&node_id);
+    } else {
+        deny.insert(node_id, serde_json::Value::Bool(true));
+    }
+    obj.insert(CFG_DEVICE_DENY.to_string(), serde_json::Value::Object(deny));
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_request_session(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    capability: String,
+    // 无人值守接入码（Q2 方案 B）。None = 常规发起（必须已配对）。
+    uno_code: Option<String>,
+    // 固定接入密码（Q2 方案 C）。与 uno_code 互斥携带；被控端只认其一。
+    uno_pass: Option<String>,
+) -> Result<Session, String> {
+    let cap = Capability::parse(&capability).ok_or("能力档只能是 view 或 control")?;
+    if !svc.is_running() {
+        return Err(
+            "远程通道未启动：请在工具箱「远程电脑」里点「开启远程通道」，或先完成远程配对".into(),
+        );
+    }
+    // Q6：手动发起 = 用户自己做了决定，自动重连 episode（含「重连失败」横幅）
+    // 立刻让位。episode 任务睡醒看到状态没了会自行退出。
+    svc.clear_auto_reconnect();
+    let sess = svc
+        .request_session(&node_id, cap, uno_code, uno_pass)
+        .await?;
+    emit_changed(&app, &svc);
+    Ok(sess)
+}
+
+/// 无人值守接入码的创建结果。`code` 是 `XXXX-XXXX` 展示码（电话可读），
+/// `full` 是 `PPU-<码>-<node_id>` 完整接入串（跨网必带设备号）。
+#[derive(Serialize)]
+pub struct RcUnoCreated {
+    pub code: String,
+    pub full: String,
+    /// 过期时刻（epoch 毫秒）。
+    pub expires_at: i64,
+}
+
+/// 生成无人值守接入码（Q2 方案 B，被控端）。
+///
+/// 🔴 武装先于出码（P1-2）：通道起不来就直接报错、**码根本不生成**。无人值守
+/// 场景没有人在场去点「开启」——出码的瞬间这台机器必须已经处于可受理状态，
+/// 否则用户拿着一份发出去的码，对面却永远连不上（比「没码」更难排查）。
+///
+/// 参数：
+/// - `ttl_secs`：时效秒数，只认 900（15 分钟）/ 86400（24 小时）两档；
+/// - `unlimited`：true = 窗口内不限次（装机档）；false = 限 1 次；
+/// - `capability`：接入授予的能力档（view / control），生成时选定；
+/// - `also_trust`：接入的设备是否同时开免确认（默认否——下次仍要码或现场确认）。
+#[tauri::command]
+pub async fn rc_uno_generate(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    ttl_secs: i64,
+    unlimited: bool,
+    capability: String,
+    also_trust: bool,
+) -> Result<RcUnoCreated, String> {
+    if !svc.enabled() {
+        return Err("请先打开「允许被远程协助」，接入码才有意义".into());
+    }
+    let ttl_ms = match ttl_secs.checked_mul(1000) {
+        // checked：ttl_secs 来自前端参数，debug 构建下乘法溢出会 panic
+        Some(ms) if ms == uno::TTL_SHORT_MS => uno::TTL_SHORT_MS,
+        Some(ms) if ms == uno::TTL_DAY_MS => uno::TTL_DAY_MS,
+        _ => return Err("接入码时效只能是 15 分钟（限 1 次）或 24 小时".into()),
+    };
+    let cap = Capability::parse(&capability).ok_or("能力档只能是 view 或 control")?;
+    // 🔴 P1-2（2026-09-23 审计）：**先武装，再出码**。
+    //
+    // 原来是「生成码 → `start` 失败只 warn → 照样把码返回」：通道没起来时用户
+    // 手里已经多了一份 15 分钟（或 24 小时）有效的接入码，他会把它发给对方，
+    // 而本机根本没在监听。无人值守场景没有人在场看日志，唯一的表现就是
+    // 「对方说连不上」，而界面上那份码还显示着。起不来就根本不出码。
+    // `start` 幂等（已在跑直接 `Ok`），所以这条不改变「出码即武装」的原意。
+    svc.start(&app_dir(&app)?, true)
+        .await
+        .map_err(|e| format!("远程通道启动失败：{e}，接入码没有生成，请重试"))?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let code = svc
+        .uno
+        .generate(now, ttl_ms, unlimited, cap, also_trust)?;
+    let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
+    let full = uno::full_string(&code, &me.node_id());
+    emit_changed(&app, &svc);
+    Ok(RcUnoCreated {
+        code,
+        full,
+        expires_at: now + ttl_ms,
+    })
+}
+
+/// 撤销全部无人值守接入码（被控端「一键作废」）。
+#[tauri::command]
+pub fn rc_uno_revoke(app: AppHandle, svc: State<'_, Arc<RcService>>) -> Result<usize, String> {
+    let n = svc.uno.revoke_all();
+    if n > 0 {
+        log::info!("[RC] 已撤销 {n} 个无人值守接入码");
+    }
+    emit_changed(&app, &svc);
+    Ok(n)
+}
+
+/// 无人值守固定密码（Q2 方案 C）：开启 / 换密码。
+///
+/// 与 `rc_uno_generate` 同一招，且同样是**先武装再落凭据**（P1-2）：通道起不来
+/// 就一个字都不写（服务器场景没有人在场去点「开启」，更不能留一把没人受理的钥匙）。
+/// 重复调用 = 换密码（since_ms 刷新，横幅重新计时）。
+/// 密码明文只在本次调用的入参里出现过一次；落盘的是 Argon2id PHC 串
+/// （`rc/unop.rs`），退出本函数后前端与后端都拿不回明文。
+#[tauri::command]
+pub async fn rc_uno_pass_enable(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    password: String,
+    capability: String,
+    allow_wan: bool,
+) -> Result<(), String> {
+    if !svc.enabled() {
+        return Err("请先打开「允许被远程协助」，固定密码才有意义".into());
+    }
+    let cap = Capability::parse(&capability).ok_or("能力档只能是 view 或 control")?;
+    // 🔴 P1-2（2026-09-23 审计）：**先武装，再落密码**。
+    //
+    // 固定密码与接入码不同——它是**长期凭据**，落盘就一直在那儿。原来
+    // 「哈希 → 存盘 → `start` 失败只 warn」的结果是：配置里静静躺着一把
+    // 没人受理的钥匙，界面显示「已开启」，而通道根本没起（跨网那档
+    // `allow_wan` 更是直接把这台机器挂在一个不存在的入口上）。
+    // 起不来就一个字都不写，用户重新点一次即可。
+    // `start` 不依赖密码本身（它只绑端点/起 accept），所以这个顺序没有副作用。
+    svc.start(&app_dir(&app)?, true)
+        .await
+        .map_err(|e| format!("远程通道启动失败：{e}，固定密码没有保存，请重试"))?;
+    // 长度校验 + Argon2id 都在 unop::hash_password 里
+    let cfg = crate::rc::unop::hash_password(
+        &password,
+        chrono::Utc::now().timestamp_millis(),
+        cap,
+        allow_wan,
+    )?;
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        crate::rc::unop::CFG_KEY.to_string(),
+        serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
+    );
+    store.save_config(&config)?;
+    log::info!("[RC] 无人值守固定密码已开启（{}，跨网={}）", cap.as_str(), allow_wan);
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 一键全局关闭固定密码（设计稿第三条对策的另一半：横幅常驻 + 这里）。
+/// 幂等；不动通道与其它配置。已接入的会话不受影响——关的是「下一次准入」。
+#[tauri::command]
+pub async fn rc_uno_pass_disable(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<(), String> {
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    // 存 Null 而不是删键：config 表没有按键删除的口子，读出 Null = 未开启
+    //（`unop::cfg_from` 只认对象）。
+    obj.insert(crate::rc::unop::CFG_KEY.to_string(), serde_json::Value::Null);
+    store.save_config(&config)?;
+    log::info!("[RC] 无人值守固定密码已关闭");
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 只改「允许跨网」开关，不动密码本体——设置页的开关不该要用户重输密码。
+#[tauri::command]
+pub async fn rc_uno_pass_set_wan(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    allow: bool,
+) -> Result<(), String> {
+    let mut cfg = crate::rc::unop::cfg_from(&store.get_config()?)
+        .ok_or("固定密码未开启，没有可改的跨网开关")?;
+    cfg.wan = allow;
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        crate::rc::unop::CFG_KEY.to_string(),
+        serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_cancel_request(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+) -> Result<(), String> {
+    svc.end_session("用户取消申请").await?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 前端展示过后台申请失败后调用，避免每轮 status 都重复弹同一错误。
+#[tauri::command]
+pub fn rc_clear_outbound_error(svc: State<'_, Arc<RcService>>) -> Result<(), String> {
+    svc.clear_outbound_error();
+    Ok(())
+}
+
+/// 同意一条入站申请。
+///
+/// 🔴 丙-①：`capability` 只接受 `"view"` 这一种**降档**（「只同意看屏幕」）。
+/// 传 `"control"` 或别的都按对方申请的原样批——升档等于本机替对方给了他没申请过的
+/// 权力，判据收在 [`RcService::approve_inbound_as`]。
+#[tauri::command]
+pub async fn rc_approve_inbound(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    capability: Option<String>,
+) -> Result<Session, String> {
+    let grant = match capability.as_deref() {
+        Some("view") => Some(Capability::View),
+        _ => None,
+    };
+    let s = svc.approve_inbound_as(&node_id, grant)?;
+    emit_changed(&app, &svc);
+    Ok(s)
+}
+
+#[tauri::command]
+pub async fn rc_deny_inbound(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+) -> Result<(), String> {
+    svc.deny_inbound(&node_id)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 方案 D：设置某台设备的「免确认直连」。`trusted=false` 即恢复每次询问。
+#[tauri::command]
+pub async fn rc_device_trust_set(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    trusted: bool,
+) -> Result<(), String> {
+    svc.set_device_trust(&node_id, trusted)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 决策 10：设置某台设备的「自动接收文件」。`on=false` 即恢复每次确认。
+///
+/// 🔴 它只影响**要不要弹确认条**，不影响门禁（`gate_inbound` 一律先跑）。
+#[tauri::command]
+pub async fn rc_device_auto_accept_set(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    on: bool,
+) -> Result<(), String> {
+    svc.set_device_auto_accept(&node_id, on)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rc_end_session(app: AppHandle, svc: State<'_, Arc<RcService>>) -> Result<(), String> {
+    svc.end_session("用户结束会话").await?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rc_require_active(svc: State<'_, Arc<RcService>>) -> Result<Session, String> {
+    svc.require_active()
+}
+
+/// 发起端最近一帧画面（base64 JPEG + 合成元数据）。无画面返 null。
+#[derive(Serialize)]
+pub struct RcFrameRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Serialize)]
+pub struct RcFramePayload {
+    pub jpeg_base64: String,
+    pub at_ms: i64,
+    /// true=整帧；false=脏块（前端画布局部绘制）
+    pub full: bool,
+    pub width: u32,
+    pub height: u32,
+    pub rect: Option<RcFrameRect>,
+    /// "jpeg" | "h264"
+    pub codec: String,
+    /// H.264 是否关键帧
+    pub key: bool,
+}
+
+#[tauri::command]
+pub fn rc_latest_frame(svc: State<'_, Arc<RcService>>) -> Result<Option<RcFramePayload>, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    Ok(svc.latest_frame().map(|f| RcFramePayload {
+        jpeg_base64: STANDARD.encode(&f.jpeg),
+        at_ms: f.at_ms,
+        full: f.full,
+        width: f.width,
+        height: f.height,
+        rect: f.rect.map(|r| RcFrameRect {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+        }),
+        codec: match f.codec {
+            FrameCodec::Jpeg => "jpeg".into(),
+            FrameCodec::H264 => "h264".into(),
+            FrameCodec::Hevc => "hevc".into(),
+            FrameCodec::Av1 => "av1".into(),
+        },
+        key: f.key,
+    }))
+}
+
+/// 发起端批量拉帧（原始二进制，`tauri::ipc::Response` 直通 ArrayBuffer）。
+///
+/// 🔴 取代前端 80~200ms 轮询 `rc_latest_frame`（base64 过 JSON IPC）的路径：
+/// 一次调用取走 outbox 里**全部**待显示帧——H.264 的 P 帧互相引用、JPEG 脏块
+/// 帧各管一块画布，都丢不得、乱序不得，所以是「排队全取」而不是「取最新」。
+///
+/// 布局（全部小端）：
+/// `magic "RCF2" u32` | `count u32`，后跟 count 条：
+/// `codec u8`(0=jpeg 1=h264) | `key u8` | `full u8` | `has_rect u8`
+/// | `at_ms i64` | `cap_ms u16` | `enc_ms u16`（P0-2 延迟分段）
+/// | `width u32` | `height u32`
+/// | `rect x,y,w,h 4×u32`（has_rect=0 时忽略）
+/// | `data_len u32` | `data`
+pub fn encode_frame_batch(frames: &[crate::rc::video::VideoFrame]) -> Vec<u8> {
+    encode_frame_batch_native(frames, &[])
+}
+fn encode_frame_batch_native(frames: &[crate::rc::video::VideoFrame], native: &[usize]) -> Vec<u8> {
+    let capacity = 8 + frames.iter().map(|f| 44 + f.jpeg.len()).sum::<usize>();
+    let mut buf = Vec::with_capacity(capacity);
+    buf.extend_from_slice(b"RCF2");
+    buf.extend_from_slice(&(frames.len() as u32).to_le_bytes());
+    for (i, f) in frames.iter().enumerate() {
+        // 0x83 exists only in local IPC, never in the network frame protocol.
+        buf.push(f.codec.as_u8() | if native.contains(&i) { 0x80 } else { 0 });
+        buf.push(f.key as u8);
+        buf.push(f.full as u8);
+        let r = f.rect;
+        buf.push(r.is_some() as u8);
+        buf.extend_from_slice(&f.at_ms.to_le_bytes());
+        buf.extend_from_slice(&f.cap_ms.to_le_bytes());
+        buf.extend_from_slice(&f.enc_ms.to_le_bytes());
+        buf.extend_from_slice(&f.width.to_le_bytes());
+        buf.extend_from_slice(&f.height.to_le_bytes());
+        let (rx, ry, rw, rh) = r.map(|r| (r.x, r.y, r.w, r.h)).unwrap_or((0, 0, 0, 0));
+        for v in [rx, ry, rw, rh] {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        buf.extend_from_slice(&(f.jpeg.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&f.jpeg);
+    }
+    buf
+}
+
+/// 前端按帧批量取画面。返回原始字节（前端 invoke 拿到 ArrayBuffer）。
+#[tauri::command]
+pub async fn rc_drain_frames(svc: State<'_, Arc<RcService>>, session_id: Option<String>) -> Result<tauri::ipc::Response, String> {
+    // Legacy callers get the unchanged compressed batch. New viewers provide
+    // their session ID, enabling native receive and stale-session rejection.
+    let Some(session) = session_id else { return Ok(tauri::ipc::Response::new(encode_frame_batch(&svc.drain_frames()))); };
+    let svc = svc.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (frames, native) = svc.drain_frames_for_viewer(&session)?;
+        Ok(tauri::ipc::Response::new(encode_frame_batch_native(&frames, &native)))
+    }).await.map_err(|_| "原生取帧任务失败".to_string())?
+}
+
+// ── G3 音频 ─────────────────────────────────────────────────────────────
+
+/// 发起端批量取音频（原始二进制直通 ArrayBuffer，同 `rc_drain_frames` 思路）。
+///
+/// 布局（小端）：`magic "RCA1"` | `count u32`，后跟 count 条：
+/// `type u8`（0=cfg 1=AAC帧）| `pts_ms i64`（cfg 恒 0）| `len u32` | data
+/// cfg 的 data 是 JSON `{"sr","ch","asc","br"}`（asc=base64 的 AudioSpecificConfig，
+/// 前端喂 WebCodecs `description`）；每次 drain 都带当前 cfg，前端按内容变化才重配。
+#[cfg(any(target_os = "windows",target_os="macos"))]
+#[tauri::command]
+pub fn rc_drain_audio(svc: State<'_, Arc<RcService>>) -> tauri::ipc::Response {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let (cfg, pkts) = svc.drain_audio();
+    let mut items: Vec<(u8, i64, Vec<u8>)> = Vec::with_capacity(pkts.len() + 1);
+    if let Some(c) = cfg {
+        let json = serde_json::json!({
+            "sr": c.sr,
+            "ch": c.ch,
+            "asc": STANDARD.encode(&c.asc),
+            "br": c.br,
+        });
+        items.push((0, 0, json.to_string().into_bytes()));
+    }
+    for p in pkts {
+        items.push((1, p.pts_ms as i64, p.data));
+    }
+    let mut buf = Vec::with_capacity(8 + items.len() * 16);
+    buf.extend_from_slice(b"RCA1");
+    buf.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    for (t, pts, data) in items {
+        buf.push(t);
+        buf.extend_from_slice(&pts.to_le_bytes());
+        buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&data);
+    }
+    tauri::ipc::Response::new(buf)
+}
+
+/// 非 Windows 平台的空批（本功能只在 Windows 被控端产生数据）。
+#[cfg(not(any(target_os = "windows",target_os="macos")))]
+#[tauri::command]
+pub fn rc_drain_audio(_svc: State<'_, Arc<RcService>>) -> tauri::ipc::Response {
+    tauri::ipc::Response::new(b"RCA1\x00\x00\x00\x00".to_vec())
+}
+
+/// 发起端：会话中开关系统声音。被控端有可见提示（emit_stream_note）。
+#[tauri::command]
+pub async fn rc_audio_toggle(svc: State<'_, Arc<RcService>>, on: bool) -> Result<(), String> {
+    svc.send_input(&crate::rc::input::InputEvent::AudioOn { on })
+        .await
+}
+
+/// 被控端：本机静音系统声音（G3）。一票否决——对端开着也听不到。
+///
+/// 与 `rc_audio_toggle` 分工相反：那条是**发起端**的开关，会出网（`InputEvent::AudioOn`）、
+/// 并让被控端横幅出现提示；这条是**被控者本人**的开关。
+///
+/// ❗ 2026-09-20（G3-B）之后它**不再只是本机状态**：切换时会主动推一条
+/// `host_audio` 帧给对端（见 `RcService::emit_host_audio`），对端据此显示
+/// 「对方已静音（不发送声音）」。在此之前对端只能听到静音、无从判断是不是坏了。
+///
+/// 跨会话保持：关了就是关了，下次会话仍是关（隐私开关不做自动回退）。
+#[cfg(any(target_os="windows",target_os="macos"))]
+#[tauri::command]
+pub async fn rc_set_audio_local_mute(
+    svc: State<'_, Arc<RcService>>,
+    muted: bool,
+) -> Result<(), String> {
+    svc.set_audio_local_mute(muted);
+    log::info!(
+        "[RC] 本机系统声音{}（{}）",
+        if muted { "已静音" } else { "已恢复" },
+        if muted {
+            "对端将听不到本机播放的声音"
+        } else {
+            "对端可再次听到本机播放的声音"
+        }
+    );
+    // G3-B：对端必须知道这是**你主动静的**，而不是链路/设备坏了。
+    // （`set_audio_local_mute` 只改状态，推帧是这一步的职责。）
+    svc.emit_host_audio(None).await;
+    Ok(())
+}
+
+/// 非 Windows：音频链路整体是 Windows 被控端专属。**明确报错**而不是静默成功——
+/// 前端据返回值提示，静默成功会让按钮切到一个假状态。
+#[cfg(not(any(target_os="windows",target_os="macos")))]
+#[tauri::command]
+pub fn rc_set_audio_local_mute(
+    _svc: State<'_, Arc<RcService>>,
+    _muted: bool,
+) -> Result<(), String> {
+    Err("系统声音只支持 Windows 被控端".into())
+}
+
+/// 被控端本机：设置**主机扬声器**静音（对端操作过之后的一键恢复入口）。
+///
+/// 与 `rc_send_input(SetHostMute)` 的分工：那个是**发起端**请对端静音，走网络；
+/// 这个是**本机**自己改。两端都能改同一件事，所以这条是给被控端 UI 用的本机入口
+/// （本机操作会顺手清掉「对端静音的」标记并把新状态推给对端）。
+///
+/// 注意它**不**影响环回采集：WASAPI 抽头在端点静音之前，发起端照样听得到
+/// （与 Parsec / GameStream 的「mute host speakers」同义）。
+#[cfg(any(target_os="windows",target_os="macos"))]
+#[tauri::command]
+pub async fn rc_host_mute_set(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    on: bool,
+) -> Result<(), String> {
+    let actual = svc.host_mute_local(on).await?;
+    log::info!("[RC] 本机扬声器{}（本机操作）", if actual { "已静音" } else { "已恢复" });
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 非 Windows：同上，明确报错而不是静默成功。
+#[cfg(not(any(target_os="windows",target_os="macos")))]
+#[tauri::command]
+pub async fn rc_host_mute_set(
+    _svc: State<'_, Arc<RcService>>,
+    _on: bool,
+) -> Result<(), String> {
+    Err("主机扬声器静音只支持 Windows".into())
+}
+
+/// 乙-③：被控者**暂时收回自己的键鼠**（对端的键鼠一拍都不进本机）。
+///
+/// 与「锁定对方键鼠」是两把**独立**的闸：这条动的是**注入**那一路（挡对端的手），
+/// 不吞被控者本人的物理输入——吞了他就点不到「恢复」，等于把人锁在自己的键盘外面。
+/// 收回后 10 分钟无本机操作自动归还（判据 `local_input::hold_should_return`）。
+///
+/// 返回改后的状态：前端据此切按钮，不做乐观置位。
+#[tauri::command]
+pub async fn rc_input_hold(svc: State<'_, Arc<RcService>>, on: bool) -> Result<bool, String> {
+    Ok(svc.set_input_hold(on).await)
+}
+
+/// 乙-③：被控者勾选 / 取消「允许对方锁定我的输入」（**本次会话**的授权）。
+///
+/// 取消会顺手解开已经生效的锁（授权是锁的唯一来源，撤了还锁着就是假反馈）。
+/// 授权不落盘、不跨会话——理由写在 `service/input_gate.rs` 的档头。
+#[tauri::command]
+pub async fn rc_input_lock_grant(
+    svc: State<'_, Arc<RcService>>,
+    on: bool,
+) -> Result<(), String> {
+    svc.set_input_lock_grant(on).await;
+    Ok(())
+}
+
+/// 丙-③：被控者暂停 / 恢复**对方看到的画面**（会话不断，只是不出帧）。
+///
+/// 与「暂时收回我的键鼠」是两件正交的事：这条挡的是**对方的眼睛**（本机屏幕照常用、
+/// 键鼠照用、剪贴板照走），那条挡的是**对方的手**。只在当场会话有效，会话收口自动
+/// 恢复推流（判据与理由见 `service/video_pause.rs` 的档头）。
+///
+/// 返回改后的状态：前端据此切按钮，不做乐观置位。
+#[tauri::command]
+pub async fn rc_video_pause_set(
+    svc: State<'_, Arc<RcService>>,
+    on: bool,
+) -> Result<bool, String> {
+    Ok(svc.set_video_pause(on).await)
+}
+
+#[cfg(test)]
+mod frame_batch_tests {
+    use super::*;
+
+    #[test]
+    fn native_av1_is_local_binary_rgba_with_measured_conversion_metadata() {
+        let mut pixels = vec![120; 8 + 1920 * 1080 * 4];
+        pixels[..4].copy_from_slice(&800u32.to_le_bytes());
+        pixels[4..8].copy_from_slice(&1500u32.to_le_bytes());
+        let frames = vec![crate::rc::video::VideoFrame {
+            width: 1920, height: 1080, jpeg: pixels, at_ms: 123, full: true, rect: None,
+            codec: FrameCodec::Av1, key: true, cap_ms: 0, enc_ms: 0,
+        }];
+        let start = std::time::Instant::now();
+        for _ in 0..30 {
+            let batch = encode_frame_batch_native(&frames, &[0]);
+            assert_eq!(batch[8], 0x83);
+            assert_eq!(batch.len(), 52 + 8 + 1920 * 1080 * 4);
+            assert_eq!(&batch[52..60], &frames[0].jpeg[..8]);
+            assert_eq!(&batch[60..], &frames[0].jpeg[8..]);
+        }
+        println!("native RGBA 1080p IPC serialization+byte verification {:.3}ms/frame (30 owned frames, excludes WebKit transport)", start.elapsed().as_secs_f64() * 1000.0 / 30.0);
+        assert_eq!(encode_frame_batch(&frames)[8], 3, "legacy payload must retain its original codec byte");
+    }
+
+    /// 编码↔前端解析必须共享同一份布局常量：这里锁死字节布局，
+    /// 前端 `parseFrameBatch` 按同一张表读。改任何一处都要同步另一处。
+    #[test]
+    fn 帧批量编码布局_有脏矩形() {
+        let frames = vec![
+            crate::rc::video::VideoFrame {
+                width: 1280,
+                height: 720,
+                jpeg: vec![1, 2, 3],
+                at_ms: 1_758_000_000_000,
+                full: true,
+                rect: None,
+                codec: crate::rc::video::FrameCodec::Jpeg,
+                key: true,
+                cap_ms: 4,
+                enc_ms: 7,
+            },
+            crate::rc::video::VideoFrame {
+                width: 100,
+                height: 50,
+                jpeg: vec![9; 7],
+                at_ms: 1_758_000_000_001,
+                full: false,
+                rect: Some(crate::rc::video::DirtyRect {
+                    x: 10,
+                    y: 20,
+                    w: 100,
+                    h: 50,
+                }),
+                codec: crate::rc::video::FrameCodec::H264,
+                key: false,
+                cap_ms: 0,
+                enc_ms: 0,
+            },
+        ];
+        let buf = encode_frame_batch(&frames);
+        // 头
+        assert_eq!(&buf[..4], b"RCF2");
+        assert_eq!(u32::from_le_bytes(buf[4..8].try_into().unwrap()), 2);
+        let mut off = 8usize;
+        // 帧 1：整帧 JPEG，无矩形
+        assert_eq!(buf[off], 0); // codec
+        assert_eq!(buf[off + 1], 1); // key
+        assert_eq!(buf[off + 2], 1); // full
+        assert_eq!(buf[off + 3], 0); // has_rect
+        let at = i64::from_le_bytes(buf[off + 4..off + 12].try_into().unwrap());
+        assert_eq!(at, 1_758_000_000_000);
+        let cap = u16::from_le_bytes(buf[off + 12..off + 14].try_into().unwrap());
+        let enc = u16::from_le_bytes(buf[off + 14..off + 16].try_into().unwrap());
+        assert_eq!((cap, enc), (4, 7), "P0-2 分段必须随帧带过去");
+        let w = u32::from_le_bytes(buf[off + 16..off + 20].try_into().unwrap());
+        assert_eq!(w, 1280);
+        let h = u32::from_le_bytes(buf[off + 20..off + 24].try_into().unwrap());
+        assert_eq!(h, 720);
+        let len = u32::from_le_bytes(buf[off + 40..off + 44].try_into().unwrap());
+        assert_eq!(len, 3);
+        assert_eq!(&buf[off + 44..off + 47], &[1, 2, 3]);
+        off += 44 + 3;
+        // 帧 2：H.264 P 帧 + 脏矩形
+        assert_eq!(buf[off], 1);
+        assert_eq!(buf[off + 1], 0);
+        assert_eq!(buf[off + 2], 0);
+        assert_eq!(buf[off + 3], 1);
+        let rx = u32::from_le_bytes(buf[off + 24..off + 28].try_into().unwrap());
+        let ry = u32::from_le_bytes(buf[off + 28..off + 32].try_into().unwrap());
+        let rw = u32::from_le_bytes(buf[off + 32..off + 36].try_into().unwrap());
+        let rh = u32::from_le_bytes(buf[off + 36..off + 40].try_into().unwrap());
+        assert_eq!((rx, ry, rw, rh), (10, 20, 100, 50));
+        let len = u32::from_le_bytes(buf[off + 40..off + 44].try_into().unwrap());
+        assert_eq!(len, 7);
+    }
+
+    #[test]
+    fn 帧批量编码_空队列() {
+        let buf = encode_frame_batch(&[]);
+        assert_eq!(buf.len(), 8);
+        assert_eq!(u32::from_le_bytes(buf[4..8].try_into().unwrap()), 0);
+    }
+}
+
+/// 画质档：auto | uhd | ultra | sharp | balanced | smooth
+/// （auto = 2A 自动档：被控端按 RTT/带宽自动换档；uhd = 主屏硬编原生分辨率，
+/// R5.B；无硬编时 JPEG 兜底约 2.5K）
+#[tauri::command]
+pub async fn rc_set_quality(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    quality: String,
+) -> Result<(), String> {
+    if !matches!(
+        quality.as_str(),
+        "auto" | "uhd" | "uhd60" | "ultra" | "sharp" | "balanced" | "smooth" | "fps60" | "fps120"
+    ) {
+        return Err(
+            "画质档只能是 auto / uhd / uhd60 / ultra / sharp / balanced / smooth / fps60 / fps120"
+                .into(),
+        );
+    }
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        crate::rc::service::CFG_QUALITY.to_string(),
+        serde_json::Value::String(quality),
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 会话防休眠（被控端）：别人连进来时按住本机不休眠、显示器不熄，会话结束自动交回
+/// 原电源策略。**只影响下一场入站会话**——守卫是在推流启动那一刻拿的（`inbound/video.rs`
+/// 的 `try_new`），会话中途改这里不会去动已经在跑的锁。
+///
+/// 与 `rc_set_enabled` 的分工：那条关掉会**当场收掉**进行中的被控会话，因为它撤销的是
+/// 授权；这条撤销的只是本机保活，正在跑的会话不该因此被打断，所以只写配置。
+///
+/// 机制与「为什么必须专用线程」见 [`crate::rc::keep_awake`]。
+#[cfg(any(target_os = "windows",target_os="macos"))]
+#[tauri::command]
+pub async fn rc_set_keep_awake(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    enable: bool,
+) -> Result<(), String> {
+    let mut config = store.get_config()?;
+    let obj = config
+        .as_object_mut()
+        .ok_or("配置文件不是一个对象，开关没能保存")?;
+    obj.insert(
+        crate::rc::service::CFG_KEEP_AWAKE.to_string(),
+        serde_json::Value::Bool(enable),
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 非 Windows：电源执行状态锁是 Windows API 专属。**明确报错**而不是静默成功——
+/// 静默成功会让开关切到一个永远不生效的假状态。
+#[cfg(not(any(target_os = "windows",target_os="macos")))]
+#[tauri::command]
+pub fn rc_set_keep_awake(
+    _app: AppHandle,
+    _store: State<'_, DataStore>,
+    _svc: State<'_, Arc<RcService>>,
+    _enable: bool,
+) -> Result<(), String> {
+    Err("会话防休眠只支持 Windows 或 Mac 被控端".into())
+}
+
+/// Q5：发起端「码率倍率」偏好（50–200，100 = 跟随链路）。只写本机配置；
+/// 对会话的生效由 outbound 任务在会话建立时推送、会话中改下拉走 rc_send_input。
+#[tauri::command]
+pub async fn rc_set_bitrate_pct(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    pct: u32,
+) -> Result<(), String> {
+    if !(50..=200).contains(&pct) {
+        return Err(format!("码率倍率只能是 50–200 的整数，得到 {pct}"));
+    }
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        crate::rc::service::CFG_BITRATE_PCT.to_string(),
+        serde_json::Value::Number(pct.into()),
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// P1/P3：本机画面编码能力探测（设置页 / 会话 UI 诚实出档用）。
+/// 结果进程内缓存（`gpu::encode_caps`），重复调用零成本。
+#[derive(Debug, Serialize)]
+pub struct RcEncodeCaps {
+    /// 硬件 D3D11-aware H.264 MFT（零拷贝/fps120 的前提）。
+    pub h264_gpu: bool,
+    /// 硬件 HEVC MFT（P3 实验档的前提）。
+    pub hevc_hw: bool,
+    /// 主显示器刷新率（Hz）。0 = 查不到。
+    pub refresh_hz: u32,
+    /// 在线显示器数量（fps120 档要求单屏捕获）。
+    pub monitors: u32,
+}
+
+#[tauri::command]
+pub fn rc_encode_caps() -> Result<RcEncodeCaps, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let c = crate::rc::gpu::encode_caps();
+        Ok(RcEncodeCaps {
+            h264_gpu: c.h264_gpu,
+            hevc_hw: c.hevc_hw,
+            refresh_hz: c.refresh_hz,
+            monitors: c.monitors,
+        })
+    }
+    #[cfg(target_os="macos")]
+    {Ok(RcEncodeCaps{h264_gpu:crate::rc::mac_video::hardware_available(false),hevc_hw:crate::rc::mac_video::hardware_available(true),refresh_hz:crate::rc::mac_video::scope_support(-1,false).0,monitors:crate::macos::screen::monitors()?.len() as u32})}
+    #[cfg(not(any(target_os="windows",target_os="macos")))]
+    {
+        Ok(RcEncodeCaps {
+            h264_gpu: false,
+            hevc_hw: false,
+            refresh_hz: 0,
+            monitors: 0,
+        })
+    }
+}
+
+/// 本机显示器列表（远程多屏切换）。
+#[tauri::command]
+pub fn rc_list_monitors() -> Result<Vec<crate::screenshot::MonitorInfo>, String> {
+    crate::screenshot::list_monitors()
+}
+
+/// 截取范围：virtual（整个虚拟屏）| primary（仅主屏）| monitor:N
+#[tauri::command]
+pub async fn rc_set_capture_scope(
+    app: AppHandle,
+    store: State<'_, DataStore>,
+    svc: State<'_, Arc<RcService>>,
+    scope: String,
+) -> Result<(), String> {
+    if !(scope == "virtual"
+        || scope == "primary"
+        || scope
+            .strip_prefix("monitor:")
+            .map(|n| n.parse::<i32>().map(|i| i >= 0).unwrap_or(false))
+            .unwrap_or(false))
+    {
+        return Err("截取范围只能是 virtual / primary / monitor:N".into());
+    }
+    let mut config = store.get_config()?;
+    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+    obj.insert(
+        crate::rc::service::CFG_CAPTURE_SCOPE.to_string(),
+        serde_json::Value::String(scope),
+    );
+    store.save_config(&config)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 发起端发送键鼠/剪贴板事件（R2/R3）。
+#[tauri::command]
+pub async fn rc_send_input(
+    svc: State<'_, Arc<RcService>>,
+    event: crate::rc::input::InputEvent,
+) -> Result<(), String> {
+    svc.send_input(&event).await
+}
+
+/// The peer receipt confirms configuration acceptance; a timeout remains unconfirmed.
+#[tauri::command]
+pub async fn rc_apply_setting(
+    svc: State<'_, Arc<RcService>>,
+    session_id: String,
+    key: String,
+    value: String,
+) -> Result<crate::rc::settings::SettingResult, String> {
+    svc.apply_setting(&session_id, &key, &value).await
+}
+
+/// 打开「远程电脑」独立工作台窗口（2A 配套，2026-09-18）。
+///
+/// 为什么是独立窗口：主窗口只有 550×700，会话视图 960px 在里面被压成 ~534px，
+/// 画面区根本不够用。独立窗口默认 1200×780（min 960×640），按主窗所在显示器居中。
+///
+/// - 已存在：`present_window`（最小化状态也能拉回）+ 聚焦，不重建。
+/// - async command：同步 command 里建 WebviewWindow 会死锁（tauri#13963，
+///   与 `open_fullscreen_editor` 同一条教训）。
+#[tauri::command]
+pub async fn rc_open_workbench(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("rc-workbench") {
+        crate::present_window(&window);
+        return Ok(());
+    }
+    let builder = tauri::webview::WebviewWindowBuilder::new(
+        &app,
+        "rc-workbench",
+        tauri::WebviewUrl::App("rc.html".into()),
+    )
+    .title("远程电脑")
+    .inner_size(1200.0, 780.0)
+    .min_inner_size(960.0, 640.0)
+    .resizable(true)
+    // 自绘标题栏（批7，2026-09-22）：去掉系统标题栏，由前端 `RcA2TitleBar` 承担
+    // 品牌 / 通道状态 / 最小化·最大化·关闭。三条要点：
+    // ① 拖拽与「双击拖动区最大化」是 Tauri 内置能力（`data-tauri-drag-region`
+    //    + 注入的 drag.js 打 `start_dragging` / `internal_toggle_maximize`），
+    //    前端不必自己实现；`decorations(false)` 后这些才真正生效。
+    // ② **会话态**（画面铺满、标题栏隐去）必须另挂一条拖拽区，否则那一态既拖不动
+    //    也关不掉——见 `RcSessionTop` 的 drag-region 与 `chromeHidden` 分支。
+    // ③ `.resizable(true)` 要保留：`decorations(false)` 仍带 WS_THICKFRAME，
+    //    边框拖拽调整大小、Aero Snap 都还在（需真机确认，见批7 验收清单）。
+    // 防闪黑（方案 A，照 md-editor / 截图窗先例）：
+    // ① 先隐藏建窗——Tauri 默认 visible=true，`build()` 返回时 HWND 已上屏，
+    //    WebView 尚未 paint，Windows 客户区会露出系统默认黑底（整窗闪一下黑框）。
+    // ② 客户区底色对齐主窗 `backgroundColor: #F4F6F9`，隐藏阶段也不会是黑的。
+    .visible(false)
+    .background_color(tauri::window::Color(244, 246, 249, 255)); // #F4F6F9
+    // 自绘标题栏（decorations=false）是桌面窗口概念：mobile 全屏页面无装饰位。
+    // 上面 ①③ 两条注释描述的拖拽/边框行为在桌面侧不变。
+    #[cfg(desktop)]
+    let mut builder = builder.decorations(false);
+
+    // 按主窗口所在显示器（回退主显示器）居中——照 md-editor 的先例
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let size = monitor.size();
+        let mon_w = size.width as f64 / scale;
+        let mon_h = size.height as f64 / scale;
+        let win_w = 1200.0_f64.min(mon_w * 0.94);
+        let win_h = 780.0_f64.min(mon_h * 0.9);
+        let pos = monitor.position();
+        let x = pos.x as f64 / scale + (mon_w - win_w) / 2.0;
+        let y = pos.y as f64 / scale + (mon_h - win_h) / 2.0;
+        builder = builder.inner_size(win_w, win_h).position(x, y);
+    } else {
+        // 居中是桌面窗口定位概念（mobile 页面默认铺满，无窗口定位；尺寸取链首 inner_size）
+        #[cfg(desktop)]
+        { builder = builder.center(); }
+    }
+    let window = builder
+        .build()
+        .map_err(|e| format!("创建远程电脑窗口失败: {}", e))?;
+    // 先隐藏建窗再显示，避免创建瞬间的闪烁（与 open_fullscreen_editor 同款纪律）。
+    // async command 已规避 tauri#13963 死锁；present_window 含 unminimize + show + focus。
+    crate::present_window(&window);
+    Ok(())
+}
+
+/// 发起端：把本机剪贴板文本推到被控端（R3 文本优先）。
+#[tauri::command]
+pub async fn rc_push_clipboard(svc: State<'_, Arc<RcService>>, text: String) -> Result<(), String> {
+    svc.push_clipboard(&text).await
+}
+
+// —— 会话窗壳三键 + 自适应窗口（方案A，2026-09-25） ——
+//
+// 为什么是自定义命令而不是前端 window API：per-window ACL 是本窗一整类
+// 静默故障的来源（2026-09-18「点 X 毫无反应」前科，见 useRcWorkbenchClose
+// 文件头 🔴；用户 2026-09-25 再报「最小化/拖动没反应」）。自定义命令不经
+// per-window ACL，失败以 String 返回、前端弹 toast，不再无声。
+// close() 与 JS window.close() 走同一条运行时路径：仍会触发 CloseRequested，
+// 「有会话先确认」的守卫链（useRcWorkbenchClose）原样生效。
+
+/// 会话态纵向 chrome（逻辑像素）：就是顶栏 `.viewTop` 的整条高（含它那条 1px
+/// 分隔线；box-sizing 全局 border-box）。`rc_fit_window_to_video` 用它把窗口高
+/// 拆成「顶栏 + 内容区」。
+/// 旧注释还写着「viewShell 上下边框各 1 + viewTop 33」——那对边框 2026-09-27
+/// 方案 A 已删，留着就是两份各说各话的真相（差 1~2px 表现为「适应档」偶尔
+/// 留一条细缝）。现在单一真相在前端 `--rc-session-chrome-h`，两处必须相等的
+/// 不变量由 `src/__tests__/rcSessionChromeHeight.test.ts` 守（规则 11.1）。
+const SESSION_CHROME_H: f64 = 36.0;
+/// 会话态横向 chrome：`.viewShell` 满幅贴边后已无边框，这里保留 2.0 是窗口
+/// 自身的可见边框余量（贴边主题下为 0，宁可多 2px 也不让画面被切掉一列）。
+const SESSION_CHROME_W: f64 = 2.0;
+
+#[tauri::command]
+pub fn rc_window_minimize(window: tauri::WebviewWindow) -> Result<(), String> {
+    // 窗口最小化/最大化是桌面窗口概念；mobile 会话全屏无此操作，诚实报不支持
+    #[cfg(desktop)]
+    { window
+        .minimize()
+        .map_err(|e| format!("最小化窗口被拒绝：{e}")) }
+    #[cfg(mobile)]
+    { Err("窗口最小化仅桌面端支持".to_string()) }
+}
+
+#[tauri::command]
+pub fn rc_window_toggle_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        // Rust 端没有 JS 那样的 toggle_maximize，按状态二选一（同 JS 实现口径）
+        let maximized = window
+            .is_maximized()
+            .map_err(|e| format!("读取窗口状态失败：{e}"))?;
+        let r = if maximized {
+            window.unmaximize()
+        } else {
+            window.maximize()
+        };
+        r.map_err(|e| format!("最大化/还原被拒绝：{e}"))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = &window;
+        Err("窗口最大化切换仅桌面端支持".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn rc_window_close(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|e| format!("关闭窗口被拒绝：{e}"))
+}
+
+/// 把 rc-workbench 窗口调成与对方画面同比例（方案A：适应模式零黑边）。
+///
+/// 设计稿：design/远程电脑-会话窗壳A方案-自适应窗口与可靠三键-设计稿.html §3/§4。
+/// 尺寸算的是**内容区**对齐画面比例：窗口 = 内容区（k×画面） + 36px 顶栏 chrome。
+/// k 在「当前显示器工作区 94%×90%」（md-editor 先例，呼吸边兼吸收任务栏误差）
+/// 内取最大；DPI 全程逻辑像素。返回 Ok(false) = 最大化中，跳过（不打断用户意图）。
+#[tauri::command]
+pub fn rc_fit_window_to_video(
+    window: tauri::WebviewWindow,
+    video_w: f64,
+    video_h: f64,
+) -> Result<bool, String> {
+    if !(video_w > 0.0 && video_h > 0.0) {
+        return Err(format!("画面尺寸无效（{video_w}×{video_h}）"));
+    }
+    if window
+        .is_maximized()
+        .map_err(|e| format!("读取窗口状态失败：{e}"))?
+    {
+        return Ok(false);
+    }
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| format!("取显示器失败：{e}"))?
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or("取不到显示器信息，无法自适应窗口")?;
+    let scale = monitor.scale_factor();
+    let wa = monitor.work_area();
+    let wa_w = wa.size.width as f64 / scale;
+    let wa_h = wa.size.height as f64 / scale;
+    let k = ((wa_w * 0.94) / video_w).min((wa_h * 0.90 - SESSION_CHROME_H) / video_h);
+    if k <= 0.0 {
+        return Err("屏幕可用区域放不下对方画面".into());
+    }
+    let win_w = k * video_w + SESSION_CHROME_W;
+    let win_h = k * video_h + SESSION_CHROME_H;
+    let x = wa.position.x as f64 / scale + (wa_w - win_w) / 2.0;
+    let y = wa.position.y as f64 / scale + (wa_h - win_h) / 2.0;
+    window
+        .set_size(tauri::LogicalSize::new(win_w, win_h))
+        .map_err(|e| format!("调整窗口尺寸失败：{e}"))?;
+    window
+        .set_position(tauri::LogicalPosition::new(x, y))
+        .map_err(|e| format!("调整窗口位置失败：{e}"))?;
+    Ok(true)
+}
+
+/// 最近会话元数据（只记谁/方向/能力/时长/结果，不记画面）。
+///
+/// 历史里落库的 `peer_name` 是**会话当时的**对端自报名快照——用户后来改了备注，
+/// 历史页不该继续喊旧名字。这里在**查询时**按 node_id join 一次配对表，
+/// 把统一显示名叠成 `display_name`（备注优先；没配对记录/没起备注则回落快照）。
+/// 落库原文不动：记录留的是当时事实，显示层才做覆盖。
+#[tauri::command]
+pub fn rc_session_history(
+    svc: State<'_, Arc<RcService>>,
+    store: State<'_, DataStore>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut list = svc.session_history();
+    let notes: std::collections::HashMap<String, String> = store
+        .rc_device_list()?
+        .into_iter()
+        .map(|d| (d.node_id, d.note))
+        .collect();
+    overlay_history_display_names(&mut list, &notes);
+    Ok(list)
+}
+
+/// RC 会话前台服务保活开关（B 方案，2026-10-02）。
+///
+/// 会话壳（`useRcSessionKeepalive`）进入会话视图时调 `on=true`、卸载时
+/// `on=false`。Android 上启停 `RcSessionForegroundService`（见
+/// `rc::keepalive` 模块注释）；**桌面无此问题**（无进程冻结），no-op 返回 Ok
+/// ——两壳共用同一 hook 时不必分支。
+#[tauri::command]
+pub fn rc_keepalive_set(app: AppHandle, on: bool, title: String) -> Result<(), String> {
+    // 两个 cfg 块各留一个做**块尾表达式**，不能写 return（块语句类型会是 ()）
+    #[cfg(target_os = "android")]
+    {
+        match app.try_state::<crate::rc::keepalive::RcKeepalive<tauri::Wry>>() {
+            Some(k) => k.set(on, &title),
+            // 插件未装载（装载失败也不至于把会话打挂）：诚实返回，调用方静默
+            None => Err("前台服务插件未就绪".into()),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, on, title);
+        Ok(())
+    }
+}
+
+/// Session-owned native display: rotation and immersive bars share the same lifecycle.
+#[tauri::command]
+pub async fn rc_session_display(
+    app: AppHandle,
+    session_id: String,
+    on: bool,
+    landscape: bool,
+    orientation: Option<String>,
+) -> Result<(), String> {
+    let orientation = orientation.as_deref().unwrap_or("system");
+    #[cfg(target_os = "android")]
+    {
+        match app.try_state::<crate::rc::keepalive::RcKeepalive<tauri::Wry>>() {
+            Some(plugin) => plugin.set_session_display(&session_id, on, landscape, orientation),
+            None => Err("远程显示插件未就绪".into()),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, session_id, on, landscape, orientation);
+        Ok(())
+    }
+}
+
+/// 把备注覆盖进历史条目的 `display_name` 键（纯函数，可单测）。
+///
+/// 只在**真有备注**时注入：纯空白备注（= 没起过）或 peer 没有配对记录的条目
+/// 一律不动，前端回落 `peer_name` 快照——不给载荷塞一个与回落值相同的冗余键。
+pub fn overlay_history_display_names(
+    list: &mut [serde_json::Value],
+    notes: &std::collections::HashMap<String, String>,
+) {
+    for entry in list.iter_mut() {
+        let Some(obj) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(peer) = obj.get("peer").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(note) = notes.get(peer) else {
+            continue;
+        };
+        if note.trim().is_empty() {
+            continue;
+        }
+        let peer_name = obj
+            .get("peer_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        obj.insert(
+            "display_name".to_string(),
+            serde_json::Value::String(display_name_of(note, peer_name)),
+        );
+    }
+}
+
+/// 清空全部会话历史（产品红线：日志可见可删除）。幂等：没有记录也返回 Ok。
+#[tauri::command]
+pub fn rc_history_clear(svc: State<'_, Arc<RcService>>) -> Result<(), String> {
+    svc.clear_history()
+}
+
+/// 发起端请求拉回对方剪贴板（后端等回包，修前端立刻 take 竞态）。
+/// C5：超时/作废现在是 Err（以前折叠成 Ok(None)，与「对方剪贴板为空」不可区分）。
+#[tauri::command]
+pub async fn rc_pull_clipboard(svc: State<'_, Arc<RcService>>) -> Result<Option<String>, String> {
+    svc.pull_clipboard().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🔴 2026-09-30 真机实证：交换进行中，本地残留行必须让位给对端确认。
+    /// 旧口径「有本地行就回 paired」让删过我们的一方永远停在等待态。
+    #[test]
+    fn test_交换进行中本地行不作数() {
+        assert_eq!(
+            pair_poll_verdict(true, true, true),
+            PairPollVerdict::NeedPeerCheck,
+            "交换进行中：本地行可能是上一轮残留（对端已删我们），必须以 PairCheck 为准"
+        );
+        assert_eq!(
+            pair_poll_verdict(true, false, true),
+            PairPollVerdict::AlreadyPaired,
+            "没有进行中的交换：本地行可信，直接算已配对"
+        );
+        assert_eq!(
+            pair_poll_verdict(false, true, true),
+            PairPollVerdict::NeedPeerCheck,
+            "全新配对：等对端确认"
+        );
+        assert_eq!(
+            pair_poll_verdict(true, true, false),
+            PairPollVerdict::WindowEnded,
+            "交换进行中但门已关：提示重新换码，不是 paired"
+        );
+        assert_eq!(
+            pair_poll_verdict(false, false, false),
+            PairPollVerdict::WindowEnded,
+            "既无行也无意图：窗口结束"
+        );
+    }
+
+    /// 🔴 邀请门的时长**必须**由邀请码的窗口派生，不许各写一个数。
+    ///
+    /// 修复前是两个独立字面量：码 7 天（`invite::TTL_SECS`）、门 30 分钟
+    /// （`RC_INVITE_DOOR_MS = 30 * 60 * 1000`）。于是用户手里的码「还有效」，
+    /// 他撞上的是门，而对端只回一句 `not_paired`（「尚未远程配对」）——
+    /// **指不到「回去重新生成一个」这个唯一正确的动作**，他只能反复重试同一个失效窗口。
+    ///
+    /// 这条断言的作用就是：谁把 `RC_INVITE_DOOR_MS` 改回一个字面量，它立刻红。
+    #[test]
+    fn test_邀请门与邀请码同宽() {
+        assert_eq!(
+            RC_INVITE_DOOR_MS,
+            invite::RC_TTL_SECS * 1000,
+            "邀请门必须由 invite::RC_TTL_SECS 派生，不许另写字面量"
+        );
+        assert_eq!(
+            invite::RC_TTL_SECS,
+            5 * 60,
+            "远程配对的窗口是 5 分钟——2026-09-29 配对码时效重设计定的 \
+             （design/远程电脑-配对码时效与遮掩-设计稿.html §5），仍是产品决定，不该顺手改"
+        );
+        // 先落到局部变量：直接写两个 `const` 比较会被 `assertions_on_constants`
+        // 判成「常量断言」而要求塞进 `const {}`，但 `const {}` 里带不了格式化参数，
+        // 这条断言的「两档谁严」恰好是要给人看的。
+        let rc_ttl = invite::RC_TTL_SECS;
+        let kb_ttl = invite::TTL_SECS;
+        assert!(
+            rc_ttl < kb_ttl,
+            "远程那档必须严于知识库那档（{rc_ttl} vs {kb_ttl}）：远程是把别人的屏幕交出去，骚扰面不同"
+        );
+    }
+
+    /// 🔴 备注长度是**字符数**口径。曾经写的是 `note.len()`（字节），
+    /// 60 字节只够 20 个汉字，而前端数的是 UTF-16 单元 —— 21~60 个汉字的备注
+    /// 在前端看着完全合法，存下去必被拒。
+    #[test]
+    fn test_备注按字符截断而不是按字节() {
+        let cn60 = "汉".repeat(60);
+        assert_eq!(cn60.len(), 180, "前提：60 个汉字是 180 字节");
+        assert_eq!(normalize_note(&cn60), cn60, "60 个汉字必须原样留下");
+        assert_eq!(
+            normalize_note(&"汉".repeat(61)).chars().count(),
+            60,
+            "超出的部分截掉，而不是整条拒收"
+        );
+    }
+
+    /// 空白归一：两端 trim；纯空白等价于「清除备注」。
+    #[test]
+    fn test_备注归一化去两端空白_空串合法() {
+        assert_eq!(normalize_note("  客厅 电脑  "), "客厅 电脑");
+        assert_eq!(normalize_note("   "), "", "纯空白 == 清除备注（回落显示自报名）");
+        assert_eq!(normalize_note(""), "");
+    }
+
+    /// emoji / emoji 这类扩展字符按**字符**计数，不能被切成半个代理对。
+    #[test]
+    fn test_备注按字符计数不劈开代理对() {
+        let s = normalize_note(&"🖥".repeat(80));
+        assert_eq!(s, "🖥".repeat(60), "每个 emoji 算 1 个字符，且不被截成乱码");
+    }
+
+    /// 统一显示名：备注（trim 后非空）优先，否则回落自报名。
+    #[test]
+    fn test_显示名备注优先_空白回落自报名() {
+        assert_eq!(display_name_of("工作电脑", "DESKTOP-ABC"), "工作电脑");
+        assert_eq!(display_name_of("  客厅  ", "DESKTOP-ABC"), "客厅");
+        assert_eq!(display_name_of("", "DESKTOP-ABC"), "DESKTOP-ABC");
+        assert_eq!(display_name_of("   ", "DESKTOP-ABC"), "DESKTOP-ABC");
+        // 两边都空：返回空串，前端整段不渲染（「空白不编默认值」判据）。
+        assert_eq!(display_name_of("", ""), "");
+    }
+
+    /// 历史条目的备注覆盖：只动「peer 有备注」的条目，其余原样透传。
+    #[test]
+    fn test_历史条目叠加显示名() {
+        let mk = |peer: &str, name: &str| {
+            serde_json::json!({ "peer": peer, "peer_name": name, "dir": "outbound" })
+        };
+        let notes = std::collections::HashMap::from([
+            ("p1".to_string(), "工作电脑".to_string()),
+            ("p2".to_string(), "   ".to_string()), // 纯空白备注 = 没起过
+        ]);
+        let mut list = vec![mk("p1", "DESKTOP-ONE"), mk("p2", "DESKTOP-TWO"), mk("p3", "DESKTOP-THREE")];
+        overlay_history_display_names(&mut list, &notes);
+        assert_eq!(
+            list[0]["display_name"], "工作电脑",
+            "有备注 → 覆盖自报名快照"
+        );
+        assert!(
+            list[1].get("display_name").is_none(),
+            "纯空白备注不算起过 → 不注入，前端回落 peer_name"
+        );
+        assert!(
+            list[2].get("display_name").is_none(),
+            "没配对记录（如已忘记的设备）→ 不注入，前端回落 peer_name"
+        );
+        // 落库原文不动
+        assert_eq!(list[0]["peer_name"], "DESKTOP-ONE");
+    }
+}

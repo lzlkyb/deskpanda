@@ -1,0 +1,568 @@
+//! 状态投影（status）、通道启停（start/stop）、附近设备与历史。
+//!
+//! 2026-09-22 从 `service.rs` 平移（体量合规）。`use crate::rc::*` 沿用
+//! `service/mod.rs` 的全部名字；方法体未改动，仅 `pub(super)` 方法
+//! 升级为 `pub(in crate::rc)`（原语义就是「rc 子树可见」）。
+
+use super::*;
+
+impl RcService {
+    pub fn status(&self) -> RcStatus {
+        // C：路径自动切换（relay ↔ 直连）主动通知一次。
+        // 放在取 `inner` 锁之前：通知会跑前端回调，不该在持锁期间做。
+        // `take_path_change` 自带去重，多处 useRc 并发轮询时只会被消费一次。
+        if let Some((from, to)) = self.link.take_path_change() {
+            // 【真机实测观测 · 2026-10-18】换路时间线。只加日志，不动判据。
+            // 实测要点：直连会话 15s 心跳超时前是否发生过 relay↔direct 抖动，
+            // 只能靠这一行和下一段的 `[RC-LINK]` 串起来看。
+            log::info!("[RC-PATH] {} -> {}", from.as_str(), to.as_str());
+            self.notify.emit_path_changed(from.as_str(), to.as_str());
+        }
+        // 【真机实测观测 · 2026-10-18】1s 节流一行链路快照：**只读，不参与任何判定**。
+        // 为什么必须有：`[RC] 会话结束：对端失联（心跳超时）` 只给结局，答不了
+        // 「当时生效的阈值是 15s 还是 30s」「失联前有没有换路」——而这正是本轮
+        // 实测要分清的（阈值误判 vs 真断网）。
+        // 位置：放在取 `inner` 之前，与上面的通知同序（先 link/sched 后 inner）。
+        // 无会话时 `path` 为空串，直接跳过，避免空转刷日志。
+        {
+            use std::sync::atomic::{AtomicI64, Ordering};
+            static LAST_LINK_LOG_MS: AtomicI64 = AtomicI64::new(0);
+            let now = crate::rc::mono::mono_ms();
+            if now - LAST_LINK_LOG_MS.load(Ordering::Relaxed) >= 1_000 {
+                LAST_LINK_LOG_MS.store(now, Ordering::Relaxed);
+                let path = self.link.path_kind_str();
+                if !path.is_empty() {
+                    log::info!(
+                        "[RC-LINK] path={} sched={} timeout_ms={} rtt_ms={} pong_age_ms={:?}",
+                        path,
+                        self.link.sched_state_str(),
+                        self.heartbeat_timeout_ms(),
+                        self.video_rtt_ms(),
+                        self.link.pong_age_ms(now),
+                    );
+                }
+            }
+        }
+        // 🔴 D6（2026-09-22 审计）：显式把 `inner` 放掉，别依赖 NLL 的隐式丢弃点。
+        //
+        // 本函数在构造 `RcStatus` 的字段时要调 `self.link.*`（路径档位 / 最后 pong
+        // / 帧率），而 link 侧存在「持 link 锁再取 inner」的路径（收口链 / emit 链）。
+        // 现在 NLL 恰好在 `session` / `pending` 两个 clone 之后就不再需要 `inner`，
+        // 顺序侥幸是 link→inner，暂无 ABBA；但「最后一次使用点」会随下一次编辑移动
+        // ——只要有人往字段里多取一个 inner 的东西，或把 link 调用挪到 clone 之前，
+        // 就变成持 inner 取 link。用作用域把顺序写成**显式**的，不再靠推断。
+        let (mut session, mut pending, streaming) = {
+            let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                inner.session.clone(),
+                inner.pending.clone(),
+                // 自动档的「真实档位」只有**正在推流**时才存在：换档发生在推流
+                // 循环里，会话没跑（或已结束）时 `tier` 只是上一场的残留。所以
+                // 除了 auto_enabled，还必须要求本机正处在 inbound_active（本机推流）
+                // ——否则界面会报一个早就不存在的档位，比不报还坏。
+                inner
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s.phase == SessionPhase::InboundActive),
+            )
+        };
+        // 统一显示名（方案 B，2026-09-23）：备注优先于自报名，**每次投影现查**
+        // 配对表——会话/申请挂起期间改备注也能立刻反映，不用等下一场会话。
+        // 查不到（设备已忘记 / 库读失败）按「没备注」处理，回填空串让前端
+        // 回落 `peer_name`，绝不挡状态本身。
+        let display_of = |peer: &str| -> Option<String> {
+            let Ok(Some(d)) = self.store.rc_device_get(peer) else {
+                return None;
+            };
+            let n = d.note.trim();
+            (!n.is_empty()).then(|| n.to_string())
+        };
+        if let Some(s) = session.as_mut() {
+            s.display_name = display_of(&s.peer).unwrap_or_default();
+        }
+        for k in pending.iter_mut() {
+            k.display_name = display_of(&k.peer).unwrap_or_default();
+        }
+        let running = self
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some();
+        let quality = self
+            .cfg()
+            .get(CFG_QUALITY)
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto")
+            .to_string();
+        let active_quality = if streaming && self.auto_enabled() {
+            self.auto_tier_name()
+        } else {
+            quality.clone()
+        };
+        // 丙（2026-10-12）：一次取回对端编码档位（一把锁读两位，别在字面量里
+        // 连续调两次投影函数——那是两份时刻，档位与原文可能对不上）。
+        let (peer_pipe, peer_pipe_label) = self.peer_video_pipe();
+        RcStatus {
+            enabled: self.enabled(),
+            capability: self.max_capability().as_str().to_string(),
+            session,
+            pending,
+            joins: self.joins.list(now_ms()),
+            uno: self.uno.active(now_ms()),
+            uno_pass: unop::cfg_from(&self.cfg()).map(Into::into),
+            device_deny: self.device_deny(),
+            running,
+            quality,
+            active_quality,
+            capture_scope: self
+                .cfg()
+                .get(CFG_CAPTURE_SCOPE)
+                .and_then(|v| v.as_str())
+                .unwrap_or("virtual")
+                .to_string(),
+            keep_awake: self.keep_awake(),
+            bitrate_pct: self.user_bitrate_pct_from_cfg(),
+            rtt_ms: self.last_rtt_ms(),
+            loss_permille: self
+                .remote_loss_permille
+                .load(std::sync::atomic::Ordering::Relaxed),
+            path_kind: self.link.path_kind_str(),
+            // 🔴 P1（2026-10-15）：链路调度相位（stable/degraded/recovering/空）。
+            // 诊断卡显示「链路质量」语义用；同时这里顺带消费 Recovering 观察窗
+            // （sched_snapshot 内部 poll）。
+            link_sched: self.link.sched_state_str(),
+            clock_skew_ms: self.clock_skew_ms(),
+            peer_fps120: self.peer_fps120(),
+            peer_hevc: self.peer_hevc(),
+            peer_av1: self.peer_av1(),
+            peer_dgram_input: self.peer_dgram_input(),
+            peer_refresh_hz: self.peer_refresh_hz(),
+            peer_monitors: self
+                .peer_monitors
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            // C3：投影 age（投影时刻 = 现在），裸单调值不出进程。
+            pong_age_ms: self.link.pong_age_ms(crate::rc::mono::mono_ms()),
+            // clone 而非 take：Overlay/对话框/设置多处 useRc 并发轮询，take 会只有一处看见
+            // 🔴 P1-4：连同归因（peer / session_id）一起投影出去，前端才知道这条
+            // 失败该挂在哪个设备上。
+            outbound_error: self
+                .last_outbound_error
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            reconnecting: self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(
+                |s| RcReconnectInfo {
+                    peer: s.peer.clone(),
+                    peer_name: s.peer_name.clone(),
+                    display_name: display_of(&s.peer).unwrap_or_default(),
+                    capability: s.capability.as_str().to_string(),
+                    attempt: s.attempt,
+                    max: s.max,
+                    gave_up: s.gave_up,
+                },
+            ),
+            // G3：本机静音。字段本身不带 cfg（与 peer_hevc 同例，跨平台可编译），
+            // 非 Windows 上没有音频链路，恒 false。
+            audio_local_mute: {
+                #[cfg(any(target_os="windows",target_os="macos"))]
+                {
+                    self.audio_local_mute()
+                }
+                #[cfg(not(any(target_os="windows",target_os="macos")))]
+                {
+                    false
+                }
+            },
+            // G3-B/C：**对端**报来的主机音频状态（发起端才有；被控端侧恒 None）。
+            // `None` = 旧对端不发这条帧 → 前端不摆「对方已静音」那类断言。
+            peer_audio: {
+                #[cfg(target_os = "windows")]
+                {
+                    self.peer_host_audio()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    None
+                }
+            },
+            // G3-C：被控端视角——对端静音了本机扬声器（提示 + 恢复入口）。
+            spk_muted_by_peer: self.spk_muted_by_peer(),
+            // 乙-③：输入权。`input_hold` / 授权位 / 锁的真实闸位三者分开投影——
+            // 「对方要求过锁」和「锁现在生效」不是一回事（钩子可能压根没装上）。
+            input_hold: self.input_hold(),
+            input_lock_granted: self.input_lock_granted(),
+            input_lock_active: self.input_lock_active(),
+            // 活动戳带时间窗语义，只能在投影这一刻判（前端拿不到本机的单调基座）。
+            input_pills: self.input_pills(),
+            // 发起端视角：对方报来的主机输入权状态。None = 旧对端不发这条帧。
+            peer_input: self.peer_input_state(),
+            // 丙-③：画面暂停。两位分开投影——被控端读自己的闸位，发起端读对端帧。
+            video_paused: self.video_paused(),
+            peer_video_paused: self.peer_video_paused(),
+            // 丙（2026-10-12）：对端报来的编码档位（档名 + 原文，见 `video_pipe.rs`）。
+            peer_video_pipe: peer_pipe,
+            peer_video_pipe_label: peer_pipe_label,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+    }
+
+    /// 正在开会话的对端 node_id（无会话时 `None`）。在线判定用。
+    pub fn active_session_peer(&self) -> Option<String> {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.session.as_ref().map(|s| s.peer.clone())
+    }
+
+    /// 是否需要通道：允许被控 **或** 已有远程配对（要发起）。
+    /// 两者语义不同：`rc_enabled` 只管「别人能不能控你」；发起只要配对过。
+    pub fn needs_channel(&self) -> bool {
+        if self.enabled() {
+            return true;
+        }
+        if matches!(self.store.rc_device_list(), Ok(list) if !list.is_empty()) {
+            return true;
+        }
+        // 方案 A：仅同步配对的设备也可直接发起远程（同一 iroh 身份/端点），必须让通道起来，
+        // 否则用户看得见设备（source="sync"）却发不起（B9）。
+        matches!(self.store.device_list(), Ok(list) if !list.is_empty())
+    }
+
+    /// 启动独立通道。幂等。
+    ///
+    /// 🔴 **不再要求 `rc_enabled`**（方案 A）：发起远程的人往往从未打开过
+    /// 「允许被远程」——那开关只应挡住**别人控你**，不该挡住你去控别人。
+    /// 入站仍由 `gate_inbound` 看 `rc_enabled` 拒掉。
+    pub async fn start(&self, app_dir: &Path, relay: bool) -> Result<(), String> {
+        crate::rc::underlay::init(app_dir);
+        {
+            let guard = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            if guard.is_some() {
+                return Ok(());
+            }
+        }
+        let me = Arc::new(NodeIdentity::load_or_create(app_dir)?);
+        // 🔴 端点改用全局共享（`crate::net::endpoint`）：sync 与 RC 各 bind 一个同
+        //    身份端点时，公网按 node id 路由会互相抢答（实测 error 120 /
+        //    aborted by peer，2026-10-02）。本端点永不关闭，stop 只摘 ALPN 注册。
+        //    `relay` 参数保留但不再分流——需要「纯局域网端点」的只有测试
+        //    （`sync::transport::bind`，cfg(test)）。
+        let _ = relay;
+        let endpoint = crate::net::endpoint::get_or_bind(app_dir).await?;
+        let port = endpoint
+            .bound_sockets()
+            .first()
+            .map(|s| s.port())
+            .ok_or("远程端点没有绑到任何端口")?;
+        // 表与 `spawn` 用同一个 `PresenceApp::Rc`：表按它判串台、广播按它打标识，
+        // 两处不一致会变成「自己拒自己」（收不到任何 RC 地址公告）。
+        let presence = Arc::new(PresenceTable::new(PresenceApp::Rc));
+        let presence_running = Arc::new(AtomicBool::new(false));
+
+        // accept 归共享端点：注册本业务两个 ALPN 的处理器，stop 时摘除。
+        // （旧自建 accept_loop 已删——同身份双端点是公网按-id 路由串台的根因。）
+        //
+        // 🔴 注册必须在写 Running **之前**（2026-10-02 真机修复）：`rc_boot` 是
+        //    spawn 出去的异步 start，端点 bind 完成到 Running 落槽之间有个窗口，
+        //    此刻发到的连接会被 `shared_ep::dispatch_loop` 当「无处理器」直接以
+        //    channel-off 关掉——发起端第一次点击就悄无声息地失败，再点一次才成。
+        //    提前注册后，窗口期到达的连接也能进 `handle_inbound_conn` 挂起等批准。
+        {
+            let svc = global().ok_or("RcService 未安装到 global")?;
+            crate::net::endpoint::register(
+                crate::rc::protocol::ALPN,
+                Arc::new(move |conn| {
+                    let svc = svc.clone();
+                    tauri::async_runtime::spawn(async move {
+                        svc.handle_inbound_conn(conn).await;
+                    });
+                }),
+            );
+        }
+        {
+            let svc = global().ok_or("RcService 未安装到 global")?;
+            crate::net::endpoint::register(
+                crate::rc::protocol::FILE_ALPN,
+                Arc::new(move |conn| {
+                    let svc = svc.clone();
+                    tauri::async_runtime::spawn(async move {
+                        RcService::handle_file_conn(&svc, conn).await;
+                    });
+                }),
+            );
+        }
+
+        {
+            let mut g = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            // C-7：双开竞态——两次 start 都看到 None 时，后到者不得覆盖先写入的
+            // Running（会泄漏端点与 accept 循环）。写槽前再判一次。
+            if g.is_some() {
+                log::info!("[RC] start 并发：另一请求已完成绑定，本次丢弃");
+                return Ok(());
+            }
+            *g = Some(Running {
+                endpoint: endpoint.clone(),
+                presence: presence.clone(),
+                presence_running: presence_running.clone(),
+                identity: me.clone(),
+            });
+        }
+
+        let known = self.store.rc_device_list()?;
+        log::info!(
+            "[RC] 远程通道已启动，端口 {}，远程已配对 {} 台（允许被控={})",
+            port,
+            known.len(),
+            self.enabled()
+        );
+
+        // 本机设备名**只取一次**：`spawn`（招呼包随包自报）与 `arm`（配对握手包
+        // 自报）用的是同一份。两处各调一次 `hostname::get()` 就是两个数据源。
+        let my_name = crate::rc::local_device_name();
+
+        // presence：宣告 RC 端口；is_paired 用**远程信任**（rc ∪ 同步），
+        // 否则仅同步配对的对端收不到本机 RC 地址，局域网发现会失败。
+        {
+            let store_online = self.store.clone();
+            // 明文包（附近招呼 + 配对握手）交给 `discovery`。
+            // ❗ 不注册的话它们只会留一条 debug（`spawn` 里有兜底日志），
+            //   表现是「附近设备永远是空的」，且从界面上完全看不出为什么。
+            let disc = self.discovery.clone();
+            presence.on_plain(Arc::new(move |p: &presence::PlainPacket| {
+                disc.handle_plain(p);
+            }));
+            presence::spawn(presence::PresenceStart {
+                enabled: true,
+                app: PresenceApp::Rc,
+                table: presence,
+                me: me.clone(),
+                endpoint_port: port,
+                is_paired: rc_paired_fn(&self.store),
+                // 听见对端「回来」→ 刷 rc_devices 在线（修纯 RC 配对永远 offline）
+                on_fresh: Arc::new(move |id: &str| {
+                    let _ = store_online.rc_device_touch(id, true);
+                }),
+                running: presence_running,
+                port: RC_PRESENCE_PORT,
+                // 「附近的设备」全靠这一条：周期发招呼包，把名字自报给同网段
+                // **还没配对**的邻居。少了它，那块列表永远是空的
+                // （2026-09-17 首版就是这样——收包侧写好了，发的那侧没接上）。
+                hello_name: Some(my_name.clone()),
+            });
+        }
+
+        // 挂上「怎么发」：局域网配对的握手包发往 rc 那套 presence 的端口。
+        // 必须在 presence 起来之后做——`arm` 之前发的包会被 `send` 拒掉。
+        self.discovery.arm(me, port, RC_PRESENCE_PORT, my_name);
+
+        Ok(())
+    }
+
+    /// 局域网配对：附近的设备（未配对的邻居）。
+    ///
+    /// ❗ 已配对的不在列表里（判据与 presence 收包侧**同一个** `rc_paired_fn`）——
+    /// 否则设备列表与附近列表会同时显示同一台机器，用户分不清该点哪个。
+    pub fn nearby_neighbors(&self, now_ms: i64) -> Vec<crate::net::presence::Neighbor> {
+        self.discovery.neighbors(now_ms)
+    }
+
+    /// 局域网配对：当前那一轮（没有就是 `None`）。
+    ///
+    /// ❗ 顺带重传该重传的包（`discovery.tick`）：**界面开着的时候**才有必要重传，
+    /// 而没有界面在读状态时也就不该有配对的包在路上（用户已经走开了）。
+    pub fn nearby_prompt(&self, now_ms: i64) -> Option<crate::rc::pin::PairPrompt> {
+        let p = self.discovery.prompt(now_ms);
+        if p.is_some() {
+            self.discovery.tick(now_ms);
+        }
+        p
+    }
+
+    /// 局域网配对：刚成功的那一台（完成屏）。
+    ///
+    /// 🔴 P1-7（2026-09-23 审计）：改名并改语义——原来是 `nearby_take_done`
+    /// （读完即清），两个并发轮询者只有一个能看见成功屏。现在窗口内多重可读、
+    /// 到点自灭，判据见 `pin::Pairs::peek_done`。
+    pub fn nearby_done(&self, now_ms: i64) -> Option<crate::rc::pin::Done> {
+        self.discovery.peek_done(now_ms)
+    }
+
+    pub fn nearby_pair_start(
+        &self,
+        peer_id: &str,
+        now_ms: i64,
+    ) -> Result<crate::rc::pin::PairPrompt, String> {
+        let r = self.discovery.pair_start(peer_id, now_ms);
+        if r.is_ok() {
+            self.emit_pair_changed();
+        }
+        r
+    }
+
+    pub fn nearby_confirm(&self, now_ms: i64) -> Result<crate::rc::pin::Confirmed, String> {
+        let r = self.discovery.confirm(now_ms);
+        self.emit_pair_changed();
+        r
+    }
+
+    pub fn nearby_cancel(&self, now_ms: i64) -> bool {
+        let ok = self.discovery.cancel(now_ms);
+        if ok {
+            self.emit_pair_changed();
+        }
+        ok
+    }
+
+    /// 局域网配对状态变了 → 通知前端。
+    ///
+    /// 与 `notify.emit_changed` 是同一件事（同一个 `rc-session-changed` 事件），
+    /// 收成一个方法是为了不让 `discovery.rs` 直接碰 `notify` 这个内部字段。
+    pub fn emit_pair_changed(&self) {
+        self.notify.emit_changed();
+    }
+
+    /// presence 里当前还听得见的对端（局域网在线）。
+    pub fn presence_live_ids(&self) -> Vec<String> {
+        let g = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(r) = g.as_ref() else {
+            return Vec::new();
+        };
+        r.presence.live(now_ms())
+    }
+
+    pub async fn stop(&self) {
+        // 先收口会话（发 End / 清帧），再关通道，避免留下「可控」假状态
+        {
+            let has = {
+                let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                inner.session.is_some()
+            };
+            if has {
+                let _ = self.end_session("远程通道关闭").await;
+            }
+        }
+        let running = {
+            let mut g = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            g.take()
+        };
+        if let Some(r) = running {
+            r.presence_running.store(false, Ordering::SeqCst);
+            // 🔴 端点是全进程共享的（`crate::net::endpoint`）——**不关**，只摘本业务
+            //   两个 ALPN 的处理器：之后的入连接会被礼貌拒绝（`channel-off`）。
+            //   关端点会把 sync 同身份业务的在途连接一起杀掉。
+            crate::net::endpoint::unregister(crate::rc::protocol::ALPN);
+            crate::net::endpoint::unregister(crate::rc::protocol::FILE_ALPN);
+            // 局域网配对：摘掉「怎么发」并清掉会话与附近表。
+            // ❗ **不清 `rc_devices`** —— 那是落库的配对结果，与通道起停无关。
+            //   清掉的话用户会发现「重启一次配对全没了」。
+            self.discovery.disarm();
+            self.joins.clear();
+            {
+                let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+                inner.session = None;
+                inner.pending.clear();
+            }
+            *self.outbound_send.lock().await = None;
+            *self.outbound_conn.lock().await = None;
+            *self.inbound_send.lock().await = None;
+            // Q2/Q6：通道停了，接入码全部作废（它们只活在内存里），
+            // 自动重连 episode 也失去意义——继续重试只会拿到 [channel_down]，
+            // 三次用尽再给用户挂一条「自动重连失败」横幅纯属误导。
+            let revoked = self.uno.revoke_all();
+            if revoked > 0 {
+                log::info!("[RC] 通道停止，已作废 {revoked} 个无人值守接入码");
+            }
+            *self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            log::info!("[RC] 远程通道已停止");
+        }
+    }
+
+    pub fn pending_joins(&self) -> Vec<join::RcJoinRequest> {
+        self.joins.list(now_ms())
+    }
+
+    pub fn arm_exchange(&self, node_id: &str, name: &str, expires_at: i64) -> Result<(), String> {
+        self.joins.arm_exchange(node_id, name, expires_at)
+    }
+
+    pub fn arm_exchange_addr(&self, node_id: &str, name: &str, expires_at: i64, addr: EndpointAddr) -> Result<(), String> {
+        self.joins.arm_exchange_addr(node_id, name, expires_at, Some(addr))
+    }
+
+    pub fn exchange_intent(&self, node_id: &str, at_ms: i64) -> Option<join::RcExchangeIntent> {
+        self.joins.exchange_for(node_id, at_ms)
+    }
+
+    /// PairCheck 的对端身份由 iroh 连接认证；只有本机也粘贴了该身份的码才落库。
+    pub fn confirm_exchange(&self, peer: &str) -> Result<bool, String> {
+        if self.is_rc_paired(peer) {
+            return Ok(true);
+        }
+        // 短码只建信任，不授予远程控制；接收开关由会话门禁单独执行。
+        if !join::door_open(&self.store, now_ms()) {
+            return Ok(false);
+        }
+        let Some(intent) = self.joins.exchange_for(peer, now_ms()) else {
+            return Ok(false);
+        };
+        if let Some(addr) = intent.addr.as_ref() {
+            self.save_peer_addr(peer, addr)?;
+        }
+        self.store.rc_device_pair(peer, &intent.name)?;
+        self.joins.clear_exchange(peer);
+        self.joins.clear_short_code();
+        if let Err(e) = join::close_door(&self.store) {
+            log::warn!("[RC] 交换配对后关闭邀请窗口失败：{e}");
+        }
+        self.emit_pair_changed();
+        Ok(true)
+    }
+
+    pub fn approve_join(&self, node_id: &str, name: &str) -> Result<(), String> {
+        if !self.joins.take(node_id) && !self.is_rc_paired(node_id) {
+            // 已配对再点一次也允许（幂等刷新名字）
+            if !self.is_rc_paired(node_id) {
+                return Err("没有待确认的远程配对请求".into());
+            }
+        }
+        let n = if name.trim().is_empty() {
+            "新设备".to_string()
+        } else {
+            name.trim().to_string()
+        };
+        self.store.rc_device_pair(node_id, &n)?;
+        // 🔴 **配对成功即关门**（2026-09-17 补，`sync::join` 早就是这个做法）。
+        //   码里带的是「node_id + 名字」、**不是一次性 nonce** ⇒ 同一份码在窗口内
+        //   可以被反复使用。「配完就关门」比「把窗口调短」更管用，也更符合直觉：
+        //   一次配对只该消耗一份邀请。
+        //   关门失败不阻断配对本身——设备已经写进白名单了，报错会让用户以为
+        //   白配一场；但也不能静默（规则 #15.3）。
+        if let Err(e) = join::close_door(&self.store) {
+            log::warn!("[RC] 配对成功后关闭邀请窗口失败：{e}——这份码在本轮窗口内仍可使用");
+        }
+        Ok(())
+    }
+
+    pub fn deny_join(&self, node_id: &str) {
+        self.joins.deny(node_id, now_ms());
+    }
+
+    /// 拿「已启动的端点 + presence 表」。`pub(super)` 是因为文件通道（G6）
+    /// 要自己拨号——它独立于 RC 会话，不复用会话的连接。
+    pub(in crate::rc) fn transport_ready(&self) -> Option<(Endpoint, Arc<PresenceTable>)> {
+        let g = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        // 端点句柄（iroh `Endpoint` 是廉价 Clone）：从共享端点的 Arc 里拷出值。
+        g.as_ref()
+            .map(|r| (r.endpoint.as_ref().clone(), r.presence.clone()))
+    }
+
+    pub fn short_pair_endpoint(&self) -> Option<Endpoint> {
+        self.transport_ready().map(|(endpoint, _)| endpoint)
+    }
+}

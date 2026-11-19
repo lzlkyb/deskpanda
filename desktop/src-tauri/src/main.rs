@@ -101,7 +101,9 @@ fn apply_window_decorations(window: &tauri::WebviewWindow) {
             let preference: i32 = 2; // DWMWCP_ROUND = 2（标准圆角）
             unsafe {
                 if let Err(e) = DwmSetWindowAttribute(
-                    HWND(hwnd.0 as isize),
+                    // windows 0.58 起 `HWND` 收裸指针（0.56 及以前收 isize）。
+                    // `hwnd.0` 是 Tauri 给的 `*mut c_void`，直接转即可。
+                    HWND(hwnd.0 as *mut _),
                     DWMWA_WINDOW_CORNER_PREFERENCE,
                     &preference as *const i32 as *const _,
                     std::mem::size_of::<i32>() as u32,

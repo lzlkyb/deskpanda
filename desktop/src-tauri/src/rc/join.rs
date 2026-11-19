@@ -1,0 +1,532 @@
+//! 远程协助的「邀请门」+ 敲门队列（方案 A）。
+//!
+//! 与 `sync::join` 同构，但是**独立的一扇门**：远程配对不依赖同步配对。
+//! 生成 RC 邀请码 = 开门；门开着时陌生对端的 Request 记成待确认，用户核对指纹后
+//! 写入 `rc_devices`。
+
+use crate::store::DataStore;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+/// 配置键：RC 邀请门开到什么时候（epoch 毫秒）。
+pub const CFG_DOOR_UNTIL: &str = "rc_invite_open_until";
+
+/// 一条 RC 敲门（对方想配对以便远程，或首次连上）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RcJoinRequest {
+    pub node_id: String,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+    pub tries: u32,
+}
+
+/// 双方交换配对码时，本机已明确粘贴的那一台。只存在本进程内；重启后需重新交换。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RcExchangeIntent {
+    pub node_id: String,
+    pub name: String,
+    pub expires_at: i64,
+    pub addr: Option<iroh::EndpointAddr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RcShortCode {
+    pub code: String,
+    pub expires_at: i64,
+}
+
+/// 交换用配对码的有效期（2026-09-29 由 10 分钟压到 3 分钟）。
+///
+/// 这枚码 ≈ 27 bit、靠人手搬运，是三种凭证里最弱的一档；邀请码那份是
+/// 128 位身份、照抄即全部，反而更长不了——两者的窗口按「被拿走后的代价」分档，
+/// 不按位数排。3 分钟够覆盖「解锁手机 → 打开 app → 输码 → 确认」的正常流程。
+/// 到点换**新码**而不是延命：已暴露过的码延长窗口只是拉长风险。
+pub(crate) const SHORT_CODE_TTL_MS: i64 = 3 * 60 * 1000;
+
+const KNOCK_TTL_MS: i64 = 10 * 60 * 1000;
+/// 拒绝配对后的冷却：到点自动允许再敲门，避免一次误拒永久锁死。
+const DENY_TTL_MS: i64 = 30 * 60 * 1000;
+
+/// 🔴 敲门频率闸（2026-10-16 对标 p2wlan，差距 3）：同一对端在该窗口内最多
+/// [`KNOCK_RATE_MAX`] 次敲门，超限的**静默丢弃**——待确认列表是给人看的，
+/// 被同一台刷屏就掩盖了真正要确认的那一台。p2wlan 的同位设计是滑动窗口
+/// 10 次/60s（`server/database/rooms.go:406-421`），我们更严：次数更少。
+const KNOCK_RATE_WINDOW_MS: i64 = 60_000;
+const KNOCK_RATE_MAX: usize = 5;
+/// 满员时拒绝新身份而非驱逐旧账本，否则换身份可绕过限速。
+const KNOCK_RECENT_PEERS_MAX: usize = 128;
+/// 🔴 待确认列表上限：门开着时**任何**拿到有效签名的对端都能敲门（签名只证
+/// 身份、不证善意），无上限的列表既能在 UI 上无限增长，也能把真正的请求挤出
+/// 视野。满了挤最旧——它 10 分钟（KNOCK_TTL）后本来也会自己消失，提前挤掉
+/// 只是让「还在场的请求」优先显示。
+const KNOCK_PENDING_MAX: usize = 8;
+
+#[derive(Default)]
+pub struct RcJoins {
+    pending: Mutex<HashMap<String, RcJoinRequest>>,
+    /// node_id → 拒绝生效到什么时候（epoch ms）。
+    denied: Mutex<HashMap<String, i64>>,
+    /// node_id → 窗口内历次敲门时间戳（频率闸的账本，见 KNOCK_RATE_WINDOW_MS）。
+    recent_knocks: Mutex<HashMap<String, Vec<i64>>>,
+    exchange: Mutex<Option<RcExchangeIntent>>,
+    short_code: Mutex<Option<RcShortCode>>,
+    short_active: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+}
+
+pub struct RcShortAttempt(Arc<RcJoins>);
+
+impl Drop for RcShortAttempt {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.0.short_active.lock() {
+            *active = None;
+        }
+    }
+}
+
+impl RcJoins {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// 码只留在内存里。重复打开页面时复用未过期的码，避免已发出的码突然失效。
+    ///
+    /// 2026-09-29：有效期由 10 分钟压到 3 分钟。这枚码 ≈ 27 bit、靠人手搬运，
+    /// 是三种凭证里最弱的一档；3 分钟够覆盖「解锁手机 → 打开 app → 输码 → 确认」
+    /// 的正常流程。到点换**新码**而不是延命——已暴露过的码延长窗口只是拉长风险。
+    pub fn short_code(&self, now_ms: i64) -> Result<RcShortCode, String> {
+        use ring::rand::{SecureRandom, SystemRandom};
+        let mut guard = self.short_code.lock().map_err(|_| "配对状态暂时不可用")?;
+        if let Some(code) = guard.as_ref().filter(|code| now_ms < code.expires_at) {
+            return Ok(code.clone());
+        }
+        let rng = SystemRandom::new();
+        let mut bytes = [0u8; 4];
+        let value = loop {
+            rng.fill(&mut bytes).map_err(|_| "生成配对码失败")?;
+            let value = u32::from_le_bytes(bytes);
+            // 拒绝尾部余数，保证所有八位码等概率。
+            if value < (u32::MAX / 100_000_000) * 100_000_000 {
+                break value % 100_000_000;
+            }
+        };
+        let code = RcShortCode {
+            code: format!("{value:08}"),
+            expires_at: now_ms + SHORT_CODE_TTL_MS,
+        };
+        *guard = Some(code.clone());
+        Ok(code)
+    }
+
+    pub fn valid_short_code(&self, code: &str, now_ms: i64) -> bool {
+        self.short_code.lock().ok().and_then(|g| g.clone())
+            .is_some_and(|current| current.code == code && now_ms < current.expires_at)
+    }
+
+    pub fn begin_short(self: &Arc<Self>) -> Result<(RcShortAttempt, tokio::sync::watch::Receiver<bool>), String> {
+        let mut active = self.short_active.lock().map_err(|_| "配对状态暂时不可用")?;
+        if active.is_some() {
+            return Err("正在等待对方确认，请先完成或等本次配对超时".into());
+        }
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        *active = Some(sender);
+        Ok((RcShortAttempt(self.clone()), receiver))
+    }
+
+    pub fn cancel_short(&self) {
+        if let Ok(active) = self.short_active.lock() {
+            if let Some(sender) = active.as_ref() {
+                let _ = sender.send(true);
+            }
+        }
+    }
+
+    pub fn clear_short_code(&self) {
+        if let Ok(mut guard) = self.short_code.lock() {
+            *guard = None;
+        }
+    }
+
+    pub fn arm_exchange(&self, node_id: &str, name: &str, expires_at: i64) -> Result<(), String> {
+        self.arm_exchange_addr(node_id, name, expires_at, None)
+    }
+
+    pub fn arm_exchange_addr(&self, node_id: &str, name: &str, expires_at: i64, addr: Option<iroh::EndpointAddr>) -> Result<(), String> {
+        if addr.as_ref().is_some_and(|value| value.id.to_string() != node_id) {
+            return Err("设备地址与身份不一致".into());
+        }
+        let mut g = self.exchange.lock().map_err(|_| "配对状态暂时不可用")?;
+        *g = Some(RcExchangeIntent {
+            node_id: node_id.to_string(),
+            name: name.to_string(),
+            expires_at,
+            addr,
+        });
+        Ok(())
+    }
+
+    pub fn exchange_for(&self, node_id: &str, now_ms: i64) -> Option<RcExchangeIntent> {
+        self.exchange
+            .lock()
+            .ok()?
+            .as_ref()
+            .filter(|intent| intent.node_id == node_id && now_ms < intent.expires_at)
+            .cloned()
+    }
+
+    pub fn clear_exchange(&self, node_id: &str) {
+        if let Ok(mut g) = self.exchange.lock() {
+            if g.as_ref().is_some_and(|intent| intent.node_id == node_id) {
+                *g = None;
+            }
+        }
+    }
+
+    /// 这台设备是否还在「拒绝冷却期」内。
+    ///
+    /// `pub` 是为了让 `service.rs` 能把判据交给纯函数 [`deny_unpaired`]
+    /// ——原先它靠 `knock()` 返回 `false` 来反推「被拒过」，
+    /// 而 `knock()` 返回 false 还有别的成因（`node_id` 为空），
+    /// 两件事混在一个返回值里，正是错误文案分不出来的原因。
+    pub fn is_denied(&self, node_id: &str, now_ms: i64) -> bool {
+        let Ok(d) = self.denied.lock() else {
+            return false;
+        };
+        matches!(d.get(node_id), Some(&until) if now_ms < until)
+    }
+
+    pub fn knock(&self, node_id: &str, now_ms: i64) -> bool {
+        if node_id.is_empty() {
+            return false;
+        }
+        if self.is_denied(node_id, now_ms) {
+            return false;
+        }
+        // 记账与判断同锁完成；只留最近五次尝试，拒绝也更新窗口而不追加无界记录。
+        {
+            let Ok(mut r) = self.recent_knocks.lock() else {
+                return false;
+            };
+            r.retain(|_, marks| {
+                marks.retain(|t| now_ms - *t <= KNOCK_RATE_WINDOW_MS);
+                !marks.is_empty()
+            });
+            if !r.contains_key(node_id) && r.len() >= KNOCK_RECENT_PEERS_MAX {
+                return false;
+            }
+            let marks = r.entry(node_id.to_string()).or_default();
+            let limited = marks.len() >= KNOCK_RATE_MAX;
+            if limited {
+                marks.remove(0);
+            }
+            marks.push(now_ms);
+            if limited {
+                return false;
+            }
+        }
+        let Ok(mut m) = self.pending.lock() else {
+            return false;
+        };
+        // 🔴 列表上限：只在**新**对端进门时挤最旧；已在列表里的对端刷新自己
+        // 不该把别人挤出去（它是被通知的对象，不是竞争者）。
+        if !m.contains_key(node_id) && m.len() >= KNOCK_PENDING_MAX {
+            let oldest = m
+                .values()
+                .min_by_key(|r| r.first_seen_ms)
+                .map(|r| r.node_id.clone());
+            if let Some(oldest) = oldest {
+                m.remove(&oldest);
+            }
+        }
+        m.entry(node_id.to_string())
+            .and_modify(|r| {
+                r.last_seen_ms = now_ms;
+                r.tries += 1;
+            })
+            .or_insert(RcJoinRequest {
+                node_id: node_id.to_string(),
+                first_seen_ms: now_ms,
+                last_seen_ms: now_ms,
+                tries: 1,
+            });
+        true
+    }
+
+    pub fn list(&self, now_ms: i64) -> Vec<RcJoinRequest> {
+        let Ok(mut m) = self.pending.lock() else {
+            return Vec::new();
+        };
+        m.retain(|_, r| now_ms - r.last_seen_ms <= KNOCK_TTL_MS);
+        let mut v: Vec<RcJoinRequest> = m.values().cloned().collect();
+        v.sort_by_key(|r| r.first_seen_ms);
+        v
+    }
+
+    pub fn take(&self, node_id: &str) -> bool {
+        self.pending
+            .lock()
+            .map(|mut m| m.remove(node_id).is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn deny(&self, node_id: &str, now_ms: i64) {
+        self.take(node_id);
+        if let Ok(mut d) = self.denied.lock() {
+            d.insert(node_id.to_string(), now_ms + DENY_TTL_MS);
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut m) = self.pending.lock() {
+            m.clear();
+        }
+        if let Ok(mut g) = self.exchange.lock() {
+            *g = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_ledger_bounds_rejected_attempts() {
+        let joins = RcJoins::new();
+        for _ in 0..10_000 { joins.knock("peer", 1000); }
+        let recent = joins.recent_knocks.lock().unwrap();
+        assert!(recent["peer"].len() <= KNOCK_RATE_MAX, "被拒请求不能无限追加时间戳");
+    }
+
+    #[test]
+    fn rate_ledger_reclaims_expired_peers() {
+        let joins = RcJoins::new();
+        for i in 0..1000 { joins.knock(&format!("peer-{i}"), 1000); }
+        assert!(joins.knock("new", 1000 + KNOCK_RATE_WINDOW_MS + 1));
+        assert_eq!(joins.recent_knocks.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rate_ledger_limits_distinct_peers_without_forgetting_existing_limits() {
+        let joins = RcJoins::new();
+        for _ in 0..KNOCK_RATE_MAX { assert!(joins.knock("first", 1000)); }
+        for i in 0..1000 { joins.knock(&format!("peer-{i}"), 1000); }
+        assert!(joins.recent_knocks.lock().unwrap().len() <= 128, "换身份也不能无限分配账本");
+        assert!(!joins.knock("first", 1001), "满员时不能驱逐账本绕过限速");
+    }
+
+    #[test]
+    fn deny_blocks_then_expires() {
+        let j = RcJoins::new();
+        let now = 1_000_000i64;
+        assert!(j.knock("peer", now));
+        j.deny("peer", now);
+        assert!(!j.knock("peer", now), "刚拒绝应挡住再敲门");
+        assert!(j.knock("peer", now + DENY_TTL_MS + 1), "冷却结束后应允许");
+    }
+
+    #[test]
+    fn knock_records_pending() {
+        let j = RcJoins::new();
+        let now = 5_000i64;
+        assert!(j.knock("a", now));
+        assert!(j.knock("a", now + 1), "重复敲门应刷新而不是失败");
+        let list = j.list(now + 1);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].tries, 2);
+        assert!(j.take("a"));
+        assert!(j.list(now + 1).is_empty());
+    }
+
+    /// 🔴 频率闸守卫（2026-10-16，差距 3）：60s 窗口内第 6 次敲门必须被丢。
+    /// 这条红了 = 有人把 KNOCK_RATE_MAX 改名/改义/删了闸，刷屏防护失效。
+    #[test]
+    fn knock_rate_limit_drops_the_sixth_attempt_within_the_window() {
+        let j = RcJoins::new();
+        let now = 10_000i64;
+        for i in 0..KNOCK_RATE_MAX {
+            assert!(j.knock("a", now + i as i64 * 1_000), "窗口内第 {} 次应放行", i + 1);
+        }
+        assert!(
+            !j.knock("a", now + KNOCK_RATE_MAX as i64 * 1_000),
+            "60s 内超过 {} 次应被静默丢弃",
+            KNOCK_RATE_MAX
+        );
+        // 被丢的那次不该进待确认列表（tries 停在上限值）
+        let list = j.list(now + KNOCK_RATE_MAX as i64 * 1_000);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].tries, KNOCK_RATE_MAX as u32);
+        // 窗口滑出后放行（🔴 被丢的那次**也记了账**——p2wlan 同款语义：
+        // 失败尝试照样计数，不然攻击者可以卡着上限永不滑出）；
+        // 其他对端从第一天起就不受限。
+        assert!(
+            j.knock("a", now + 5_000 + KNOCK_RATE_WINDOW_MS + 1),
+            "窗口滑出应重新放行（以最后一次敲门含被丢的那次起算）"
+        );
+        assert!(j.knock("b", now + 5_000), "频率闸只对同一对端生效");
+    }
+
+    /// 🔴 列表上限守卫：第 9 台进门时挤掉最旧的，且已在列表里的刷新不挤人。
+    #[test]
+    fn knock_pending_list_is_capped_and_evicts_the_oldest() {
+        let j = RcJoins::new();
+        let now = 10_000i64;
+        for i in 0..KNOCK_PENDING_MAX {
+            assert!(j.knock(&format!("p{i}"), now + i as i64));
+        }
+        // 已在列表里的对端刷新：不该触发挤人
+        assert!(j.knock("p1", now + 100));
+        assert_eq!(j.list(now + 100).len(), KNOCK_PENDING_MAX);
+        // 新对端进门：挤掉 first_seen 最小的 p0
+        assert!(j.knock("new", now + 101));
+        let list = j.list(now + 101);
+        assert_eq!(list.len(), KNOCK_PENDING_MAX, "上限应维持不变");
+        assert!(list.iter().all(|r| r.node_id != "p0"), "最旧的应被挤掉");
+        assert!(list.iter().any(|r| r.node_id == "new"), "新对端应进列表");
+    }
+
+    #[test]
+    fn exchange_only_matches_the_pasted_peer_within_the_invite_window() {
+        let j = RcJoins::new();
+        j.arm_exchange("a", "甲", 10_000).unwrap();
+        assert!(j.exchange_for("b", 9_000).is_none());
+        assert_eq!(j.exchange_for("a", 9_000).unwrap().name, "甲");
+        assert!(j.exchange_for("a", 10_000).is_none());
+        j.clear_exchange("a");
+        assert!(j.exchange_for("a", 9_000).is_none());
+    }
+
+    #[test]
+    fn short_code_is_reused_until_expiry_and_only_one_attempt_can_run() {
+        let joins = RcJoins::new();
+        let first = joins.short_code(1_000).unwrap();
+        assert_eq!(first.code.len(), 8);
+        assert!(first.code.bytes().all(|b| b.is_ascii_digit()));
+        assert_eq!(joins.short_code(2_000).unwrap(), first);
+        assert!(joins.valid_short_code(&first.code, 2_000));
+        let (attempt, cancelled) = joins.begin_short().unwrap();
+        assert!(joins.begin_short().is_err());
+        joins.cancel_short();
+        assert!(*cancelled.borrow());
+        drop(attempt);
+        assert!(joins.begin_short().is_ok());
+        assert!(!joins.valid_short_code(&first.code, first.expires_at));
+        assert_ne!(joins.short_code(first.expires_at).unwrap().expires_at, first.expires_at);
+    }
+}
+
+/// 未配对对端敲门时，本机该拿什么理由拒它。
+///
+/// 它之所以被拆成**独立的枚举 + 纯函数**（2026-09-17）：这几种成因原先塌缩成同一句
+/// `not_paired`（「尚未远程配对」），而用户实际撞到的**几乎总是 [`DoorClosed`]**——
+/// 那句话指不到「回去重新生成一个」这个唯一正确的动作。
+/// 分成四档之后，前三档都必须能被单测钉住，而 accept 循环（网络）在单测里跑不起来，
+/// 所以判据要抽成纯函数挂在这里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnockDenial {
+    /// 本机没开「允许被远程协助」（红线：未启用 = 零可见零请求零费用）。
+    Disabled,
+    /// 邀请窗口已关：要么过期，要么已经配对成功一次而提前关上。
+    DoorClosed,
+    /// 本机此前拒绝过它（多半是用户自己点的「拒绝」），还在冷却期。
+    Denied,
+}
+
+impl KnockDenial {
+    /// 回给**对端**的话。写给收这句话的人看——他是发起方，所以一律称「对方…」，
+    /// 与 `Gate::deny_reason` 的既有约定一致（见 `rc/session.rs`）。
+    pub fn reason(self) -> &'static str {
+        match self {
+            KnockDenial::Disabled => "对方未开启「允许被远程协助」",
+            KnockDenial::DoorClosed => "对方的邀请窗口已过期",
+            KnockDenial::Denied => "对方拒绝过本次配对请求",
+        }
+    }
+
+    /// 稳定错误码：前端分档文案用（`src/lib/rcDeny.ts` 的 `BY_CODE`），**不要改字符串**。
+    pub fn code(self) -> &'static str {
+        match self {
+            KnockDenial::Disabled => "disabled",
+            KnockDenial::DoorClosed => "invite_door_closed",
+            KnockDenial::Denied => "pair_denied",
+        }
+    }
+
+    /// 本机日志里用的短标签（日志站本机立场，与 `reason()` 的「对方…」相反）。
+    pub fn log_label(self) -> &'static str {
+        match self {
+            KnockDenial::Disabled => "本机未开启被控",
+            KnockDenial::DoorClosed => "邀请窗口已关闭",
+            KnockDenial::Denied => "在拒绝冷却期内",
+        }
+    }
+}
+
+/// 判据：未配对的对端来敲门，该拒还是该记入待确认。
+///
+/// `None` = 记入待确认（这一步有副作用，由调用方做）。
+/// **顺序即优先级**：未开启 > 窗口已关 > 冷却期 —— 前一条比后一条更能解释用户的处境，
+/// 所以先报它（例：既没开被控、窗口又过期时，该说的是「去把开关打开」）。
+pub fn deny_unpaired(
+    enabled: bool,
+    door_open: bool,
+    in_deny_cooldown: bool,
+) -> Option<KnockDenial> {
+    if !enabled {
+        return Some(KnockDenial::Disabled);
+    }
+    if !door_open {
+        return Some(KnockDenial::DoorClosed);
+    }
+    if in_deny_cooldown {
+        return Some(KnockDenial::Denied);
+    }
+    None
+}
+
+/// 邀请门当前开到什么时候（epoch ms）。没开过或已关返回 0。
+pub fn door_until(store: &DataStore) -> i64 {
+    store
+        .get_config()
+        .ok()
+        .and_then(|c| c.get(CFG_DOOR_UNTIL).and_then(|v| v.as_i64()))
+        .unwrap_or(0)
+}
+
+/// 邀请门是否还开着。
+pub fn door_open(store: &DataStore, now_ms: i64) -> bool {
+    door_until(store) > now_ms
+}
+
+/// 开门到 `until_ms`（生成邀请码时调用）。已经开得更久就不缩短
+/// （连着生两次邀请码时，后一次不该把前一次的窗口提前关上——同 `sync::join`）。
+pub fn open_door(store: &DataStore, until_ms: i64) -> Result<(), String> {
+    if door_until(store) >= until_ms {
+        return Ok(());
+    }
+    write_door(store, until_ms)
+}
+
+/// 关门。**放行一台之后调**——配对完了就不该再敞着。
+///
+/// 🔴 这一条比「把窗口调短」更管用：码里带的是「node_id + 名字」、
+/// **不是一次性 nonce**，所以同一份码在窗口内可以被反复使用。
+/// 配对成功即关门，等于把「这份码还能用几次」压到 1。
+/// （`sync::join` 早就是这个做法，rc 这边 2026-09-17 才补上。）
+pub fn close_door(store: &DataStore) -> Result<(), String> {
+    write_door(store, 0)
+}
+
+fn write_door(store: &DataStore, until_ms: i64) -> Result<(), String> {
+    let mut config = store.get_config()?;
+    // ❗ 不能 `if let Some(..)` 了事：配置不是对象时会静默跳过写入，
+    //   而 `save_config` 照样返回 Ok（规则 #15.3）。同 `sync::join` 的写法。
+    let obj = config
+        .as_object_mut()
+        .ok_or("配置文件不是一个对象，邀请窗口没能保存")?;
+    obj.insert(
+        CFG_DOOR_UNTIL.to_string(),
+        serde_json::Value::from(until_ms),
+    );
+    store.save_config(&config)
+}

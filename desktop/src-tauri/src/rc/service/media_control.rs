@@ -1,0 +1,185 @@
+//! 会话归属、媒体闭环与上屏打点；仅在有待确认帧时运行反馈任务。
+use super::*;
+use crate::rc::media_flow::{Admission, Flow, MediaFeedback, PathInfo, Receiver};
+
+#[derive(Default)]
+pub(super) struct MediaState {
+    id: String,
+    flow: Flow,
+    receiver: Receiver,
+    sending_feedback: bool,
+    feedback_supported: bool,
+    last_health_log_ms: u64,
+}
+
+impl RcService {
+    pub(in crate::rc) fn media_paused(&self) -> bool {
+        self.video_paused() || self.peer_background_since() > 0
+    }
+
+    pub(in crate::rc) fn configure_media_feedback(&self, id: &str, supported: bool) {
+        self.with_media(id, |s| s.feedback_supported = supported);
+    }
+
+    fn with_media<T>(&self, id: &str, f: impl FnOnce(&mut MediaState) -> T) -> Option<T> {
+        // 短暂同时持锁，禁止旧会话的迟到采样重置新会话控制器。
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if inner.session.as_ref().is_none_or(|s| s.id != id) { return None; }
+        let mut state = self.media_state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.id != id { *state = MediaState { id: id.to_owned(), ..Default::default() }; }
+        Some(f(&mut state))
+    }
+
+    /// 媒体闭环的**唯一**路径判据（规则 11.1）：预算种子、fps 门槛、码率上限、
+    /// 接收端传播基线全从这里取。过去四处各自 `path_kind_str()` 拼字符串，
+    /// 「内网直连」和「公网直连」被压成同一个 bool ⇒ 加一档必漏一处。
+    /// 心跳恢复预算（`session::lifecycle` 的 `heartbeat_timeout_ms`）是**另一套口径**
+    /// （无会话时按快路径给短超时），刻意不并进来。
+    /// 甲-④（2026-10-11）：`pub(in crate::rc)` 是给 `[RC-PERF]` 汇总行取标签用的——
+    /// 诊断也必须走这一把尺，不在推流循环里再拼一次字符串判路径。
+    pub(in crate::rc) fn media_path(&self) -> PathInfo {
+        PathInfo::from_kind(self.link.path_kind().unwrap_or_default())
+    }
+
+    pub(in crate::rc) fn media_budget_kbps(&self, id: &str) -> u32 {
+        let path = self.media_path();
+        self.with_media(id, |s| s.flow.budget(path.relay, self.stream.media_ceiling_kbps(path.lan))).unwrap_or(400)
+    }
+
+    pub(in crate::rc) fn media_fps_limit(&self, id: &str) -> u32 {
+        let path = self.media_path();
+        let now = crate::rc::mono::mono_ms() as u64;
+        self.with_media(id, |s| { s.flow.budget(path.relay, self.stream.media_ceiling_kbps(path.lan)); s.flow.fps_limit(path, now) }).unwrap_or(10)
+    }
+
+    pub(in crate::rc) fn media_admission(&self, id: &str) -> Admission {
+        // 老客户端没有 ACK 任务，不能因等待不存在的反馈而反复 RESET。
+        self.with_media(id, |s| if s.feedback_supported {
+            let now = crate::rc::mono::mono_ms() as u64;
+            let rtt = self.video_rtt_ms();
+            let admission = s.flow.admission(now, rtt);
+            if admission == Admission::Reset {
+                log::info!("[RC-MEDIA] admission RESET session={id} {}", s.flow.reset_diagnostics(now, rtt));
+            }
+            admission
+        } else { Admission::Ready })
+            .unwrap_or(Admission::Wait)
+    }
+
+    pub(in crate::rc) fn media_resolution_limit(&self, id: &str) -> u32 {
+        // 无会话时同样不降分辨率：文字优先，降档判据只来自 fps/码率。
+        self.with_media(id, |s| s.flow.resolution_limit()).unwrap_or(0)
+    }
+
+    pub(in crate::rc) fn media_note_encode_width(&self, id: &str, w: u32) {
+        self.with_media(id, |s| s.flow.note_encode_width(w));
+    }
+
+    pub(in crate::rc) fn media_sent(&self, id: &str, started_ms: u64, at_ms: i64, bytes: usize) {
+        self.with_media(id, |s| if s.feedback_supported {
+            s.flow.sent(crate::rc::mono::mono_ms() as u64, started_ms, at_ms, bytes);
+        });
+    }
+
+    pub(in crate::rc) fn media_discarded(&self, id: &str) {
+        let loss = self.stream.loss_permille().max(0);
+        let rtt = self.video_rtt_ms();
+        self.with_media(id, |s| s.flow.discard(crate::rc::mono::mono_ms() as u64, loss, rtt));
+    }
+
+    /// P0：这一帧被预算挡下（不阻塞、不改节拍），只把需求证据记进控制器。
+    /// 与 `media_sent` 同样受 `feedback_supported` 约束：没有反馈闭环就没有控制器，
+    /// 记账只会留一个永远不被消费的计数。
+    pub(in crate::rc) fn media_frame_dropped(&self, id: &str) {
+        self.with_media(id, |s| if s.feedback_supported { s.flow.note_drop(); });
+    }
+
+    /// P0 的节拍锚：准入没放行时，采集圈下一次来问之前的等待毫秒数（替代旧的阻塞等待）。
+    pub(in crate::rc) fn media_gate_retry_ms(&self, id: &str) -> u64 {
+        self.with_media(id, |s| s.flow.gate_retry_ms(crate::rc::mono::mono_ms() as u64))
+            .unwrap_or(crate::rc::media_flow::FEEDBACK_MS)
+    }
+
+    pub(in crate::rc) fn apply_media_feedback(&self, f: &MediaFeedback) {
+        let id = {
+            let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+            let Some(s) = inner.session.as_ref() else { return; };
+            s.id.clone()
+        };
+        let lan = self.media_path().lan;
+        self.with_media(&id, |s| {
+            let before = s.flow.kbps;
+            let now = crate::rc::mono::mono_ms() as u64;
+            let loss = self.loss_permille();
+            s.flow.feedback(now, f, self.stream.media_ceiling_kbps(lan), loss, self.video_rtt_ms());
+            // 覆盖旧 NetHint 帧龄口径：auto_quality 也应看到额外积压，而非传播时间。
+            // 口径是线上积压：对面合成器的固有渲染深度不该把自动档一路踩到 smooth。
+            self.set_peer_queue_ms(s.flow.backlog_ms);
+            // 预算压到地板后也留有界健康采样，否则持续的码控压力会完全不见。
+            if before != s.flow.kbps || now.saturating_sub(s.last_health_log_ms) >= 5_000 {
+                s.last_health_log_ms = now;
+                log::info!("[RC-MEDIA] budget={}kbps delivered={}kbps capacity={}kbps queue={}ms backlog={}ms receive_queue={:?}ms app_limited={} demand_limited={} tx_work={}ms display_delay={:?}ms sample={}ms presented={} received={} rtt={}ms loss={}pm",
+                    s.flow.kbps, s.flow.delivered_kbps, s.flow.capacity_kbps, s.flow.queue_ms,
+                    s.flow.backlog_ms, f.receive_queue_ms, s.flow.app_limited,
+                    s.flow.demand_limited,
+                    s.flow.tx_work_ms, f.display_delay_ms, f.sample_ms,
+                    f.presented_at_ms, f.received_at_ms, self.video_rtt_ms(), loss);
+            }
+        });
+    }
+
+    pub(in crate::rc) fn keep_media_queue_hint(&self) {
+        let state = self.media_state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(queue) = state.flow.feedback_queue() { self.set_peer_queue_ms(queue); }
+    }
+
+    pub(in crate::rc) fn note_media_presented(&self, id: &str, at_ms: i64) -> Result<(), String> {
+        self.with_media(id, |s| {
+            s.receiver.presented(at_ms, crate::rc::mono::mono_ms() as u64);
+        }).ok_or_else(|| "画面属于已结束的会话".into())
+    }
+
+    pub(in crate::rc) fn note_media_received(self: &Arc<Self>, id: &str, frame: &crate::rc::video::VideoFrame) {
+        let now = crate::rc::mono::mono_ms() as u64;
+        let age = (now_ms() - frame.at_ms + self.clock_skew_ms()).max(0);
+        let relay = self.media_path().relay;
+        let schedule = self.with_media(id, |s| {
+            // 视频已移到独立 uni 流，主控制流的 note_inbound 不再覆盖这些帧。
+            // 必须在会话归属校验之内更新，旧 reader 不能给新会话续命。
+            self.link.note_inbound();
+            s.receiver.set_path(relay);
+            s.receiver.receive(now, frame.at_ms, frame.jpeg.len(), age);
+            if s.sending_feedback { return false; }
+            s.sending_feedback = true;
+            true
+        }).unwrap_or(false);
+        if !schedule { return; }
+        let svc = self.clone();
+        let id = id.to_owned();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                // 仅有待反馈帧时才存活，首帧和静止前最后一帧也会被确认。
+                tokio::time::sleep(std::time::Duration::from_millis(crate::rc::media_flow::FEEDBACK_MS)).await;
+                let media = svc.with_media(&id, |s|
+                    s.receiver.take_feedback(crate::rc::mono::mono_ms() as u64)).flatten();
+                if let Some(media) = media {
+                    let event = crate::rc::input::InputEvent::NetHint {
+                        rtt_ms: svc.last_rtt_ms(), queue_ms: None, frame_loss_pm: None, media: Some(media),
+                    };
+                    let mut send = svc.outbound_send.lock().await;
+                    // 等待发送锁期间可能切了会话；旧反馈绝不能写入新连接。
+                    if svc.session_id_is(&id) {
+                        if let (Some(stream), Ok(bytes)) = (send.as_mut(), serde_json::to_vec(&event)) {
+                            let _ = crate::net::transport::write_frame(stream, &bytes).await;
+                        }
+                    }
+                }
+                let again = svc.with_media(&id, |s| {
+                    if s.receiver.has_pending() { true }
+                    else { s.sending_feedback = false; false }
+                }).unwrap_or(false);
+                if !again { break; }
+            }
+        });
+    }
+}

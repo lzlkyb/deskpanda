@@ -1,0 +1,235 @@
+//! 已配对设备表（M6-P1）。
+//!
+//! 配对是一次性的**信任建立**；在线与否是连接层事件。两者解耦——
+//! 重连只按已存的 `node_id` 重新发现地址，**不重新配对**（设计稿 §6.4）。
+//!
+//! 只有两种情况需要重新配对：
+//! ① 用户在界面上主动「忘记此设备」；
+//! ② 本机私钥丢了（换 Windows 账户 / 重装）—— 那时身份变了。
+
+use super::DataStore;
+use serde::{Deserialize, Serialize};
+
+/// 一台已配对的设备。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Device {
+    /// 对端公钥 hex，主键。
+    pub node_id: String,
+    pub name: String,
+    /// 配对时刻（本地时间字串，与库里其它 `*_at` 同格式）。
+    pub paired_at: String,
+    /// 最近一次成功握手用的通道：`lan` / `wan` / `""`（还没连上过）。
+    pub transport: String,
+    /// `online` / `offline`。
+    pub conn_state: String,
+    /// 最近一次成功握手的 epoch 毫秒；`0` = 从未。
+    pub last_seen: i64,
+    /// WAN 的 relay 地址，LAN-only 时为空。
+    pub relay_addr: String,
+    /// 与这台对端上次同步到哪儿。见建表注释。
+    pub sync_cursor_ms: i64,
+    /// 上一次**真的同步成功**的时间（epoch 毫秒）；`0` = 从来没成功过。
+    ///
+    /// 🔴 为何必须落库：同名字段本来只存在 `SyncCtx.last` 那张**内存**表里，
+    /// 而那张表每次启动都是空的。于是任何失败的对端走 `or_default()`
+    /// 拿到 `last_ok_ms = 0`，被界面归成「从未成功过」——于是
+    /// `KbSyncStatusBar` 那套三档分级（已休眠 / 从未成功过 / 曾经好好的突然坏了）
+    /// **重启后全部塌成中间那档**：本该显示「连不上 X（两天前还好好的）」，
+    /// 实际显示成了「还没连上 2 台」。
+    ///
+    /// 不能拿 [`Self::sync_cursor_ms`] 充数：那是「同步到哪一次**改动**」的时间，
+    /// 与「上次同步发生在何时」可以差很远（一周没改东西、但天天在同步）。
+    #[serde(default)]
+    pub last_ok_ms: i64,
+    /// 用户暂停了这台设备的同步（仍配对、游标保留）。
+    #[serde(default)]
+    pub paused: bool,
+}
+
+/// 在线状态的两个取值。用常量而不是散在各处的字面量（规则 #11）。
+pub const CONN_ONLINE: &str = "online";
+pub const CONN_OFFLINE: &str = "offline";
+
+fn row_to_device(r: &rusqlite::Row) -> rusqlite::Result<Device> {
+    Ok(Device {
+        node_id: r.get(0)?,
+        name: r.get(1)?,
+        paired_at: r.get(2)?,
+        transport: r.get(3)?,
+        conn_state: r.get(4)?,
+        last_seen: r.get(5)?,
+        relay_addr: r.get(6)?,
+        sync_cursor_ms: r.get(7)?,
+        // ❗ 下标 8 = 追在 `COLS` 末尾的 `last_ok_ms`。同 `NOTE_COLS` 那条：
+        //   新列**只能追在末尾**，插中间会把后面所有下标推一位，
+        //   而那不报错、只是静默读错列。
+        last_ok_ms: r.get(8)?,
+        // 下标 9：新列只能追在 COLS 末尾（见上一条注释）。
+        paused: r.get::<_, i64>(9)? != 0,
+    })
+}
+
+const COLS: &str = "node_id, name, paired_at, transport, conn_state, last_seen, relay_addr, \
+     sync_cursor_ms, last_ok_ms, paused";
+
+impl DataStore {
+    /// 配对（或重新配对同一个 `node_id`）。
+    ///
+    /// ❗ 重复配对**只更新名字与 relay 地址**，不重置 `last_seen` 与 `conn_state`：
+    /// 那两个是连接层的事实，不该被一次配对操作抹掉。
+    pub fn device_pair(&self, node_id: &str, name: &str, relay_addr: &str) -> Result<(), String> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO devices (node_id, name, paired_at, transport, conn_state, last_seen, relay_addr)
+             VALUES (?1, ?2, ?3, '', ?4, 0, ?5)
+             ON CONFLICT(node_id) DO UPDATE SET name = ?2, relay_addr = ?5",
+            rusqlite::params![node_id, name, super::note::note_now(), CONN_OFFLINE, relay_addr],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    /// 已配对设备，按配对时间倒序。
+    pub fn device_list(&self) -> Result<Vec<Device>, String> {
+        let conn = self.lock_conn();
+        let mut st = conn
+            .prepare(&format!(
+                "SELECT {} FROM devices ORDER BY paired_at DESC, rowid DESC",
+                COLS
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map([], row_to_device)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn device_get(&self, node_id: &str) -> Result<Option<Device>, String> {
+        let conn = self.lock_conn();
+        match conn.query_row(
+            &format!("SELECT {} FROM devices WHERE node_id = ?1", COLS),
+            [node_id],
+            row_to_device,
+        ) {
+            Ok(d) => Ok(Some(d)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// 忘记此设备。返回是否真的删掉了一行。
+    ///
+    /// 🔴 这是**唯一**需要对端重新配对的用户操作，界面上必须二次确认。
+    pub fn device_forget(&self, node_id: &str) -> Result<bool, String> {
+        let conn = self.lock_conn();
+        conn.execute("DELETE FROM devices WHERE node_id = ?1", [node_id])
+            .map(|n| n > 0)
+            .map_err(|e| e.to_string())
+    }
+
+    /// 暂停 / 恢复一台设备的同步。返回是否真的改到了一行。
+    ///
+    /// 暂停 ≠ 忘记：身份与 `sync_cursor_ms` 都留着，恢复后接着传。
+    pub fn device_set_paused(&self, node_id: &str, paused: bool) -> Result<bool, String> {
+        let conn = self.lock_conn();
+        // 先读当前值：SQLite 对「UPDATE 成相同值」仍计 1 行，
+        // 直接看 changes 会把「本来就是暂停」报成「刚改成功」。
+        let current: Option<i64> = match conn.query_row(
+            "SELECT paused FROM devices WHERE node_id = ?1",
+            [node_id],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let want = if paused { 1 } else { 0 };
+        if current == want {
+            return Ok(false);
+        }
+        conn.execute(
+            "UPDATE devices SET paused = ?2 WHERE node_id = ?1",
+            rusqlite::params![node_id, want],
+        )
+        .map(|n| n > 0)
+        .map_err(|e| e.to_string())
+    }
+
+    /// 标记握手成功：置 `online`、记通道与时刻。
+    pub fn device_mark_online(
+        &self,
+        node_id: &str,
+        transport: &str,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE devices SET conn_state = ?2, transport = ?3, last_seen = ?4 WHERE node_id = ?1",
+            rusqlite::params![node_id, CONN_ONLINE, transport, now_ms],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    /// 读与这台对端的同步游标。没配对过就是 0（= 从头同步）。
+    pub fn device_cursor(&self, node_id: &str) -> i64 {
+        self.lock_conn()
+            .query_row(
+                "SELECT sync_cursor_ms FROM devices WHERE node_id = ?1",
+                [node_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    /// 推进同步游标。
+    ///
+    /// ❗ 用 `MAX` 而不是直接赋值：一次同步失败重试时可能传进一个更小的值，
+    /// 而游标**退回去**意味着下一轮把已经同步过的东西当成「两边都改过」——
+    /// 于是凭空造出一批冲突副本。
+    pub fn device_advance_cursor(&self, node_id: &str, ms: i64) -> Result<(), String> {
+        self.lock_conn()
+            .execute(
+                "UPDATE devices SET sync_cursor_ms = MAX(sync_cursor_ms, ?2) WHERE node_id = ?1",
+                rusqlite::params![node_id, ms],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// 记下「刚刚真的同步成功了」。只在 `Outcome::Synced` 时调。
+    ///
+    /// 🔴 用 `MAX` 而不是直接赋值，理由同 [`Self::device_advance_cursor`]：
+    /// 这个字段往回退意味着界面会把「刚刚还好好的」说成「很久以前好过」。
+    ///
+    /// ❗ 失败时**绝不调它**——那会把「曾经成功过」这件事抹成「刚刚成功过」，
+    ///   于是「对方一直没开机」与「上午还好好的现在坏了」又分不开了。
+    pub fn device_mark_synced(&self, node_id: &str, ms: i64) -> Result<(), String> {
+        self.lock_conn()
+            .execute(
+                "UPDATE devices SET last_ok_ms = MAX(last_ok_ms, ?2) WHERE node_id = ?1",
+                rusqlite::params![node_id, ms],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// 标记离线。
+    ///
+    /// ❗ **不动 `last_seen`**：它的语义是「最后一次在线是什么时候」，
+    /// 界面靠它显示「上次在线：3 小时前」。离线时把它刷成现在，那句话就永远是「刚刚」。
+    pub fn device_mark_offline(&self, node_id: &str) -> Result<(), String> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE devices SET conn_state = ?2 WHERE node_id = ?1",
+            rusqlite::params![node_id, CONN_OFFLINE],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+}

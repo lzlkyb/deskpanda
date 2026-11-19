@@ -1,0 +1,760 @@
+//! 发起端收流循环（Tier C 从 `service.rs` 拆出）。
+//!
+//! 原来是 `RcService::spawn_outbound_video` 里一个 127 行的 async block：
+//! 「会话判定 / TTL / 控制帧分派（vrect / clip / clip_err / pong / inject_err）/
+//! JPEG 整帧与脏块 / H.264 帧入帧池」全混在一起。现在圈成 `OutboundVideo`，
+//! 每类帧一个方法。🔴 `my_id` 语义同 `inbound.rs`：收口只按任务启动时的会话
+//! id 命中，不能按 peer（A2）。
+//!
+//! ⚠️ `run` 取 `mut self`（owned）而不是 `&self`/`&mut self` 引用：spawn 要求
+//! `Send`，owned 结构体只需要 `Send`；理由与 `inbound.rs` 相同。
+
+use super::protocol::RcFrame;
+use super::service::{now_ms, RcService};
+use super::video::{read_incoming, Incoming};
+use crate::rc::jpeg::jpeg_dimensions;
+use std::sync::Arc;
+
+/// 心跳间隔（发起端 → 被控端）。
+///
+/// 🔴 后台保活（2026-10-02）：心跳从前端 JS（`useRcHeartbeat`，已删）**下沉到
+/// Rust**。手机上 WebView 随 Activity 一 pause，JS 定时器全停——前端心跳跟着
+/// 死，被控端 15s 看门狗把会话收口，用户看到的就是「切后台再回来远程就断了」。
+/// Rust 线程不受 WebView 生命周期影响：只要进程活着（哪怕 WebView 冻了），
+/// ping 就一直在。只有进程本身被系统冻结/杀掉才停——那是 BgPause TTL 管的事。
+pub const HEARTBEAT_PING_MS: u64 = 1000;
+
+pub(super) struct OutboundVideo {
+    svc: Arc<RcService>,
+    peer: String,
+    /// 任务启动时的会话 id；收口只认它。
+    my_id: String,
+    recv: iroh::endpoint::RecvStream,
+    /// 🔴 断流时用它取「对端为什么关」：`RecvStream` 自己只有
+    ///   `connection lost`（`ReadError` 的 Display 不插值内层，见
+    ///   `service::explain` 的注释）——没有它，断流理由全丢。
+    conn: iroh::endpoint::Connection,
+    /// 与 JPEG 帧异步到达的脏矩形元数据：下一帧 JPEG 应用它。
+    pending_rect: Option<super::video::DirtyRect>,
+    /// 与 JPEG 帧异步到达的采集时间戳（vts 控制帧）：下一帧 JPEG 应用它。
+    /// H.264 帧的 ts 随 meta JSON 一起到，不走这里。
+    pending_ts: Option<i64>,
+    /// P0-2 延迟分段：vts 帧带来的采集/编码耗时，随下一帧 JPEG 应用。
+    pending_cap_ms: u16,
+    pending_enc_ms: u16,
+    /// 画布逻辑尺寸：整帧时从 JPEG 解出，脏块沿用。
+    canvas_w: u32,
+    canvas_h: u32,
+    /// RTT EMA（-1 = 尚无样本）与 NetHint 档位（滞回判定见
+    /// `stream_cfg::rtt_hint_tier`）。瞬时 RTT 尖刺不进 NetHint——否则
+    /// 被控端码率缩放抖动会反复重开编码器（~1s/次），帧率被钉死。
+    rtt_ema_ms: i64,
+    rtt_hint_tier: u8,
+    /// 起播宽限（2026-10-11）：头 `RTT_WARM_SAMPLES` 拍 pong 的最小值与计数，
+    /// 用来建 EMA 初值而不是拿首样当起点（口径与理由见 `stream_cfg::next_rtt_ema`）。
+    rtt_warm_min_ms: i64,
+    rtt_warm_samples: u32,
+    /// NetHint 节拍（2026-09-28）：档位变化立刻发；无变化也每 5 个 pong（≈5s）
+    /// 发一次，把帧龄排队压力 / FEC 帧粒度丢包反馈捎回去。
+    pongs_since_hint: u32,
+    /// 对端主动 End 帧带的理由（P2-10）：原先 End 只 return false，理由被丢，
+    /// 会话历史里记成「画面流中断」。注意它与 `end_reason`（断流 Err）分工：
+    /// 对端主动结束**不**触发自动重连，断流才触发。
+    peer_end_reason: Option<String>,
+    /// P2-1：数据报视频重组器（流路径与数据报路径共用一把 seq 尺子）。
+    /// 全平台（Android 2026-10-01 解禁，见 vid_dgram 模块头）。
+    reasm: std::sync::Arc<std::sync::Mutex<super::vid_dgram::VidReassembler>>,
+}
+
+impl OutboundVideo {
+    /// 会话存在、是出站活跃、且属于本 peer 才建；否则 `None`（启动前会话已结束）。
+    pub(super) fn try_new(
+        svc: Arc<RcService>,
+        peer: &str,
+        recv: iroh::endpoint::RecvStream,
+        conn: iroh::endpoint::Connection,
+    ) -> Option<Self> {
+        let my_id = {
+            let inner = svc.inner.lock().unwrap_or_else(|p| p.into_inner());
+            inner
+                .session
+                .as_ref()
+                .filter(|s| {
+                    s.phase == super::protocol::SessionPhase::OutboundActive && s.peer == peer
+                })
+                .map(|s| s.id.clone())
+        }?;
+        Some(Self {
+            svc,
+            peer: peer.to_string(),
+            my_id,
+            recv,
+            conn,
+            pending_rect: None,
+            pending_ts: None,
+            pending_cap_ms: 0,
+            pending_enc_ms: 0,
+            canvas_w: 0,
+            canvas_h: 0,
+            rtt_ema_ms: -1,
+            rtt_hint_tier: 0,
+            rtt_warm_min_ms: -1,
+            rtt_warm_samples: 0,
+            pongs_since_hint: 0,
+            peer_end_reason: None,
+            reasm: std::sync::Arc::new(std::sync::Mutex::new(
+                super::vid_dgram::VidReassembler::new(),
+            )),
+        })
+    }
+
+    pub(super) async fn run(mut self) {
+        // Q5：会话建立即把本机配置的码率倍率推给被控端（一次）。用户在会话中
+        // 改下拉走 rc_send_input；这里兜「上次设置的偏好要对这场会话生效」。
+        // 🔴 **无条件推**（2026-10-02）：默认从 100 改成 200（最高档起步）后，
+        // 旧写法 `pct != 100 才推` 有个陷阱——用户显式选「跟随链路 100%」时
+        // 不推，被控端停在自己的默认 200 上，意愿被无声覆盖。无条件推之后，
+        // 被控端的初值只是推送到达前的一瞬，两处的默认值不再要求一致。
+        // 此刻必是 OutboundActive（try_new 已核过）。
+        let pct = self.svc.user_bitrate_pct_from_cfg();
+        {
+            let svc = self.svc.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = svc
+                    .send_input(&super::input::InputEvent::SetBitratePct { pct })
+                    .await;
+            });
+        }
+        // 🔴 心跳任务（后台保活，2026-10-02）：见 `HEARTBEAT_PING_MS` 注释。
+        // 只服务本会话：`session_id_is` 按 id 认领——LAN 快速重连时同 peer 的
+        // 新会话起来后，旧任务下一拍自动退出，不会和新任务的 ping 叠成双份。
+        {
+            let svc = self.svc.clone();
+            let my_id = self.my_id.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(HEARTBEAT_PING_MS)).await;
+                    if !svc.session_id_is(&my_id) {
+                        return;
+                    }
+                    // ts 沿用 epoch ms：pong 用它测 RTT / 两机时钟偏差，
+                    // 两端唯一公共基座是墙钟（原 JS 实现同口径）。
+                    // 发送失败 = 会话已收口/正在收口，静默退出。
+                    if svc
+                        .send_input(&super::input::InputEvent::Ping {
+                            ts: Some(now_ms()),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+        // P0-4：发起端本端采样丢包率（收视频流的这条路 = 画质路径），
+        // 500ms 一拍喂给 status，HUD 显示「丢包 x.x%」。
+        self.spawn_loss_sampler();
+        // P2-1：视频数据报读取（P 帧低延迟通道），与可靠流并行
+        self.spawn_video_dgram_reader();
+        // 单入口派发音视频：旧对端仍可从主流送帧，新流到来无需等旧流排空。
+        self.spawn_media_acceptor();
+        // 🔴 P1-5：半开链路看门狗（判据不在这个循环里，原因见该方法注释）
+        self.spawn_heartbeat_watchdog();
+        // 断流的真实理由（Err 路径才有）；其它退出路径维持原来的「画面流中断」。
+        let mut end_reason: Option<String> = None;
+        loop {
+            if !self
+                .svc
+                .session_is(super::protocol::SessionPhase::OutboundActive, &self.peer)
+            {
+                break;
+            }
+            if self.svc.session_expired() {
+                log::info!("[RC] 发起端会话超过 TTL，自动结束");
+                self.svc.force_end_if_session(&self.my_id, "会话超时").await;
+                break;
+            }
+            // 🔴 链路活性第二证据位：**任何**成功到达的入站帧都刷新一次。收口在这一处
+            //（而不是散进下面各帧类型的分支）——以后新增帧类型自动覆盖，不会漏刷。
+            // 先绑定再匹配：`is_ok()` 与 `match` 分开写，原有分支结构不动。
+            let incoming = read_incoming(&mut self.recv).await;
+            if incoming.is_ok() {
+                self.svc.note_inbound();
+            }
+            match incoming {
+                Ok(Incoming::Control(bytes)) => {
+                    if !self.handle_control(&bytes) {
+                        break;
+                    }
+                }
+                Ok(Incoming::Jpeg(f)) => self.handle_jpeg(f),
+                Ok(Incoming::H264 {
+                    key,
+                    width,
+                    height,
+                    data,
+                    ts,
+                    cap_ms,
+                    enc_ms,
+                    sq,
+                    codec,
+                }) => self.handle_h264(key, width, height, data, ts, cap_ms, enc_ms, sq, codec),
+                Err(e) => {
+                    // ❗ 错误必须过 `explain`：对端以「未配对 / 忙 / 被禁」为由关连接时，
+                    //   `read_incoming` 报的原始错误只有 `读帧长度失败：connection lost`
+                    //   （`ReadError` 的 Display 不插值内层 `ConnectionError`）——
+                    //   不拼一下，断流理由全丢，用户只能猜「对方是不是关机了」。
+                    let e = super::service::explain(&self.conn, e);
+                    log::info!("[RC] 画面流结束：{e}");
+                    end_reason = Some(e);
+                    break;
+                }
+            }
+        }
+        // P0：收流失败 ≠ 用户点了结束，但会话必须收口，否则界面一直「可控」。
+        // 先比对 id 再清槽位——新会话建立时会直接覆盖 outbound_send，不清不会漏，
+        // 但若不比对，旧任务会把新会话的发送半流清掉。
+        if self.svc.session_id_is(&self.my_id) {
+            self.svc.clear_outbound_link().await;
+        }
+        // 断流理由能带就带（`end_session` 会把它记进历史 / 显示给用户）；
+        // 对端主动 End 的理由优先级最高（P2-10 修正：原先被丢、显示成
+        // 「画面流中断」）；非断流退出（会话已不在）维持原话。
+        let reason = self
+            .peer_end_reason
+            .clone()
+            .or_else(|| end_reason.clone())
+            .unwrap_or_else(|| "画面流中断".to_string());
+        // Q6：断流前取一场会话的能力/设备名（force_end 之后就没有会话可查了）
+        let ended = self.svc.session_brief_if(&self.my_id);
+        self.svc.force_end_if_session(&self.my_id, &reason).await;
+        // Q6：只在**异常断流**（读流 Err）时安排自动重连——用户主动结束、
+        // 对端主动结束、TTL 到期都不走这条（那些路径 end_reason 为 None）。
+        if end_reason.is_some() {
+            if let Some((cap, peer_name)) = ended {
+                self.svc
+                    .begin_auto_reconnect(&self.peer, peer_name, cap);
+            }
+        }
+    }
+
+    /// 🔴 P1-5（2026-09-23 审计）：发起侧的半开链路看门狗（1 秒一拍，有界退出）。
+    ///
+    /// # 为什么不放在 `run` 的圈顶
+    ///
+    /// `read_incoming` 在半开连接上是**无限期阻塞**的：对端不再发东西，而 QUIC
+    /// 侧迟迟不报错（拔线 / 进程被杀 / 笔记本合盖）。圈顶的判据因此永远轮不到，
+    /// 界面就一直挂着「已连接 + 一帧静止画面」。把它包进 `timeout` 看着更省事，
+    /// 但不能那么写：`read_exact` 不是**取消安全**的，读到一半弃会让帧读碎，
+    /// 下一圈从半截字节开始解——把一个「失联」故障升级成「花屏 + 解帧失败」。
+    /// 所以判据挪进伴生任务（`session_id_is` 保住只按本场会话收口的纪律）。
+    ///
+    /// # 为什么自动重连在这里安排，而不是等 Err 分支
+    ///
+    /// `force_end_if_session` 把会话 take 掉之后，Err 分支醒来时
+    /// `session_brief_if` 必然拿到 None（按 id 认领会话槽），在那里等重连
+    /// 等于永远不等。所以 brief 必须在**收口之前**取、重连在收口之后立刻排。
+    /// Err 分支自己那份 begin 不受影响：自然断流（先 Err 后无看门狗）走它，
+    /// 看门狗路径里它是 no-op（ended 已是 None），两条路各只安排一次。
+    fn spawn_heartbeat_watchdog(&self) {
+        let svc = self.svc.clone();
+        let my_id = self.my_id.clone();
+        let conn = self.conn.clone();
+        let peer = self.peer.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+                // 会话已被别的路径收口/换掉（用户结束、对端 End、TTL）→ 本任务交棒
+                if !svc.session_id_is(&my_id) {
+                    return;
+                }
+                if !svc.outbound_heartbeat_stale() {
+                    continue;
+                }
+                log::info!("[RC] 被控端失联（心跳超时），自动结束会话，恢复窗口={}ms",
+                    svc.heartbeat_timeout_ms());
+                // Q6：收口前取走能力/设备名——force_end 之后会话就没了
+                let ended = svc.session_brief_if(&my_id);
+                svc.force_end_if_session(&my_id, "对端失联（心跳超时）")
+                    .await;
+                // 唤醒堵死的读流任务（理由码/文案对端不解析，只为解阻塞）
+                conn.close(3u32.into(), b"rc-heartbeat-timeout");
+                // 真失联才重连（与 TTL 到期相反——那个不该再敲门）
+                if let Some((cap, peer_name)) = ended {
+                    svc.begin_auto_reconnect(&peer, peer_name, cap);
+                }
+                return;
+            }
+        });
+    }
+
+    /// P2-1：视频数据报读取任务。P 帧走 QUIC datagram（不可靠 + XOR FEC），
+    /// 重组完成的帧直接进 outbox；流路径的关键帧到达时（handle_h264）重置
+    /// 重组器。有界退出（P0-1 B5 同款）：500ms 一拍查会话。
+    ///
+    /// 全平台（Android 2026-10-01 解禁：vid_dgram 无平台依赖）。
+    fn spawn_video_dgram_reader(&self) {
+        {
+            let svc = self.svc.clone();
+            // 🔴 再审计 P3-8（2026-09-25）：退出判据从 peer 换成会话 id——LAN 快速
+            // 重连时新旧会话 peer 相同，旧任务组会因「peer 相同」误判自己仍存活；
+            // id 化后旧任务在下一拍（≤500ms）正确退出。spawn 前捕获本会话 id。
+            let my_id = self.my_id.clone();
+            let conn = self.conn.clone();
+            let reasm = self.reasm.clone();
+            tauri::async_runtime::spawn(async move {
+            let mut last_key_req: Option<std::time::Instant> = None;
+            loop {
+                if !svc.session_id_is(&my_id) {
+                    break;
+                }
+                let dg = tokio::select! {
+                    r = conn.read_datagram() => match r {
+                        Ok(b) => b,
+                        Err(_) => break,
+                    },
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => continue,
+                };
+                // 🔴 P3（2026-10-15）：pmtud 探针（0xD2）——原样回发。
+                // 回显到达被控端 = 本端**真的收到**了那个尺寸的数据报
+                // （收不到就不可能回），被控端据此才敢升 1400B 大分片。
+                // 回发失败（本地塞不下等）就吞掉：被控端探测超时自动保持
+                // 1000B，零风险。旧被控端发的探针不存在——此分支只对
+                // 新版对端生效，旧版互操作路径完全不进这段。
+                if dg.first() == Some(&super::pmtud::PROBE_TAG) {
+                    let _ = conn.send_datagram(dg.clone());
+                    continue;
+                }
+                let (frames, damaged) = {
+                    let mut g = reasm.lock().unwrap_or_else(|p| p.into_inner());
+                    let frames = g.feed(&dg);
+                    let damaged = g.take_damaged();
+                    (frames, damaged)
+                };
+                // P2-1 D1：数据报侧丢帧是「静默」的——帧根本到不了前端，前端只在
+                // 解码出错时才发 request_key。引用链断裂必须在这里喊话，把
+                // ForceKeyFrame 自愈从「等 1s 自然 GOP」提速到 RTT 级。限频 1s/次。
+                let due = last_key_req
+                    .map(|t| t.elapsed().as_millis() >= 1000)
+                    .unwrap_or(true);
+                if damaged && due {
+                    last_key_req = Some(std::time::Instant::now());
+                    super::probe_out::bump_damaged();
+                    let svc = svc.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = svc
+                            .send_input(&super::input::InputEvent::RequestKey)
+                            .await;
+                    });
+                }
+                for f in frames {
+                    // 2026-09-28：FEC 逐帧反馈——本帧靠校验片恢复过数据片就计数，
+                    // NetHint 按窗口捎回发送端上调 RS 冗余。
+                    if f.recovered {
+                        super::probe_out::bump_fec_recovered();
+                    }
+                    push_h264_frame(
+                        &svc,
+                        &my_id,
+                        f.key,
+                        f.width,
+                        f.height,
+                        f.data,
+                        f.at_ms,
+                        f.cap_ms,
+                        f.enc_ms,
+                        f.codec,
+                    );
+                }
+            }
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = &self.conn;
+        }
+    }
+
+    /// P0-4：发起端丢包率采样。用本端 QUIC stats 的窗口增量算 ‰，
+    /// EMA 平滑后写入 svc；窗口没有新包就不更新。
+    fn spawn_loss_sampler(&self) {
+        let svc = self.svc.clone();
+        // 🔴 再审计 P3-8（2026-09-25）：退出判据从 peer 换成会话 id——LAN 快速
+        // 重连时旧采样器会因「peer 相同」继续把旧连接的丢包数喂进新会话的 HUD；
+        // id 化后下一拍正确退出。spawn 前捕获本会话 id。
+        let my_id = self.my_id.clone();
+        let conn = self.conn.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut loss_sampler = crate::rc::media::LossSampler::default();
+            loop {
+                if !svc.session_id_is(&my_id) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Some((_, loss)) = loss_sampler.sample(&conn) {
+                    if loss >= 0 { svc.note_remote_loss(loss as u32); }
+                }
+            }
+        });
+    }
+
+    /// 控制帧：`End` 返 false（退出循环）；其余（vrect / vts / clip / clip_err /
+    /// pong / inject_err / cursor）就地消化，返 true 继续。
+    fn handle_control(&mut self, bytes: &[u8]) -> bool {
+        match RcFrame::decode(bytes) {
+            Ok(RcFrame::End { reason }) => {
+                log::info!("[RC] 对端结束：{reason}");
+                // 理由带出去进会话历史（P2-10）。不设 end_reason（那是断流
+                // Err 的标记，is_some 会触发自动重连）——对端主动结束不重连。
+                // 🔴 前缀「对端结束：」是归因：对方的原话「用户结束会话」与本机
+                // 主动结束一字不差，不加前缀前端无法拆分「我点的」与「对方点的」。
+                self.peer_end_reason = Some(format!("对端结束：{reason}"));
+                return false;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                // 可能是 vrect 元数据或剪贴板回包
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                    match v.get("t").and_then(|x| x.as_str()) {
+                        Some("vrect") => {
+                            self.pending_rect = Some(super::video::DirtyRect {
+                                x: v["x"].as_u64().unwrap_or(0) as u32,
+                                y: v["y"].as_u64().unwrap_or(0) as u32,
+                                w: v["w"].as_u64().unwrap_or(0) as u32,
+                                h: v["h"].as_u64().unwrap_or(0) as u32,
+                            });
+                        }
+                        Some("vts") => {
+                            // P2-10：采集时间戳随帧到，前端算「画面链路延迟」用
+                            self.pending_ts = Some(v["ts"].as_i64().unwrap_or(0));
+                            // P0-2：采集/编码耗时同帧到，HUD 分段显示
+                            self.pending_cap_ms = v["cap"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
+                            self.pending_enc_ms = v["enc"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
+                        }
+                        Some("cursor") => {
+                            // 🔴 B 方案（2026-10-02）：P1-6 的“只有形状”升级成
+                            // 形状 + 归一化位置。x/y 缺省 = 对端此刻不可见
+                            // （游戏/演示藏了光标），位置必须留空——
+                            // 拿旧坐标填一个假位置，前端会把光标摆在不存在的地方。
+                            let shape = v
+                                .get("s")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let nx = v.get("x").and_then(|x| x.as_u64());
+                            let ny = v.get("y").and_then(|x| x.as_u64());
+                            // u16 之外的数（历史/畸形包）丢弃成 None：宁可收起
+                            // 光标，也不要把一个溢出的坐标摆到画面上。
+                            let clamp_u16 = |n: u64| u16::try_from(n).ok();
+                            let cur = super::input::RemoteCursor {
+                                shape,
+                                x: nx.and_then(clamp_u16),
+                                y: ny.and_then(clamp_u16),
+                            };
+                            // 两个坐标必须成对：只有一个是残缺帧，位置不可信
+                            let cur = match (cur.x, cur.y) {
+                                (Some(_), None) | (None, Some(_)) => super::input::RemoteCursor {
+                                    x: None,
+                                    y: None,
+                                    ..cur
+                                },
+                                _ => cur,
+                            };
+                            self.svc.set_remote_cursor(cur);
+                        }
+                        Some("setting_ack") => {
+                            self.svc.receive_setting_ack(&self.my_id, &v);
+                        }
+                        Some("clip") => {
+                            if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
+                                self.svc.set_remote_clipboard(t.to_string());
+                            }
+                        }
+                        Some("clip_err") => {
+                            if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
+                                log::warn!("[RC] 剪贴板拉回失败：{e}");
+                                // P2-5：失败原因带给 pull_clipboard 转 Err（并推进
+                                // seq 唤醒等待）——不再折叠成空串冒充「剪贴板为空」。
+                                self.svc.clip_pull_failed(e.to_string());
+                            }
+                        }
+                        Some("pong") => {
+                            if let Some(ts) = v.get("ts").and_then(|x| x.as_i64()) {
+                                let t1 = now_ms();
+                                let rtt = t1.saturating_sub(ts);
+                                self.svc.note_rtt(rtt);
+                                // P0-1 A3：host 在收到 ping 时刻打 hts（它的时钟）。
+                                // 偏差（host−本机）= hts − (t1 − rtt/2)：网络对称假设下，
+                                // host 收包时刻折算到本机时钟是 t1 − rtt/2。
+                                if let Some(hts) = v.get("hts").and_then(|x| x.as_i64()) {
+                                    if hts > 0 && rtt > 0 {
+                                        let skew = hts - (t1 - rtt / 2);
+                                        self.svc.note_clock_skew(skew, rtt);
+                                        // 探针：记录本窗原始样本（未 EMA），供日志对读
+                                        super::probe_out::note_pong(rtt, skew);
+                                    }
+                                }
+                                // R5.B2 重做（2026-09-27）：NetHint 只认 **RTT EMA 的
+                                // 档位变化**（滞回判据收口在 `stream_cfg::rtt_hint_tier`）。
+                                // 旧判据「瞬时值 ±40ms 或跨 100/200 就发」在拖动时
+                                // 被控端 CPU 紧张造成的 RTT 尖刺（内网实测 6~17ms
+                                // 基线、尖刺 300~1200ms）反复击穿，被控端码率缩放
+                                // 25%↔40%↔60% 抖动 → 每次过迟滞都全链重开编码器
+                                // （~1s/次），帧率被钉死在个位数。EMA α=1/8（约 8 个
+                                // 样本收敛，1s 一拍 ≈ 8s 窗口）。
+                                let (ema, warm_min, warm_seen) = super::stream_cfg::next_rtt_ema(
+                                    self.rtt_ema_ms,
+                                    self.rtt_warm_min_ms,
+                                    self.rtt_warm_samples,
+                                    rtt,
+                                );
+                                // 起播宽限收闸的那一拍留一行：这一场「头 4 秒码率为什么不缩」
+                                // 只能从 EMA 建立的初值反推，否则又得靠猜。
+                                if self.rtt_ema_ms < 0 && ema >= 0 {
+                                    log::info!(
+                                        "[RC] RTT EMA 建立 {}ms（起播宽限 {} 拍取最小值）",
+                                        ema,
+                                        super::stream_cfg::RTT_WARM_SAMPLES
+                                    );
+                                }
+                                self.rtt_ema_ms = ema;
+                                self.rtt_warm_min_ms = warm_min;
+                                self.rtt_warm_samples = warm_seen;
+                                let (tier, changed) =
+                                    super::stream_cfg::rtt_hint_tier(self.rtt_hint_tier, self.rtt_ema_ms);
+                                // 2026-09-28：NetHint 节拍从「只在档位变化」扩成
+                                // 「档位变化 ∨ 排队压力超阈 ∨ 每 5 个 pong」——帧龄
+                                // 排队压力（AP 队列）只在帧龄里可见，pong 档位看不见；
+                                // FEC 反馈窗口也要按节奏清空。
+                                let queue = super::probe_out::age_ema_ms();
+                                let fec_fb = super::probe_out::take_frame_loss_feedback();
+                                let frame_loss_pm = fec_fb.map(|(dropped, delivered)| {
+                                    (dropped * 1000 / delivered.max(1)).min(1000) as i64
+                                });
+                                self.pongs_since_hint += 1;
+                                let due = self.pongs_since_hint >= 5;
+                                if changed || due || queue > 120 {
+                                    self.rtt_hint_tier = tier;
+                                    self.pongs_since_hint = 0;
+                                    if changed {
+                                        log::info!(
+                                            "[RC] RTT EMA {}ms → NetHint 档位 {tier}，告知对端调整码率",
+                                            self.rtt_ema_ms
+                                        );
+                                    }
+                                    let svc = self.svc.clone();
+                                    let ema = self.rtt_ema_ms;
+                                    // A-甲（2026-10-06）：`age_ema_ms()` 的「未采样」哨兵是
+                                    // **-1**，0 是「帧龄已归零」的确凿样本。旧写法 `> 0`
+                                    // 把两者压成同一个 None，对端那个槽因此只升不降
+                                    // （口径见 `stream_cfg::set_peer_queue_ms`）。
+                                    let q = if queue >= 0 { Some(queue) } else { None };
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = svc
+                                            .send_input(&super::input::InputEvent::NetHint {
+                                                rtt_ms: ema,
+                                                queue_ms: q,
+                                                frame_loss_pm,
+                                                media: None,
+                                            })
+                                            .await;
+                                    });
+                                }
+                            }
+                        }
+                        Some("host_audio") => {
+                            // G3-B/C：对端报来的**主机侧音频状态**。两者都是对端的事实，
+                            // 本机只负责如实显示：`local_mute` = 对方按了「不发送声音」，
+                            // `spk_mute` = 对方主机扬声器静音中。`err` 只在对方动作失败时带。
+                            let st = super::service::PeerHostAudio {
+                                local_mute: v
+                                    .get("local_mute")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                spk_mute: v.get("spk_mute").and_then(|x| x.as_bool()).unwrap_or(false),
+                                err: v.get("err").and_then(|x| x.as_str()).map(str::to_string),
+                            };
+                            self.svc.set_peer_host_audio(st);
+                        }
+                        Some("input_state") => {
+                            // 乙-③：对端报来的**主机侧输入权状态**。三条都是对方机器上的
+                            // 事实，本机只如实显示：`host_hold` = 对方收回了键鼠（我这边的
+                            // 输入正在被拦下），`lock_granted` = 对方允许我锁他的输入。
+                            let st = super::service::PeerInputState {
+                                host_hold: v
+                                    .get("host_hold")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                lock_granted: v
+                                    .get("lock_granted")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                lock_active: v
+                                    .get("lock_active")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
+                                err: v.get("err").and_then(|x| x.as_str()).map(str::to_string),
+                            };
+                            self.svc.set_peer_input_state(st);
+                        }
+                        Some("vpause") => {
+                            // 丙-③：对方暂停了向本机推送画面。这是**对方机器上的事实**，
+                            // 措辞不许越界成「连接断了/对方离线」——会话、键鼠、剪贴板都还通。
+                            let on = v.get("on").and_then(|x| x.as_bool()).unwrap_or(false);
+                            self.svc.set_peer_video_paused(on);
+                        }
+                        Some("vpipe") => {
+                            // 丙（2026-10-12，Issue #19）：对方报来的**编码管线档位**。
+                            // 缺字段 = 空串 ⇒ 前端读成「没收到」，不摆降级断言
+                            // （不许在这里给 `c` 兜一个默认档位，那是编造对端事实）。
+                            let code = v.get("c").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let label = v.get("p").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            self.svc.set_peer_video_pipe(&code, &label);
+                        }
+                        Some("caps") => {
+                            // P1：被控端画面能力（fps120 可用性 + 刷新率），UI 诚实出档
+                            let fps120 = v.get("fps120").and_then(|x| x.as_bool()).unwrap_or(false);
+                            let hz = v
+                                .get("hz")
+                                .and_then(|x| x.as_u64())
+                                .unwrap_or(0)
+                                .min(1000) as u32;
+                            // Q3：对端 HEVC 硬编可用性（旧版本对端没有这个字段 → false）
+                            let hevc = v.get("hevc").and_then(|x| x.as_bool()).unwrap_or(false);
+                            // P2.3：对端 AV1 硬编可用性（旧版本对端 → false）
+                            let av1 = v.get("av1").and_then(|x| x.as_bool()).unwrap_or(false);
+                            // Q7：对端在线显示器列表（旧版本对端没有这个字段 → 空表）
+                            let monitors: Vec<crate::platform::screen::MonitorInfo> = v
+                                .get("monitors")
+                                .and_then(|x| serde_json::from_value(x.clone()).ok())
+                                .unwrap_or_default();
+                            // R3：旧版对端（官方 7.2.1 及更早）没有这个字段 → false
+                            let dgram_input =
+                                v.get("dgram_input").and_then(|x| x.as_bool()).unwrap_or(false);
+                            // 探针（2026-09-27）：能力上报落日志——被控端硬编可用性
+                            // 分诊的第一手证据（caps 一次会话至多几条，量可忽略）。
+                            log::info!(
+                                "[RC] 对端 caps：fps120={fps120} hz={hz} hevc硬编={hevc} dgram_input={dgram_input} 显示器 {} 台",
+                                monitors.len()
+                            );
+                            self.svc.note_peer_caps(fps120, hz, hevc, av1, monitors, dgram_input);
+                        }
+                        Some("inject_err") => {
+                            if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
+                                log::warn!("[RC] 被控端注入失败：{e}");
+                                self.svc.set_inject_err(e.to_string());
+                            }
+                        }
+                        Some("clip_push_err") => {
+                            // D11：本端推过去的剪贴板，被控端明确没写进去
+                            // （只看会话 / 超限 / 写剪贴板失败）。过去这条腿连回帧
+                            // 都没有，界面照样报「已推送」——现在立刻报出原因。
+                            if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
+                                log::warn!("[RC] 推送剪贴板被拒/失败：{e}");
+                                self.svc.set_clip_push_err(e.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// JPEG 帧：整帧用轻量 JPEG 头读尺寸（不解像素）；脏块沿用画布尺寸。
+    ///
+    /// 🔴 帧同时进 `frame_outbox`：H.264 的 P 帧与 JPEG 脏块帧**都不能丢**，
+    /// 槽位 latest-wins 只能给旧命令兜底；新前端走 outbox 全序批量取。
+    fn handle_jpeg(&mut self, f: super::video::VideoFrame) {
+        self.svc.note_inbound();
+        let rect = self.pending_rect.take();
+        // P2-10：用被控端采集时刻（vts 帧带来）；旧对端没带就退回收包时刻
+        let ts = self
+            .pending_ts
+            .take()
+            .filter(|t| *t > 0)
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        // P0-2：采集/编码耗时（vts 帧带来；旧对端缺省 0 = HUD 不显示分段）
+        let cap_ms = self.pending_cap_ms;
+        let enc_ms = self.pending_enc_ms;
+        self.pending_cap_ms = 0;
+        self.pending_enc_ms = 0;
+        if rect.is_none() {
+            if let Some((w, h)) = jpeg_dimensions(&f.jpeg) {
+                self.canvas_w = w;
+                self.canvas_h = h;
+            }
+        }
+        let (w, h) = (self.canvas_w, self.canvas_h);
+        // 探针（2026-09-27）：JPEG 兜底帧也计数——「H.264 一帧没有 + JPEG 有帧」
+        // 即分诊结论：对端硬编没走起来。
+        super::probe_out::note_jpeg(ts, cap_ms, enc_ms, w, h, self.svc.clock_skew_ms());
+        let frame = super::video::VideoFrame {
+            width: w,
+            height: h,
+            jpeg: f.jpeg,
+            at_ms: ts,
+            full: rect.is_none(),
+            rect,
+            codec: super::video::FrameCodec::Jpeg,
+            key: rect.is_none(),
+            cap_ms,
+            enc_ms,
+        };
+        self.svc.set_frame(frame.clone());
+        self.svc.note_media_received(&self.my_id, &frame);
+        self.svc.push_outbox(frame);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_h264(
+        &mut self,
+        key: bool,
+        width: u32,
+        height: u32,
+        data: Vec<u8>,
+        ts: i64,
+        cap_ms: u16,
+        enc_ms: u16,
+        sq: u32,
+        codec: super::video::FrameCodec,
+    ) {
+        // P2-1：走流的关键帧 = 数据报重组器的锚。新对端的 sq 从 1 起（0 是
+        // 「旧对端无序号」的保留值，见 `vid_dgram.rs` 的 `VidDgramSender`）。
+        // 全平台（Android 2026-10-01 解禁）。
+        let mut drained: Vec<super::vid_dgram::ReasmFrame> = Vec::new();
+        if key && sq > 0 {
+            drained = self
+                .reasm
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .reset_after_stream_key(sq);
+        }
+        push_h264_frame(&self.svc, &self.my_id, key, width, height, data, ts, cap_ms, enc_ms, codec);
+        // D2：锚定后按序补交付缓冲完整的 P 帧——走流的关键帧被拥塞延迟时，
+        // 先到的数据报 P 帧已缓存，等锚一到就能续播（不再整 GOP 作废）。
+        for f in drained {
+            push_h264_frame(
+                &self.svc,
+                &self.my_id,
+                f.key,
+                f.width,
+                f.height,
+                f.data,
+                f.at_ms,
+                f.cap_ms,
+                f.enc_ms,
+                f.codec,
+            );
+        }
+    }
+}
+
+mod media;
+mod push;
+use push::push_h264_frame;
+
+#[cfg(test)]
+mod tests;

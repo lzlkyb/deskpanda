@@ -1,0 +1,319 @@
+//! 画质 / 码率 / 自动档 / RTT 流控（流参数与编码档位）。
+//!
+//! 2026-09-22 从 `service.rs` 平移（体量合规）。`use crate::rc::*` 沿用
+//! `service/mod.rs` 的全部名字；方法体未改动，仅 `pub(super)` 方法
+//! 升级为 `pub(in crate::rc)`（原语义就是「rc 子树可见」）。
+
+use super::*;
+
+impl RcService {
+    /// RTT 变化通知链路层（`outbound.rs` 解析出 `t:"pong"` 后调用）。
+    ///
+    /// 一次调用喂两个消费者：RTT 数值进 `stream`（码率自适应要用），
+    /// **「收到过 pong」这个事实**进 `link`（界面判活性的唯一证据）。
+    ///
+    /// 🔴 `rtt_ms <= 0` **不算** pong：那是会话开始 / 结束时的清零复位
+    ///   （`note_rtt(0)` 在两个收尾点被调用）。不区分的话，会话一建立
+    ///   界面就报「已连接」，把真正的首包延迟掩盖掉。
+    /// 🔴 P1-5 后续：链路活性**第二证据位**——「刚刚收到过对端的任何东西」。
+    ///
+    /// 调用点收口在 `outbound::OutboundVideo::run` 一处（读流一成功就刷，不分帧类型）。
+    /// 为什么需要它、以及它修掉了什么，见 `link::LinkState::last_inbound_ms` 的字段
+    /// 注释与 `session::lifecycle::outbound_heartbeat_stale`。
+    pub fn note_inbound(&self) {
+        self.link.note_inbound();
+    }
+
+    pub fn note_rtt(&self, rtt_ms: i64) {
+        self.stream.note_rtt(rtt_ms);
+        // ❗ `rtt_ms == 0` 是**清零复位**（`end_session` 与发起失败路径都调它），
+        //    不是一次测量 —— 别把它当成「收到 pong」，否则会话一建立界面就报
+        //    「已连接」，把首包延迟掩盖掉。
+        if rtt_ms > 0 {
+            self.link.note_pong(rtt_ms);
+        }
+    }
+
+    pub fn last_rtt_ms(&self) -> i64 {
+        self.stream.rtt_ms()
+    }
+
+    /// 会话建立时用本机配置初始化推流参数。
+    pub fn reset_stream_opts_from_cfg(&self) {
+        let cfg = self.cfg();
+        // 2026-09-22：硬编可用性进自动梯子（fps60 天花板只给有硬编的机器）。
+        // caps 是 OnceLock 单例，便宜；非 Windows 无硬编 → false。
+        #[cfg(target_os = "windows")]
+        let h264_gpu = crate::rc::gpu::encode_caps().h264_gpu;
+        #[cfg(not(target_os = "windows"))]
+        let h264_gpu = false;
+        self.stream.reset_from_cfg(
+            profile_from_cfg(&cfg),
+            virtual_screen_from_cfg(&cfg),
+            auto_from_cfg(&cfg),
+            codec_from_cfg(&cfg),
+            h264_gpu,
+        );
+    }
+
+    /// 发起端配置的码率倍率（Q5）。缺省 = [`DEFAULT_USER_BITRATE_PCT`]（200，
+    /// 最高档起步、弱网由 auto 缩放压回，见该常量注释）；配置损坏按缺省算。
+    pub(crate) fn user_bitrate_pct_from_cfg(&self) -> u32 {
+        self.cfg()
+            .get(CFG_BITRATE_PCT)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(super::super::stream_cfg::DEFAULT_USER_BITRATE_PCT)
+            .clamp(50, 200)
+    }
+
+    /// 被控端：应用发起端推来的码率倍率（Q5，`SetBitratePct`）。
+    pub fn set_user_bitrate_pct(&self, pct: u32) -> Result<(), String> {
+        self.stream.set_user_bitrate_pct(pct)
+    }
+
+    /// 发起端在会话中改画质（五档实名或 "auto"）。
+    pub fn set_stream_quality(&self, quality: &str) -> Result<(), String> {
+        // D6：能力档 API 层也要设防——UI 门控（visibleQualities）只挡得住正常
+        // 路径，挡不住直连接口/旧前端的请求；放行会让主机用 CPU 管线按 8ms
+        // 硬跑。范围中途切到多屏的场景由推流循环的降档兜底（D6b）。
+        // 2026-09-22：fps120 特判泛化成能力档表（fps144/fps165 进表），刷新率
+        // 下限按档位各自要求；判据与 caps 上报的 fps_high 同源，写两遍必漂移。
+        if let Some(min_hz) = crate::rc::video::high_fps_min_hz(quality) {
+            #[cfg(target_os = "windows")]
+            {
+                let caps = crate::rc::gpu::encode_caps();
+                if !caps.h264_gpu {
+                    return Err(format!("{quality} 档需要硬件 D3D11 编码器，本机不可用"));
+                }
+                if caps.refresh_hz < min_hz {
+                    return Err(format!(
+                        "主屏刷新 {}Hz，{} 档需要 ≥{min_hz}Hz",
+                        caps.refresh_hz, quality
+                    ));
+                }
+            }
+            #[cfg(target_os="macos")]
+            {
+                let opts=self.stream_opts_snapshot();
+                let(hz,high)=crate::rc::mac_video::scope_support(opts.monitor,opts.virtual_screen);
+                if high==0 || hz<min_hz {return Err(format!("{quality} 档需要单屏纹理采集、硬件 H.264 编码和 ≥{min_hz}Hz 刷新率；当前 {hz}Hz"));}
+            }
+            #[cfg(not(any(target_os="windows",target_os="macos")))]
+            {let _=min_hz;return Err(format!("{quality} 档需要支持硬件编码的电脑"));}
+        }
+        // Q4：uhd60 要求 HEVC 硬编——4K60 的 H.264 需要 L5.2（多数解码端跑不动
+        // 或兼容性差），HEVC L5.1 即覆盖且同画质省一半带宽。没有 HEVC MFT 就
+        // 诚实拒绝，不静默降成超规格流。
+        if quality == "uhd60" {
+            #[cfg(target_os = "windows")]
+            {
+                let caps = crate::rc::gpu::encode_caps();
+                if !caps.h264_gpu {
+                    return Err("本机没有硬件 D3D11 编码器，4K60 档不可用".into());
+                }
+                if !caps.hevc_hw {
+                    return Err("本机没有硬件 HEVC 编码器，4K60 档不可用（H.264 无法稳定 4K60）".into());
+                }
+            }
+            #[cfg(target_os="macos")]
+            {if !crate::rc::mac_video::hardware_available(true){return Err("本机没有可用硬件 HEVC 编码器，4K60 档不可用".into());}}
+            #[cfg(not(any(target_os="windows",target_os="macos")))]
+            {return Err("4K60 档需要支持硬件编码的电脑".into());}
+        }
+        self.stream.set_quality(quality)?;
+        // 🔴 复测 B（2026-10-06）的教训：这条路径是全仓唯一能在会话中关掉自动档的
+        //    入口（发起端推来实名档），而它过去一条日志都不打——自动档被关后
+        //    PERF 行的判档快照只是「消失」，根因只能靠反推。锁档/恢复必须留痕。
+        log::info!(
+            "[RC] 画质已切换为「{quality}」{}",
+            if quality == "auto" {
+                "（自动档恢复）"
+            } else {
+                "（锁档：自动档已关闭）"
+            }
+        );
+        Ok(())
+    }
+
+    /// 推流循环每帧喂一次画面字节数；自动档开启时据此换档（2A）。
+    pub fn auto_note_frame(&self, bytes: usize) {
+        self.stream.auto_note_frame(bytes, now_ms());
+    }
+
+    /// 自动档是否开启（status 组装用）。
+    pub fn auto_enabled(&self) -> bool {
+        self.stream.auto_enabled()
+    }
+
+    /// 自动档当前生效的档位名。
+    pub fn auto_tier_name(&self) -> String {
+        self.stream.auto_tier_name()
+    }
+
+    /// 自动档最近一次判档的输入快照（汇总行用，见 `StreamCfg::auto_diag`）。
+    pub fn auto_diag(&self) -> String {
+        self.stream.auto_diag()
+    }
+
+    /// 会话收尾时复位推流侧的**会话级**状态（`end_session` 调）。
+    ///
+    /// 目前只有自动档：它与会话同生命周期，跨会话残留会让界面显示上一场
+    /// 会话停留的档位（见 `StreamCfg::auto_reset`）。
+    pub(in crate::rc) fn reset_stream_after_session(&self) {
+        self.stream.auto_reset();
+    }
+
+    /// 被控端：对端上报 RTT，返回当前 H.264 码率缩放（%）。
+    pub fn set_peer_rtt(&self, rtt_ms: i64) -> u32 {
+        self.stream.set_peer_rtt(rtt_ms)
+    }
+
+    /// 被控端：QUIC stats 采样（推流任务）喂本端链路状况 → 码控（P0-4）。
+    /// 发起端 NetHint 携带的帧龄排队压力（2026-09-28，弱网快速码控信源）。
+    pub(in crate::rc) fn set_peer_queue_ms(&self, queue_ms: i64) {
+        self.stream.set_peer_queue_ms(queue_ms);
+    }
+
+    /// 发起端 NetHint 携带的帧粒度丢包反馈（permille）。
+    pub(in crate::rc) fn note_peer_frame_loss(&self, permille: i64) {
+        self.stream.note_peer_frame_loss(permille);
+    }
+
+    pub(in crate::rc) fn note_stream_health(&self, rtt_ms: i64, loss_permille: i64, bw_kbps: i64) {
+        self.stream.note_stream_health(rtt_ms, loss_permille, bw_kbps);
+    }
+
+    /// 发起端：pong 带回的时钟偏差样本（P0-1 A3）。
+    pub(in crate::rc) fn note_clock_skew(&self, sample_ms: i64, rtt_ms: i64) {
+        self.stream.note_clock_skew(sample_ms, rtt_ms);
+    }
+
+    pub(in crate::rc) fn clock_skew_ms(&self) -> i64 {
+        self.stream.clock_skew_ms()
+    }
+
+    /// 发起端：被控端上报的画面能力（P1 caps 控制帧）。UI 据此诚实出 fps120 档。
+    /// Q3：caps 带 HEVC 硬编可用性；Q7：caps 顺带带上对端在线显示器列表。
+    pub(in crate::rc) fn note_peer_caps(
+        &self,
+        fps120: bool,
+        refresh_hz: u32,
+        hevc: bool,
+        av1: bool,
+        monitors: Vec<crate::platform::screen::MonitorInfo>,
+        dgram_input: bool,
+    ) {
+        self.peer_fps120
+            .store(fps120, std::sync::atomic::Ordering::Relaxed);
+        self.peer_refresh_hz
+            .store(refresh_hz.min(1000), std::sync::atomic::Ordering::Relaxed);
+        self.peer_hevc
+            .store(hevc, std::sync::atomic::Ordering::Relaxed);
+        self.peer_av1
+            .store(av1, std::sync::atomic::Ordering::Relaxed);
+        self.peer_dgram_input
+            .store(dgram_input, std::sync::atomic::Ordering::Relaxed);
+        *self.peer_monitors.lock().unwrap_or_else(|p| p.into_inner()) = monitors;
+    }
+
+    pub fn peer_fps120(&self) -> bool {
+        self.peer_fps120.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 发起端视角：被控端是否支持 HEVC 硬编（Q3 caps）。
+    pub fn peer_hevc(&self) -> bool {
+        self.peer_hevc.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// P2.3：发起端视角——被控端 caps 声明的 AV1 硬编可用性。
+    pub fn peer_av1(&self) -> bool {
+        self.peer_av1.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+
+    /// 发起端视角：被控端 caps 是否声明可读鼠标数据报（R3）。false = 旧版。
+    pub fn peer_dgram_input(&self) -> bool {
+        self.peer_dgram_input.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn peer_refresh_hz(&self) -> u32 {
+        self.peer_refresh_hz
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 发起端：本端丢包率采样（收流任务）→ status/HUD（P0-4）。
+    pub(in crate::rc) fn note_remote_loss(&self, permille: u32) {
+        self.remote_loss_permille
+            .store(permille.min(1000), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// P3.1：本端 QUIC 实测丢包率（‰）。视频发送方据此逐帧选 RS 冗余 m。
+    /// 未采样（会话刚开始）返回 0 → m=1，最省带宽；采样到来后自动跟随。
+    pub(in crate::rc) fn loss_permille(&self) -> i64 {
+        self.stream.loss_permille()
+    }
+
+    /// 视频传输路选择用的当前 RTT（对端上报优先，退本端采样；0 = 未采样）。
+    pub(in crate::rc) fn video_rtt_ms(&self) -> i64 {
+        self.stream.video_rtt_ms()
+    }
+
+    pub fn bitrate_scale(&self) -> u32 {
+        self.stream.bitrate_scale()
+    }
+
+    /// 本场会话是否已收到过对端码率/链路信息（被控端起播宽限提前收闸用）。
+    pub fn peer_net_seen(&self) -> bool {
+        self.stream.peer_net_seen()
+    }
+
+    /// 发起端在会话中改截取范围。
+    ///
+    /// ⚠️ 这个入口**故意不发** `emit_scope_changed`：本机用户在设置页自己改范围
+    /// 不该收到「有人改了你的画面范围」。只有入站路径
+    /// （`handle_inbound_input` 的 `SetCaptureScope`）才通知。
+    /// `rc/tests.rs` 有专门断言，搬动时别把通知顺手加进来。
+    pub fn set_stream_scope(&self, scope: &str) -> Result<(), String> {
+        self.stream.set_scope(scope)
+    }
+
+    /// 发起端：H.264 解不出时强制本会话走 JPEG；`codec=h264` 可再打开。
+    pub fn set_stream_codec(&self, codec: &str) -> Result<(), String> {
+        self.stream.set_codec(codec)
+    }
+
+    pub(in crate::rc) fn stream_opts_snapshot(&self) -> StreamOpts {
+        self.stream.snapshot()
+    }
+
+    /// 🔴 C3：喂给 `StreamCfg` 的「现在」换成单调钟——3.5s 暂停判据与 15s 看门狗
+    /// 共用同一份 `last_activity_ms`，域必须一致（`inbound_disconnect_reason` 使用 mono）。
+    /// `StreamCfg` 本身保持假时钟纪律（时间由调用方传入，便于单测）。
+    pub fn touch_activity(&self) {
+        self.stream.touch_activity(crate::rc::mono::mono_ms());
+    }
+
+    /// 是否应暂停推流：会话开始后长时间无心跳/输入。
+    pub fn should_pause_stream(&self) -> bool {
+        self.stream.should_pause(crate::rc::mono::mono_ms())
+    }
+
+    /// 🔴 P1-5（2026-09-23 审计）：被控端最后一次收到对端输入/心跳的时刻
+    /// （🔴 C3 起为**单调 ms**，0 = 还没收到过）。
+    ///
+    /// 半开链路看门狗要的是**证据本身**：`should_pause_stream` 那个布尔只答
+    /// 「超过 3.5s 没有」，撑不起「超过 15s 该收口」这第二个判据——自己再记一份
+    /// 时间就是两个数据源，迟早对不上。
+    pub(in crate::rc) fn last_activity_ms(&self) -> i64 {
+        self.stream.last_activity_ms()
+    }
+
+    pub fn encode_profile(&self) -> crate::rc::video::EncodeProfile {
+        profile_from_cfg(&self.cfg())
+    }
+
+    pub fn capture_virtual_screen(&self) -> bool {
+        virtual_screen_from_cfg(&self.cfg())
+    }
+}

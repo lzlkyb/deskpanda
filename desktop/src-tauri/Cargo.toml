@@ -12,6 +12,17 @@ default = ["notifications"]
 # （见 build.rs），与 notification 插件无直接关系；但默认关闭它能让测试
 # 二进制少链一堆 GUI 原生代码，保持测试轻量。
 notifications = ["dep:tauri-plugin-notification"]
+# 实验特性：绕中继时尝试 EasyTier 打洞（`rc/underlay/`）。**默认关**。
+# 保留成显式 feature 而不是删掉那段代码：`rc/underlay.rs` 的 `cfg!(feature = ...)`
+# 是「默认值」，真正开关还在配置项 `rc_easytier_enabled` 上；
+# 写成不存在的 feature 会让每次编译都报 unexpected_cfgs（CI 视警告为噪音）。
+easytier-underlay = []
+# 接线守卫：`rc/tests/guards.rs` 里那几条「命令注册 / capabilities / 前端 invoke」
+# 三侧成对的守卫。它们要读 `lib.rs` 的 invoke_handler、`capabilities/*.json`、
+# 以及 `desktop/src/lib/api/rcCommands.ts`——**S4 前端与命令接线落地之前不存在**。
+# 默认关不是「跳过测试」，而是「这些守卫的审计对象还没被造出来」；
+# S4 接完线后跑 `cargo test --features ui-guards` 打开（见拆分方案 §S4）。
+ui-guards = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -33,12 +44,16 @@ tauri-plugin-opener = "2"
 # navigator.clipboard Web API，没有任何 invoke 调用它们；Rust 侧也零使用
 # （原本只是无脑注册）。少两个插件 = 少两份 IPC 命令面 + 二进制更小。
 
-# Async runtime（后台任务：可见性复核、任务自愈重启）
-tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+# Async runtime（后台任务：可见性复核、任务自愈重启；rc 需要 full）
+tokio = { version = "1", features = ["full"] }
 
 # Serialization（配置 JSON 持久化 + 更新事件推送）
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` 不是可选项：rc 有一条**跨端字节契约**测试
+# （`rc::wts_watch::frame_bytes_are_pinned`）钉住 `{"t":"wts","locked":…}` 的字段顺序，
+# 控端按这两个字节串解析。不开这个 feature，`serde_json::json!` 走 BTreeMap 会按
+# 字典序输出成 `{"locked":…,"t":"wts"}`，契约当场失效（且只在测试红，线上是静默不兼容）。
+serde_json = { version = "1", features = ["preserve_order"] }
 
 # 日志（env_logger 初始化在 main.rs）
 log = "0.4"
@@ -47,12 +62,86 @@ env_logger = "0.11"
 # 托盘图标代码绘制（PNG 解码 + 缩放 + 状态圆点）
 png = "0.17"
 
-# Windows 专属：DWM 圆角（Win11 窗口装饰）
+# ── 远程桌面（rc，从 PastePanda 迁入）──
+# 传输层：LAN 直连与跨网打洞/relay 共用同一套栈（见 PastePanda 的同段注释）。
+# feature 取舍：tls-ring 必须（预设要 crypto provider，且 ring 已在依赖树）；
+# portmapper 保留（UPnP/PCP 提高 NAT 打洞成功率）；metrics / fast-apple-datapath 去掉。
+iroh = { version = "1.1", default-features = false, features = [
+    "tls-ring",
+    "portmapper",
+    "unstable-net-report",
+] }
+# BBR3 拥塞控制；版本必须与 iroh 内用的 noq-proto 一致（靠文末 patch 钉住同一份）
+noq-proto = "1.2.0"
+# 编解码 / 加密 / 序列化
+ring = "0.17"
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash", "rand"] }
+sha2 = "0.10"
+image = { version = "0.25", features = ["png"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+hostname = "0.4"
+futures-util = "0.3"
+thiserror = "2"
+# 设备表 / 设置（rc 的 rc_devices 等）
+rusqlite = { version = "0.31", features = ["bundled"] }
+# 局域网发现：逐块网卡组播（见 net/mcast.rs 的「为什么不能用 INADDR_ANY」）
+netdev = "0.46"
+socket2 = "0.6"
+# NV12/BGRA 缩放（本地 crate，原 pastepanda-rc-scale 改名）
+deskpanda-rc-scale = { path = "crates/rc-scale" }
+# rc/underlay/fetch.rs 拉取公告（rustls 免 OpenSSL 构建依赖）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# rc/input.rs 的剪贴板回退路径
+arboard = { version = "3", features = ["image-data"] }
+# argon2 的 OsRng 依赖 rand_core 的 getrandom feature；主 App 靠其他依赖合并启用，
+# 新仓没有那些依赖，必须显式声明，否则 unop.rs 的 SaltString::generate 编译不过。
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Windows 专属：DWM 圆角（壳）+ 远程桌面的采集/编码/输入/音频绑定
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.56", features = [
+windows = { version = "0.58", features = [
+  "implement",
+  # 壳：Win11 窗口装饰
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
+  # rc：会话 / 输入注入 / 窗口枚举
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
+  # dpapi：设备身份种子的静态加密（CryptProtectData）
+  "Win32_Security_Cryptography",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_SystemServices",
+  "Win32_Graphics_Gdi",
+  # rc：DXGI Desktop Duplication + D3D11 抓帧
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  # rc：Media Foundation 硬件 H.264 / HEVC
+  "Win32_Media_MediaFoundation",
+  "Win32_Media",
+  # rc：WIC 编 JPEG（系统自带，零额外体积）
+  "Win32_Graphics_Imaging",
+  "Win32_System_Variant",
+  "Win32_System_Com_StructuredStorage",
+  # rc：WASAPI 环回采集（系统声音）+ 端点音量（远程静音）
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  # rc：会话防休眠 / 锁屏感知
+  "Win32_System_Power",
+  "Win32_System_RemoteDesktop",
+  "Win32_System_StationsAndDesktops",
+  "Win32_UI_Shell",
+  "Win32_UI_HiDpi",
+  "Win32_Storage_FileSystem",
 ] }
+# rc/mod.rs：读注册表判断远程桌面会话等
+winreg = "0.52"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
@@ -70,3 +159,9 @@ codegen-units = 16
 lto = "thin"
 opt-level = "s"
 strip = "symbols"
+
+# Keep iroh and the application on one noq-proto type, with the tested BBR backport.
+# 不加这条：iroh 内部的 noq-proto 与直接依赖会是两个不同实例，rc/net.rs 的
+# 传输配置（拥塞控制）编译不过。副本与 PastePanda 同源。
+[patch.crates-io]
+noq-proto = { path = "vendor/noq-proto" }
