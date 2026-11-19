@@ -313,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "notifications")]
     let builder = builder.plugin(tauri_plugin_notification::init());
 
-    builder
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -461,19 +461,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_config,
-            commands::save_config,
-            commands::get_autostart,
-            commands::set_autostart,
-            commands::install_dir,
-            commands::reveal_install_dir,
-            commands::open_external,
-            commands::get_app_info,
-            commands::start_update,
-            commands::check_update,
-        ])
+        });
+
+    // ── 命令注册 ────────────────────────────────────────────────────────
+    //
+    // ❗ 这里为什么是两段而不是一段：`tauri::generate_handler!` 不接受逐项
+    // `#[cfg]`（它只吃 `path` 列表）。而 `commands::rc*` 三块依赖 `rc::`，
+    // 后者整体按 `cfg(windows)` 门控（采集/编码/音频/输入注入都是 Win32 绑定）
+    // ⇒ 非 Windows 构建里那些符号根本不存在，整条列表编不过。
+    //
+    // **两段里的壳子命令必须一致**：`commands/mod.rs` 的 `registry_guard`
+    // 单测会从本文件里抠出两个列表做子集比对，漏同步会直接红。
+    #[cfg(windows)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        // —— 壳子（全平台）——
+        commands::get_config,
+        commands::save_config,
+        commands::get_autostart,
+        commands::set_autostart,
+        commands::install_dir,
+        commands::reveal_install_dir,
+        commands::open_external,
+        commands::get_app_info,
+        commands::start_update,
+        commands::check_update,
+        // —— 远程电脑 · 配对与设备 ——
+        commands::rc_status,
+        commands::rc_identity,
+        commands::rc_targets,
+        commands::rc_probe_targets,
+        commands::rc_short_pair_code,
+        commands::rc_short_pair_begin,
+        commands::rc_short_pair_cancel,
+        commands::rc_pin_pair_begin,
+        commands::rc_invite_create,
+        commands::rc_invite_preview,
+        commands::rc_invite_revoke,
+        commands::rc_exchange_begin,
+        commands::rc_exchange_check,
+        commands::rc_pair,
+        commands::rc_device_rename,
+        commands::rc_device_tags_set,
+        commands::rc_device_remark_set,
+        commands::rc_forget,
+        commands::rc_join_approve,
+        commands::rc_join_deny,
+        // —— 远程电脑 · 通道与会话 ——
+        commands::rc_set_enabled,
+        commands::rc_start_channel,
+        commands::rc_set_capability,
+        commands::rc_set_device_allowed,
+        commands::rc_request_session,
+        commands::rc_cancel_request,
+        commands::rc_clear_outbound_error,
+        commands::rc_approve_inbound,
+        commands::rc_deny_inbound,
+        commands::rc_device_trust_set,
+        commands::rc_device_auto_accept_set,
+        commands::rc_end_session,
+        commands::rc_keepalive_set,
+        commands::rc_session_display,
+        commands::rc_require_active,
+        // —— 远程电脑 · 免密与一次性凭证 ——
+        commands::rc_uno_generate,
+        commands::rc_uno_revoke,
+        commands::rc_uno_pass_enable,
+        commands::rc_uno_pass_disable,
+        commands::rc_uno_pass_set_wan,
+        // —— 远程电脑 · 画面 / 音频 / 输入 ——
+        commands::rc_latest_frame,
+        commands::rc_drain_frames,
+        commands::rc_drain_audio,
+        commands::rc_audio_toggle,
+        commands::rc_set_audio_local_mute,
+        commands::rc_host_mute_set,
+        commands::rc_video_pause_set,
+        commands::rc_input_hold,
+        commands::rc_input_lock_grant,
+        commands::rc_send_input,
+        commands::rc_set_quality,
+        commands::rc_set_bitrate_pct,
+        commands::rc_set_keep_awake,
+        commands::rc_encode_caps,
+        commands::rc_list_monitors,
+        commands::rc_set_capture_scope,
+        commands::rc_apply_setting,
+        // —— 远程电脑 · 工作台窗口与剪贴板 ——
+        commands::rc_open_workbench,
+        commands::rc_push_clipboard,
+        commands::rc_pull_clipboard,
+        commands::rc_window_minimize,
+        commands::rc_window_toggle_maximize,
+        commands::rc_window_close,
+        commands::rc_fit_window_to_video,
+        // —— 远程电脑 · 历史 ——
+        commands::rc_session_history,
+        commands::rc_history_clear,
+        // —— 远程电脑 · 文件传输 ——
+        commands::rc_file_send,
+        commands::rc_file_pull,
+        commands::rc_file_respond,
+        commands::rc_file_cancel,
+        commands::rc_file_clear_finished,
+        commands::rc_file_snapshot,
+        commands::rc_file_default_dir,
+        commands::rc_file_receive_dir_set,
+        commands::rc_file_send_blob_abort,
+        commands::rc_file_send_blob,
+        // —— 远程电脑 · 局域网附近设备 ——
+        commands::rc_nearby_status,
+        commands::rc_nearby_pair,
+        commands::rc_nearby_confirm,
+        commands::rc_nearby_cancel,
+    ]);
+    #[cfg(not(windows))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        // 与上面 Windows 段的壳子部分**必须一致**（见段首注释）。
+        commands::get_config,
+        commands::save_config,
+        commands::get_autostart,
+        commands::set_autostart,
+        commands::install_dir,
+        commands::reveal_install_dir,
+        commands::open_external,
+        commands::get_app_info,
+        commands::start_update,
+        commands::check_update,
+    ]);
+
+    builder
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 // 读「关窗时释放界面内存」开关。同步回调里不能 await，所以用 try_read；
@@ -509,8 +625,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 static LAST_MINIMIZED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 let minimized = window.is_minimized().unwrap_or(false);
-                if LAST_MINIMIZED.swap(minimized, std::sync::atomic::Ordering::Relaxed)
-                    != minimized
+                if LAST_MINIMIZED.swap(minimized, std::sync::atomic::Ordering::Relaxed) != minimized
                 {
                     let _ = window.emit("app:visibility", !minimized);
                 }
@@ -545,7 +660,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             //
             // 只拦 `code: None`：那是“窗口全关”触发的退出。托盘菜单「退出」走的是
             // `tray_app.exit(0)`，会带 `code: Some(0)`，不在此列，因此真退出仍然正常。
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
                 api.prevent_exit();
             }
         });

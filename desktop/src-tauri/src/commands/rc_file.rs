@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::data_store::DataStore;
 use crate::rc::file_state::FileSnapshot;
 use crate::rc::service::RcService;
+use crate::store::DataStore;
 
 /// 把本机文件发给对端。可多选，**串行**传（弱网下并发文件互挤，总时长反而更长）。
 ///
@@ -244,7 +244,8 @@ fn write_blob_chunk(
         .map_err(|e| format!("暂存文件打开失败：{e}"))?;
     f.seek(SeekFrom::Start(offset))
         .map_err(|e| format!("暂存文件定位失败：{e}"))?;
-    f.write_all(chunk).map_err(|e| format!("暂存写入失败：{e}"))?;
+    f.write_all(chunk)
+        .map_err(|e| format!("暂存写入失败：{e}"))?;
     if last {
         let meta = f.metadata().map_err(|e| format!("暂存文件读长失败：{e}"))?;
         if meta.len() != total {
@@ -318,7 +319,15 @@ pub async fn rc_file_send_blob(
     if offset == 0 {
         prune_send_spool();
     }
-    let path = write_blob_chunk(&send_spool_dir(), &upload_id, &name, total, offset, last, chunk)?;
+    let path = write_blob_chunk(
+        &send_spool_dir(),
+        &upload_id,
+        &name,
+        total,
+        offset,
+        last,
+        chunk,
+    )?;
     if !last {
         return Ok(());
     }
@@ -361,12 +370,18 @@ mod blob_tests {
         let _ = std::fs::remove_dir_all(&dir);
         let payload: Vec<u8> = (0u8..=200).collect();
         let (a, b, c) = (0u64, 100u64, 150u64);
-        let p1 = write_blob_chunk(&dir, "id-1", "报告.bin", 201, a, false, &payload[0..100]).unwrap();
-        let p2 = write_blob_chunk(&dir, "id-1", "报告.bin", 201, b, false, &payload[100..150]).unwrap();
+        let p1 =
+            write_blob_chunk(&dir, "id-1", "报告.bin", 201, a, false, &payload[0..100]).unwrap();
+        let p2 =
+            write_blob_chunk(&dir, "id-1", "报告.bin", 201, b, false, &payload[100..150]).unwrap();
         assert_eq!(p1, p2, "同一 upload_id 的块必须落同一个文件");
         let p3 = write_blob_chunk(&dir, "id-1", "报告.bin", 201, c, true, &payload[150..]).unwrap();
         assert_eq!(p3, p1);
-        assert_eq!(std::fs::read(&p3).unwrap(), payload, "落盘内容必须按偏移拼回原样");
+        assert_eq!(
+            std::fs::read(&p3).unwrap(),
+            payload,
+            "落盘内容必须按偏移拼回原样"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -388,7 +403,10 @@ mod blob_tests {
         // 「兼容对端误带路径，绝不重建目录结构」），落盘名只含最后的分量
         let p = write_blob_chunk(&dir, "id", "../../etc/passwd", 2, 0, true, &[1, 2]).unwrap();
         assert!(
-            p.file_name().and_then(|n| n.to_str()).unwrap_or("").ends_with("passwd"),
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .ends_with("passwd"),
             "路径型文件名应展平为 basename，实际：{}",
             p.display()
         );
@@ -412,9 +430,11 @@ mod blob_tests {
         std::fs::write(&old, b"old").unwrap();
         std::fs::write(&fresh, b"fresh").unwrap();
         // 把 old 的修改时间拨到 25 小时前
-        let mtime = std::time::SystemTime::now() - std::time::Duration::from_millis(25 * 60 * 60 * 1000);
+        let mtime =
+            std::time::SystemTime::now() - std::time::Duration::from_millis(25 * 60 * 60 * 1000);
         let f = std::fs::File::options().write(true).open(&old).unwrap();
-        f.set_times(std::fs::FileTimes::new().set_modified(mtime)).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
         drop(f);
         prune_send_spool();
         assert!(!old.exists(), "超龄文件应被清掉");

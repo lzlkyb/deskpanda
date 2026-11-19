@@ -18,6 +18,7 @@
 //! | `crate::sync::path_kind` | [`path_kind`] |
 //! | `crate::sync::identity` | [`identity`] |
 //! | `crate::sync::presence` | [`presence`] |
+//! | `crate::sync::invite` | [`invite`] |
 //! | `crate::shared_ep` | [`endpoint`] |
 //!
 //! 保留原模块名（而非重构成 `net::frame` 之类）是为了让 `rc/` 里 46k 行代码及其
@@ -25,6 +26,7 @@
 
 pub mod endpoint;
 pub mod identity;
+pub mod invite;
 pub mod lan_pair;
 pub mod mcast;
 pub mod path_kind;

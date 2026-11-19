@@ -7,21 +7,21 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::data_store::DataStore;
-use crate::rc::join;
+use crate::net::identity::NodeIdentity;
+use crate::net::invite::{self, Invite};
+use crate::store::DataStore;
 // 本机设备名的唯一来源在 rc 域：局域网配对要把名字随握手包自报给对方
 // （`rc/pin.rs` + `rc/discovery.rs`），命令层只是也用它显示。见 `rc/mod.rs`。
+use crate::rc::join;
 use crate::rc::local_device_name;
 use crate::rc::protocol::Capability;
 use crate::rc::service::{RcService, RcStatus};
-use crate::rc::short_pair;
-use crate::rc::uno;
-use crate::rc::video::FrameCodec;
 use crate::rc::session::{
     is_rc_online_for, rc_presence_level, Session, CFG_CAPABILITY, CFG_DEVICE_DENY, CFG_ENABLED,
 };
-use crate::sync::identity::NodeIdentity;
-use crate::sync::invite::{self, Invite};
+use crate::rc::short_pair;
+use crate::rc::uno;
+use crate::rc::video::FrameCodec;
 
 fn app_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
@@ -91,7 +91,7 @@ pub struct RcTargetDevice {
     /// 仅同步配对的设备恒为空串（它从没跑过 rc 会话）。
     pub os: String,
     /// 彩色标签（设备组织，2026-09-26 对齐稿①）。本机私产；仅同步配对恒为空数组。
-    pub tags: Vec<crate::data_store::rc_device::DeviceTag>,
+    pub tags: Vec<crate::store::rc_device::DeviceTag>,
     /// 描述性备注长文本（悬停/详情显示）。与 `note`（改名别名）分开：
     /// note 进 display_name 顶替设备名，remark 只做补充说明。空串 = 没写过。
     pub remark: String,
@@ -156,13 +156,7 @@ pub fn rc_targets(
         let level = rc_presence_level(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
         // 🔴 2026-09-21：不再把库里的 `d.conn_state` 传进去——那个字段只写 online
         //    从不写 offline，读它必然产生假在线（详见 `is_rc_online_for` 的说明）。
-        let online = is_rc_online_for(
-            &d.node_id,
-            d.last_seen,
-            &live,
-            session_peer.as_deref(),
-            now,
-        );
+        let online = is_rc_online_for(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
         out.push(RcTargetDevice {
             denied: deny.get(&d.node_id).copied().unwrap_or(false),
             display_name: display_name_of(&d.note, &d.name),
@@ -192,13 +186,7 @@ pub fn rc_targets(
         let level = rc_presence_level(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
         // 🔴 2026-09-21：不再把库里的 `d.conn_state` 传进去——那个字段只写 online
         //    从不写 offline，读它必然产生假在线（详见 `is_rc_online_for` 的说明）。
-        let online = is_rc_online_for(
-            &d.node_id,
-            d.last_seen,
-            &live,
-            session_peer.as_deref(),
-            now,
-        );
+        let online = is_rc_online_for(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
         out.push(RcTargetDevice {
             denied: deny.get(&d.node_id).copied().unwrap_or(false),
             // 仅同步配对还没提升进 rc 表，没有备注入口 → display_name 恒等于自报名。
@@ -246,98 +234,6 @@ pub async fn rc_probe_targets(
     Ok(svc.probe_peers(&node_ids).await)
 }
 
-/// 已远程配对、尚未允许同步笔记的设备（方案 A 反向门）。
-#[derive(Debug, Clone, Serialize)]
-pub struct RcSyncOffer {
-    pub node_id: String,
-    pub name: String,
-    pub paired_at: String,
-}
-
-pub const CFG_SYNC_OFFER_DENIED: &str = "rc_sync_offer_denied";
-
-#[tauri::command]
-pub fn rc_sync_offers(store: State<DataStore>) -> Result<Vec<RcSyncOffer>, String> {
-    let denied: Vec<String> = store
-        .get_config()
-        .ok()
-        .and_then(|c| {
-            c.get(CFG_SYNC_OFFER_DENIED)
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-        })
-        .unwrap_or_default();
-    let sync_ids: std::collections::HashSet<String> = store
-        .device_list()?
-        .into_iter()
-        .map(|d| d.node_id)
-        .collect();
-    Ok(store
-        .rc_device_list()?
-        .into_iter()
-        .filter(|d| !sync_ids.contains(&d.node_id) && !denied.contains(&d.node_id))
-        .map(|d| RcSyncOffer {
-            node_id: d.node_id,
-            name: d.name,
-            paired_at: d.paired_at,
-        })
-        .collect())
-}
-
-/// 用户同意：远程配对设备允许同步笔记。
-#[tauri::command]
-pub async fn kb_sync_allow_from_rc(
-    app: AppHandle,
-    store: State<'_, DataStore>,
-    sync: State<'_, crate::sync::service::SyncService>,
-    node_id: String,
-    name: String,
-) -> Result<(), String> {
-    let n = if name.trim().is_empty() {
-        "新设备".to_string()
-    } else {
-        name.trim().to_string()
-    };
-    store.device_pair(&node_id, &n, "")?;
-    // 🔴 P1-2（2026-09-23 审计）：先把设备列表刷出去，再接同步循环。
-    //
-    // 原来 emit 排在最后：`add_peer` 一失败（旧代码只 warn，见下）连这条刷新都
-    // 跑不到，界面上表现为「点了没反应」，而**同步配对其实已经写进库了**——
-    // 用户只能再点一次，或去设置页里找那台根本不存在的设备。
-    let _ = app.emit("kb-sync-devices-changed", ());
-    if sync.is_running().await {
-        // `add_peer` 失败是「这台配好了但笔记根本不同步」，属于功能不可用，
-        // 不是可以咽掉的告警：咽掉的表现是用户以为同步已开，很久之后才发现
-        // 对面拿到的是旧笔记。**不回滚**上面的配对——那是用户刚做出的授权，
-        // 而且抹掉设备行比「重试一次同步接入」更糟（规则 #15.3：报错要说清哪半件成了）。
-        if let Err(e) = sync.add_peer(&node_id).await {
-            log::warn!("[Sync] 从远程配对接入后起同步循环失败：{e}");
-            return Err(format!("配对已写入，但同步接入启动失败：{e}，请稍后重试"));
-        }
-    }
-    // 同步通道没在跑：不报错也不强行拉起——启动它归 `sync` 自己的开关管，
-    // 这台已经写进设备表，通道下次起来自然会带上它。
-    Ok(())
-}
-
-/// 用户拒绝：不再为这台提示「允许同步」。
-#[tauri::command]
-pub fn kb_sync_deny_from_rc(store: State<DataStore>, node_id: String) -> Result<(), String> {
-    let mut config = store.get_config()?;
-    let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
-    let mut list: Vec<String> = obj
-        .get(CFG_SYNC_OFFER_DENIED)
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    if !list.contains(&node_id) {
-        list.push(node_id);
-    }
-    obj.insert(
-        CFG_SYNC_OFFER_DENIED.to_string(),
-        serde_json::to_value(list).map_err(|e| e.to_string())?,
-    );
-    store.save_config(&config)
-}
-
 /// RC 邀请门开放时长（毫秒）。
 ///
 /// 🔴 **由 [`invite::RC_TTL_SECS`] 派生，不另写一个数**：码的有效期与门的时长
@@ -352,8 +248,13 @@ const RC_INVITE_DOOR_MS: i64 = invite::RC_TTL_SECS * 1000;
 /// 首页常驻的八位码仅存在内存，不启动通道；进入页面或重开页面可取回同一份码。
 #[tauri::command]
 pub fn rc_short_pair_code(svc: State<'_, Arc<RcService>>) -> Result<RcInviteCreated, String> {
-    let code = svc.joins().short_code(chrono::Utc::now().timestamp_millis())?;
-    Ok(RcInviteCreated { code: code.code, expires_at: code.expires_at })
+    let code = svc
+        .joins()
+        .short_code(chrono::Utc::now().timestamp_millis())?;
+    Ok(RcInviteCreated {
+        code: code.code,
+        expires_at: code.expires_at,
+    })
 }
 
 /// 双方确认后派生临时 P2P 会合身份，再交换真正的设备身份。
@@ -386,7 +287,11 @@ pub async fn rc_short_pair_begin(
         return Err("不能与本机配对".into());
     }
     svc.arm_exchange_addr(&node_id, &name, expires_at, addr)?;
-    Ok(RcExchangeStarted { node_id, name, expires_at })
+    Ok(RcExchangeStarted {
+        node_id,
+        name,
+        expires_at,
+    })
 }
 
 #[tauri::command]
@@ -428,7 +333,11 @@ pub async fn rc_pin_pair_begin(
         return Err("不能与本机配对".into());
     }
     svc.arm_exchange_addr(&node_id, &name, expires_at, addr)?;
-    Ok(RcExchangeStarted { node_id, name, expires_at })
+    Ok(RcExchangeStarted {
+        node_id,
+        name,
+        expires_at,
+    })
 }
 
 /// 生成远程配对邀请码（开门，等对方粘贴后敲门）。
@@ -507,10 +416,18 @@ pub async fn rc_exchange_begin(
     if !svc.enabled() || !join::door_open(&store, now) {
         return Err("请先开启本机接收并生成自己的配对码".into());
     }
-    let name = if inv.name.trim().is_empty() { "新设备" } else { inv.name.trim() };
+    let name = if inv.name.trim().is_empty() {
+        "新设备"
+    } else {
+        inv.name.trim()
+    };
     let expires_at = join::door_until(&store);
     svc.arm_exchange(&inv.node_id, name, expires_at)?;
-    Ok(RcExchangeStarted { node_id: inv.node_id, name: name.to_string(), expires_at })
+    Ok(RcExchangeStarted {
+        node_id: inv.node_id,
+        name: name.to_string(),
+        expires_at,
+    })
 }
 
 /// 配对轮询的取值口径（纯判断，抽出来给单测钉不变量）。
@@ -554,11 +471,13 @@ pub async fn rc_exchange_check(
 ) -> Result<&'static str, String> {
     let now = chrono::Utc::now().timestamp_millis();
     let intent_active = svc.exchange_intent(&node_id, now).is_some();
-    match pair_poll_verdict(store.rc_device_get(&node_id)?.is_some(), intent_active, join::door_open(&store, now)) {
+    match pair_poll_verdict(
+        store.rc_device_get(&node_id)?.is_some(),
+        intent_active,
+        join::door_open(&store, now),
+    ) {
         PairPollVerdict::AlreadyPaired => return Ok("paired"),
-        PairPollVerdict::WindowEnded => {
-            return Err("本次配对窗口已结束，请重新交换配对码".into())
-        }
+        PairPollVerdict::WindowEnded => return Err("本次配对窗口已结束，请重新交换配对码".into()),
         PairPollVerdict::NeedPeerCheck => {}
     }
     match svc.pair_check(&node_id).await {
@@ -628,7 +547,7 @@ pub async fn rc_device_rename(
 pub async fn rc_device_tags_set(
     store: State<'_, DataStore>,
     node_id: String,
-    tags: Vec<crate::data_store::rc_device::DeviceTag>,
+    tags: Vec<crate::store::rc_device::DeviceTag>,
 ) -> Result<(), String> {
     store.rc_device_tags_set(&node_id, tags)
 }
@@ -929,9 +848,7 @@ pub async fn rc_uno_generate(
         .await
         .map_err(|e| format!("远程通道启动失败：{e}，接入码没有生成，请重试"))?;
     let now = chrono::Utc::now().timestamp_millis();
-    let code = svc
-        .uno
-        .generate(now, ttl_ms, unlimited, cap, also_trust)?;
+    let code = svc.uno.generate(now, ttl_ms, unlimited, cap, also_trust)?;
     let me = NodeIdentity::load_or_create(&app_dir(&app)?)?;
     let full = uno::full_string(&code, &me.node_id());
     emit_changed(&app, &svc);
@@ -998,7 +915,11 @@ pub async fn rc_uno_pass_enable(
         serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
     );
     store.save_config(&config)?;
-    log::info!("[RC] 无人值守固定密码已开启（{}，跨网={}）", cap.as_str(), allow_wan);
+    log::info!(
+        "[RC] 无人值守固定密码已开启（{}，跨网={}）",
+        cap.as_str(),
+        allow_wan
+    );
     emit_changed(&app, &svc);
     Ok(())
 }
@@ -1015,7 +936,10 @@ pub async fn rc_uno_pass_disable(
     let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
     // 存 Null 而不是删键：config 表没有按键删除的口子，读出 Null = 未开启
     //（`unop::cfg_from` 只认对象）。
-    obj.insert(crate::rc::unop::CFG_KEY.to_string(), serde_json::Value::Null);
+    obj.insert(
+        crate::rc::unop::CFG_KEY.to_string(),
+        serde_json::Value::Null,
+    );
     store.save_config(&config)?;
     log::info!("[RC] 无人值守固定密码已关闭");
     emit_changed(&app, &svc);
@@ -1227,15 +1151,26 @@ fn encode_frame_batch_native(frames: &[crate::rc::video::VideoFrame], native: &[
 
 /// 前端按帧批量取画面。返回原始字节（前端 invoke 拿到 ArrayBuffer）。
 #[tauri::command]
-pub async fn rc_drain_frames(svc: State<'_, Arc<RcService>>, session_id: Option<String>) -> Result<tauri::ipc::Response, String> {
+pub async fn rc_drain_frames(
+    svc: State<'_, Arc<RcService>>,
+    session_id: Option<String>,
+) -> Result<tauri::ipc::Response, String> {
     // Legacy callers get the unchanged compressed batch. New viewers provide
     // their session ID, enabling native receive and stale-session rejection.
-    let Some(session) = session_id else { return Ok(tauri::ipc::Response::new(encode_frame_batch(&svc.drain_frames()))); };
+    let Some(session) = session_id else {
+        return Ok(tauri::ipc::Response::new(encode_frame_batch(
+            &svc.drain_frames(),
+        )));
+    };
     let svc = svc.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (frames, native) = svc.drain_frames_for_viewer(&session)?;
-        Ok(tauri::ipc::Response::new(encode_frame_batch_native(&frames, &native)))
-    }).await.map_err(|_| "原生取帧任务失败".to_string())?
+        Ok(tauri::ipc::Response::new(encode_frame_batch_native(
+            &frames, &native,
+        )))
+    })
+    .await
+    .map_err(|_| "原生取帧任务失败".to_string())?
 }
 
 // ── G3 音频 ─────────────────────────────────────────────────────────────
@@ -1246,7 +1181,7 @@ pub async fn rc_drain_frames(svc: State<'_, Arc<RcService>>, session_id: Option<
 /// `type u8`（0=cfg 1=AAC帧）| `pts_ms i64`（cfg 恒 0）| `len u32` | data
 /// cfg 的 data 是 JSON `{"sr","ch","asc","br"}`（asc=base64 的 AudioSpecificConfig，
 /// 前端喂 WebCodecs `description`）；每次 drain 都带当前 cfg，前端按内容变化才重配。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[tauri::command]
 pub fn rc_drain_audio(svc: State<'_, Arc<RcService>>) -> tauri::ipc::Response {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -1277,7 +1212,7 @@ pub fn rc_drain_audio(svc: State<'_, Arc<RcService>>) -> tauri::ipc::Response {
 }
 
 /// 非 Windows 平台的空批（本功能只在 Windows 被控端产生数据）。
-#[cfg(not(any(target_os = "windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tauri::command]
 pub fn rc_drain_audio(_svc: State<'_, Arc<RcService>>) -> tauri::ipc::Response {
     tauri::ipc::Response::new(b"RCA1\x00\x00\x00\x00".to_vec())
@@ -1300,7 +1235,7 @@ pub async fn rc_audio_toggle(svc: State<'_, Arc<RcService>>, on: bool) -> Result
 /// 「对方已静音（不发送声音）」。在此之前对端只能听到静音、无从判断是不是坏了。
 ///
 /// 跨会话保持：关了就是关了，下次会话仍是关（隐私开关不做自动回退）。
-#[cfg(any(target_os="windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[tauri::command]
 pub async fn rc_set_audio_local_mute(
     svc: State<'_, Arc<RcService>>,
@@ -1324,7 +1259,7 @@ pub async fn rc_set_audio_local_mute(
 
 /// 非 Windows：音频链路整体是 Windows 被控端专属。**明确报错**而不是静默成功——
 /// 前端据返回值提示，静默成功会让按钮切到一个假状态。
-#[cfg(not(any(target_os="windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tauri::command]
 pub fn rc_set_audio_local_mute(
     _svc: State<'_, Arc<RcService>>,
@@ -1341,7 +1276,7 @@ pub fn rc_set_audio_local_mute(
 ///
 /// 注意它**不**影响环回采集：WASAPI 抽头在端点静音之前，发起端照样听得到
 /// （与 Parsec / GameStream 的「mute host speakers」同义）。
-#[cfg(any(target_os="windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[tauri::command]
 pub async fn rc_host_mute_set(
     app: AppHandle,
@@ -1349,18 +1284,18 @@ pub async fn rc_host_mute_set(
     on: bool,
 ) -> Result<(), String> {
     let actual = svc.host_mute_local(on).await?;
-    log::info!("[RC] 本机扬声器{}（本机操作）", if actual { "已静音" } else { "已恢复" });
+    log::info!(
+        "[RC] 本机扬声器{}（本机操作）",
+        if actual { "已静音" } else { "已恢复" }
+    );
     emit_changed(&app, &svc);
     Ok(())
 }
 
 /// 非 Windows：同上，明确报错而不是静默成功。
-#[cfg(not(any(target_os="windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tauri::command]
-pub async fn rc_host_mute_set(
-    _svc: State<'_, Arc<RcService>>,
-    _on: bool,
-) -> Result<(), String> {
+pub async fn rc_host_mute_set(_svc: State<'_, Arc<RcService>>, _on: bool) -> Result<(), String> {
     Err("主机扬声器静音只支持 Windows".into())
 }
 
@@ -1381,10 +1316,7 @@ pub async fn rc_input_hold(svc: State<'_, Arc<RcService>>, on: bool) -> Result<b
 /// 取消会顺手解开已经生效的锁（授权是锁的唯一来源，撤了还锁着就是假反馈）。
 /// 授权不落盘、不跨会话——理由写在 `service/input_gate.rs` 的档头。
 #[tauri::command]
-pub async fn rc_input_lock_grant(
-    svc: State<'_, Arc<RcService>>,
-    on: bool,
-) -> Result<(), String> {
+pub async fn rc_input_lock_grant(svc: State<'_, Arc<RcService>>, on: bool) -> Result<(), String> {
     svc.set_input_lock_grant(on).await;
     Ok(())
 }
@@ -1397,10 +1329,7 @@ pub async fn rc_input_lock_grant(
 ///
 /// 返回改后的状态：前端据此切按钮，不做乐观置位。
 #[tauri::command]
-pub async fn rc_video_pause_set(
-    svc: State<'_, Arc<RcService>>,
-    on: bool,
-) -> Result<bool, String> {
+pub async fn rc_video_pause_set(svc: State<'_, Arc<RcService>>, on: bool) -> Result<bool, String> {
     Ok(svc.set_video_pause(on).await)
 }
 
@@ -1414,8 +1343,16 @@ mod frame_batch_tests {
         pixels[..4].copy_from_slice(&800u32.to_le_bytes());
         pixels[4..8].copy_from_slice(&1500u32.to_le_bytes());
         let frames = vec![crate::rc::video::VideoFrame {
-            width: 1920, height: 1080, jpeg: pixels, at_ms: 123, full: true, rect: None,
-            codec: FrameCodec::Av1, key: true, cap_ms: 0, enc_ms: 0,
+            width: 1920,
+            height: 1080,
+            jpeg: pixels,
+            at_ms: 123,
+            full: true,
+            rect: None,
+            codec: FrameCodec::Av1,
+            key: true,
+            cap_ms: 0,
+            enc_ms: 0,
         }];
         let start = std::time::Instant::now();
         for _ in 0..30 {
@@ -1426,7 +1363,11 @@ mod frame_batch_tests {
             assert_eq!(&batch[60..], &frames[0].jpeg[8..]);
         }
         println!("native RGBA 1080p IPC serialization+byte verification {:.3}ms/frame (30 owned frames, excludes WebKit transport)", start.elapsed().as_secs_f64() * 1000.0 / 30.0);
-        assert_eq!(encode_frame_batch(&frames)[8], 3, "legacy payload must retain its original codec byte");
+        assert_eq!(
+            encode_frame_batch(&frames)[8],
+            3,
+            "legacy payload must retain its original codec byte"
+        );
     }
 
     /// 编码↔前端解析必须共享同一份布局常量：这里锁死字节布局，
@@ -1547,7 +1488,7 @@ pub async fn rc_set_quality(
 /// 授权；这条撤销的只是本机保活，正在跑的会话不该因此被打断，所以只写配置。
 ///
 /// 机制与「为什么必须专用线程」见 [`crate::rc::keep_awake`]。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[tauri::command]
 pub async fn rc_set_keep_awake(
     app: AppHandle,
@@ -1570,7 +1511,7 @@ pub async fn rc_set_keep_awake(
 
 /// 非 Windows：电源执行状态锁是 Windows API 专属。**明确报错**而不是静默成功——
 /// 静默成功会让开关切到一个永远不生效的假状态。
-#[cfg(not(any(target_os = "windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[tauri::command]
 pub fn rc_set_keep_awake(
     _app: AppHandle,
@@ -1630,9 +1571,11 @@ pub fn rc_encode_caps() -> Result<RcEncodeCaps, String> {
             monitors: c.monitors,
         })
     }
-    #[cfg(target_os="macos")]
-    {Ok(RcEncodeCaps{h264_gpu:crate::rc::mac_video::hardware_available(false),hevc_hw:crate::rc::mac_video::hardware_available(true),refresh_hz:crate::rc::mac_video::scope_support(-1,false).0,monitors:crate::macos::screen::monitors()?.len() as u32})}
-    #[cfg(not(any(target_os="windows",target_os="macos")))]
+    // ❗ 原仓这里还有一条 `#[cfg(target_os = "macos")]` 分支（`rc::mac_video` +
+    // `macos::screen`）。本仓未迁 macOS 采集/编码桥接，`rc` 整体按 `cfg(windows)`
+    // 门控 ⇒ 那条分支在这里既编不过也不可能被执行，已删除。macOS 交付时按
+    // `docs/DeskPanda-拆分方案-2026-11-19.md` 的 S6 整块补齐。
+    #[cfg(not(target_os = "windows"))]
     {
         Ok(RcEncodeCaps {
             h264_gpu: false,
@@ -1645,8 +1588,8 @@ pub fn rc_encode_caps() -> Result<RcEncodeCaps, String> {
 
 /// 本机显示器列表（远程多屏切换）。
 #[tauri::command]
-pub fn rc_list_monitors() -> Result<Vec<crate::screenshot::MonitorInfo>, String> {
-    crate::screenshot::list_monitors()
+pub fn rc_list_monitors() -> Result<Vec<crate::platform::screen::MonitorInfo>, String> {
+    crate::platform::screen::list_monitors()
 }
 
 /// 截取范围：virtual（整个虚拟屏）| primary（仅主屏）| monitor:N
@@ -1735,8 +1678,8 @@ pub async fn rc_open_workbench(app: AppHandle) -> Result<(), String> {
     // ② 客户区底色对齐主窗 `backgroundColor: #F4F6F9`，隐藏阶段也不会是黑的。
     .visible(false)
     .background_color(tauri::window::Color(244, 246, 249, 255)); // #F4F6F9
-    // 自绘标题栏（decorations=false）是桌面窗口概念：mobile 全屏页面无装饰位。
-    // 上面 ①③ 两条注释描述的拖拽/边框行为在桌面侧不变。
+                                                                 // 自绘标题栏（decorations=false）是桌面窗口概念：mobile 全屏页面无装饰位。
+                                                                 // 上面 ①③ 两条注释描述的拖拽/边框行为在桌面侧不变。
     #[cfg(desktop)]
     let mut builder = builder.decorations(false);
 
@@ -1759,7 +1702,9 @@ pub async fn rc_open_workbench(app: AppHandle) -> Result<(), String> {
     } else {
         // 居中是桌面窗口定位概念（mobile 页面默认铺满，无窗口定位；尺寸取链首 inner_size）
         #[cfg(desktop)]
-        { builder = builder.center(); }
+        {
+            builder = builder.center();
+        }
     }
     let window = builder
         .build()
@@ -1801,11 +1746,15 @@ const SESSION_CHROME_W: f64 = 2.0;
 pub fn rc_window_minimize(window: tauri::WebviewWindow) -> Result<(), String> {
     // 窗口最小化/最大化是桌面窗口概念；mobile 会话全屏无此操作，诚实报不支持
     #[cfg(desktop)]
-    { window
-        .minimize()
-        .map_err(|e| format!("最小化窗口被拒绝：{e}")) }
+    {
+        window
+            .minimize()
+            .map_err(|e| format!("最小化窗口被拒绝：{e}"))
+    }
     #[cfg(mobile)]
-    { Err("窗口最小化仅桌面端支持".to_string()) }
+    {
+        Err("窗口最小化仅桌面端支持".to_string())
+    }
 }
 
 #[tauri::command]
@@ -1972,10 +1921,7 @@ pub fn overlay_history_display_names(
         if note.trim().is_empty() {
             continue;
         }
-        let peer_name = obj
-            .get("peer_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let peer_name = obj.get("peer_name").and_then(|v| v.as_str()).unwrap_or("");
         obj.insert(
             "display_name".to_string(),
             serde_json::Value::String(display_name_of(note, peer_name)),
@@ -2033,12 +1979,16 @@ mod tests {
 
     /// 🔴 邀请门的时长**必须**由邀请码的窗口派生，不许各写一个数。
     ///
-    /// 修复前是两个独立字面量：码 7 天（`invite::TTL_SECS`）、门 30 分钟
+    /// 修复前是两个独立字面量：码 7 天、门 30 分钟
     /// （`RC_INVITE_DOOR_MS = 30 * 60 * 1000`）。于是用户手里的码「还有效」，
     /// 他撞上的是门，而对端只回一句 `not_paired`（「尚未远程配对」）——
     /// **指不到「回去重新生成一个」这个唯一正确的动作**，他只能反复重试同一个失效窗口。
     ///
     /// 这条断言的作用就是：谁把 `RC_INVITE_DOOR_MS` 改回一个字面量，它立刻红。
+    ///
+    /// ❗ 迁入 DeskPanda 时删掉了原仓的第四段断言「远程档必须严于知识库档」：
+    /// 本产品没有知识库同步，`invite::TTL_SECS` 那个 7 天档已不存在。删的是
+    /// **对比对象**，不是严格性——5 分钟这档原样钉住。
     #[test]
     fn test_邀请门与邀请码同宽() {
         assert_eq!(
@@ -2051,15 +2001,6 @@ mod tests {
             5 * 60,
             "远程配对的窗口是 5 分钟——2026-09-29 配对码时效重设计定的 \
              （design/远程电脑-配对码时效与遮掩-设计稿.html §5），仍是产品决定，不该顺手改"
-        );
-        // 先落到局部变量：直接写两个 `const` 比较会被 `assertions_on_constants`
-        // 判成「常量断言」而要求塞进 `const {}`，但 `const {}` 里带不了格式化参数，
-        // 这条断言的「两档谁严」恰好是要给人看的。
-        let rc_ttl = invite::RC_TTL_SECS;
-        let kb_ttl = invite::TTL_SECS;
-        assert!(
-            rc_ttl < kb_ttl,
-            "远程那档必须严于知识库那档（{rc_ttl} vs {kb_ttl}）：远程是把别人的屏幕交出去，骚扰面不同"
         );
     }
 
@@ -2082,7 +2023,11 @@ mod tests {
     #[test]
     fn test_备注归一化去两端空白_空串合法() {
         assert_eq!(normalize_note("  客厅 电脑  "), "客厅 电脑");
-        assert_eq!(normalize_note("   "), "", "纯空白 == 清除备注（回落显示自报名）");
+        assert_eq!(
+            normalize_note("   "),
+            "",
+            "纯空白 == 清除备注（回落显示自报名）"
+        );
         assert_eq!(normalize_note(""), "");
     }
 
@@ -2107,14 +2052,16 @@ mod tests {
     /// 历史条目的备注覆盖：只动「peer 有备注」的条目，其余原样透传。
     #[test]
     fn test_历史条目叠加显示名() {
-        let mk = |peer: &str, name: &str| {
-            serde_json::json!({ "peer": peer, "peer_name": name, "dir": "outbound" })
-        };
+        let mk = |peer: &str, name: &str| serde_json::json!({ "peer": peer, "peer_name": name, "dir": "outbound" });
         let notes = std::collections::HashMap::from([
             ("p1".to_string(), "工作电脑".to_string()),
             ("p2".to_string(), "   ".to_string()), // 纯空白备注 = 没起过
         ]);
-        let mut list = vec![mk("p1", "DESKTOP-ONE"), mk("p2", "DESKTOP-TWO"), mk("p3", "DESKTOP-THREE")];
+        let mut list = vec![
+            mk("p1", "DESKTOP-ONE"),
+            mk("p2", "DESKTOP-TWO"),
+            mk("p3", "DESKTOP-THREE"),
+        ];
         overlay_history_display_names(&mut list, &notes);
         assert_eq!(
             list[0]["display_name"], "工作电脑",

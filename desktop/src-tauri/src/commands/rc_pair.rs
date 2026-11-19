@@ -14,9 +14,9 @@
 //!
 //! 两条路的产物是同一张表（`rc_devices`），配完之后界面上没有区别。
 
+use crate::net::presence::Neighbor;
 use crate::rc::pin::{Confirmed, Done, PairPrompt};
 use crate::rc::service::RcService;
-use crate::sync::presence::Neighbor;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
