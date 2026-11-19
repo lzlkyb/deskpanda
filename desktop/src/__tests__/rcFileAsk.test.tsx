@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   /** `@tauri-apps/plugin-dialog` 的系统选择框。默认返回一个「用户挑好的目录」。 */
   open: vi.fn(async (): Promise<string | null> => "D:/picked-by-user"),
   /** 默认接收目录（后端 `rc_file_default_dir`）。 */
-  defaultDir: vi.fn(async () => "D:/Downloads/PastePanda 接收"),
+  defaultDir: vi.fn(async () => "D:/Downloads/DeskPanda 接收"),
   /** 写设备记忆（`rc_device_auto_accept_set`）。 */
   setAuto: vi.fn(async () => undefined),
 }));
@@ -55,7 +55,7 @@ afterEach(() => {
   mocks.defaultDir.mockReset();
   mocks.setAuto.mockReset();
   mocks.open.mockImplementation(async (): Promise<string | null> => "D:/picked-by-user");
-  mocks.defaultDir.mockImplementation(async () => "D:/Downloads/PastePanda 接收");
+  mocks.defaultDir.mockImplementation(async () => "D:/Downloads/DeskPanda 接收");
   mocks.setAuto.mockImplementation(async () => undefined);
 });
 
@@ -82,7 +82,7 @@ describe("接受路径", () => {
     const onRespond = renderCard(ask());
     fireEvent.click(screen.getByText("接受"));
     // 回应带上接收目录 = 取目录→回应整条链真走完（同步读会被宏任务才落地的取数抢先）
-    await waitFor(() => expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/PastePanda 接收"));
+    await waitFor(() => expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/DeskPanda 接收"));
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.setAuto).not.toHaveBeenCalled();
   });
@@ -94,7 +94,7 @@ describe("接受路径", () => {
     // 设备记忆是链条末环：等到它，等于回应与「没弹框」都已成立
     await waitFor(() => expect(mocks.setAuto).toHaveBeenCalledWith("peerA", true));
     expect(mocks.open).not.toHaveBeenCalled();
-    expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/PastePanda 接收");
+    expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/DeskPanda 接收");
   });
 
   it("「其他位置」= 弹系统选择框，用用户选的目录回应（这次的落点由用户定）", async () => {
@@ -104,7 +104,7 @@ describe("接受路径", () => {
     // 选择框的初始位置仍取自接收目录——只是「建议起点」，用户没选就不作数
     expect(mocks.open).toHaveBeenCalledTimes(1);
     expect(mocks.open).toHaveBeenCalledWith(
-      expect.objectContaining({ directory: true, defaultPath: "D:/Downloads/PastePanda 接收" }),
+      expect.objectContaining({ directory: true, defaultPath: "D:/Downloads/DeskPanda 接收" }),
     );
   });
 
@@ -125,7 +125,7 @@ describe("接受路径", () => {
     // 失败提示出现 = 「回应成功 + setAuto 被拒」整条链走到的唯一可见证据
     await screen.findByText(/「自动接收」没存上/);
     // 文件本身收下了：不能说成「回应失败」
-    expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/PastePanda 接收");
+    expect(onRespond).toHaveBeenCalledWith("a1", "D:/Downloads/DeskPanda 接收");
   });
 
   it("取消系统选择框（其他位置）= 不回应（让请求走 60s 超时，不替用户回一个他没选过的路径）", async () => {

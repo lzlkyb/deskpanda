@@ -69,7 +69,7 @@ const BY_CODE: Record<string, Omit<RcErrorInfo, "reason">> = {
   },
   confirm_timeout: {
     title: "对方未在 2 分钟内确认",
-    hint: "对方可能没注意到确认条。提醒对方查看 PastePanda。",
+    hint: "对方可能没注意到确认条。提醒对方查看 DeskPanda。",
     kind: "timeout",
   },
   rejected_or_busy: {

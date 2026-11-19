@@ -22,11 +22,11 @@ describe("RcA2TitleBar（批7 自绘标题栏）", () => {
     expect(container.firstElementChild?.getAttribute("data-tauri-drag-region")).toBe("deep");
   });
 
-  it("品牌是三段：图标 + PastePanda + 远程电脑", () => {
+  it("品牌是三段：图标 + DeskPanda + 远程电脑", () => {
     renderBar();
 
     expect(screen.getByRole("banner")).toBeTruthy();
-    expect(screen.getByText("PastePanda")).toBeTruthy();
+    expect(screen.getByText("DeskPanda")).toBeTruthy();
     expect(screen.getByText("远程电脑")).toBeTruthy();
   });
 

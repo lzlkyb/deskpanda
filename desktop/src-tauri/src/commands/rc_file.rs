@@ -71,7 +71,7 @@ pub fn rc_file_snapshot(svc: State<'_, Arc<RcService>>) -> FileSnapshot {
     svc.file_snapshot()
 }
 
-/// 接收目录（用户在设置里配置的覆盖目录；未配置 = `<下载>/PastePanda 接收/`）。
+/// 接收目录（用户在设置里配置的覆盖目录；未配置 = `<下载>/DeskPanda 接收/`）。
 ///
 /// 由 Rust 给而不是前端拼：中文系统的下载目录叫「下载」，且可能被用户
 /// 重定向到别的盘——只有 `SHGetKnownFolderPath` 知道真实位置。
@@ -84,7 +84,7 @@ pub fn rc_file_default_dir(store: State<'_, DataStore>) -> Result<String, String
         .map(|p| p.to_string_lossy().to_string())
 }
 
-/// 设置文件接收目录（空串 = 恢复默认 `<下载>/PastePanda 接收/`）。
+/// 设置文件接收目录（空串 = 恢复默认 `<下载>/DeskPanda 接收/`）。
 ///
 /// 保存前就创建目录：设置那一刻就暴露「盘符不存在」这类问题，
 /// 别等第一场传输落盘才炸。

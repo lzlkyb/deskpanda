@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 标题不出现在界面里：浮层无边框、纯卡片。 -->
+    <title>远程协助</title>
+    <script>
+      // 与 index.html **逐字同一套**判据（改一处必须改两处）：JS bundle 落地之前先
+      // 把主题定下来。浮层窗口 backgroundColor 是全透明的，闪一帧浅色等于卡片边缘露白。
+      try {
+        var saved = localStorage.getItem("theme");
+        var valid = ["ocean", "ocean-dark", "midnight", "forest", "blossom", "dawn"];
+        if (saved === "dark") saved = "ocean-dark";
+        else if (saved === "light" || !saved) saved = "ocean";
+        if (valid.indexOf(saved) < 0) saved = "ocean";
+        document.documentElement.setAttribute("data-theme", saved);
+        if (saved === "ocean-dark" || saved === "midnight") {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (_) {
+        /* 隐私模式下 localStorage 可能抛错，按默认主题走 */
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/rcask.tsx"></script>
+  </body>
+</html>

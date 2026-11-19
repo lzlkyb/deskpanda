@@ -17,12 +17,10 @@ notifications = ["dep:tauri-plugin-notification"]
 # 是「默认值」，真正开关还在配置项 `rc_easytier_enabled` 上；
 # 写成不存在的 feature 会让每次编译都报 unexpected_cfgs（CI 视警告为噪音）。
 easytier-underlay = []
-# 接线守卫：`rc/tests/guards.rs` 里那几条「命令注册 / capabilities / 前端 invoke」
-# 三侧成对的守卫。它们要读 `lib.rs` 的 invoke_handler、`capabilities/*.json`、
-# 以及 `desktop/src/lib/api/rcCommands.ts`——**S4 前端与命令接线落地之前不存在**。
-# 默认关不是「跳过测试」，而是「这些守卫的审计对象还没被造出来」；
-# S4 接完线后跑 `cargo test --features ui-guards` 打开（见拆分方案 §S4）。
-ui-guards = []
+# 注：原 `ui-guards` feature 已删除（2026-11-20，S4 第二段补线）。它当初存在是因为
+# `rc/tests/guards.rs` 里那几条「命令注册 / capabilities / 前端 invoke」守卫的审计
+# 对象还没被造出来；现在接线齐了，那几条已改成**常开**，feature 留着只会让它们
+# 永远进不了门禁（`pre-push` 跑的是 `cargo test --no-default-features`）。
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

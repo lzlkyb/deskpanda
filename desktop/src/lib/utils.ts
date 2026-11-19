@@ -120,7 +120,7 @@ export function knowledgeErrorText(error: unknown): string {
   if (/locked|busy|正在保存|版本已更新/i.test(raw))
     return "内容正在保存或已更新，请稍后重试。";
   if (/invoke|tauri_internal|__TAURI|not found.*command/i.test(raw))
-    return "无法连接应用后台，请在最新版 PastePanda 应用内使用。";
+    return "无法连接应用后台，请在最新版 DeskPanda 应用内使用。";
   return "本机操作未能完成，请重试。已有内容不会因这次失败被删除。";
 }
 
@@ -135,7 +135,7 @@ export function permissionErrorInfo(error: unknown, context: PermissionContext =
     return {
       kind: "internal" as const,
       title: "应用内部授权失败",
-      detail: "请重新打开 PastePanda 后重试；若仍失败，请记录此提示和操作步骤以便排查，无需调整手机权限。",
+      detail: "请重新打开 DeskPanda 后重试；若仍失败，请记录此提示和操作步骤以便排查，无需调整手机权限。",
     };
   }
   if (!denied) return null;
@@ -143,7 +143,7 @@ export function permissionErrorInfo(error: unknown, context: PermissionContext =
     return {
       kind: "camera" as const,
       title: "未允许使用相机，无法扫码",
-      detail: "打开手机「设置 → 应用 → PastePanda → 权限 → 相机」，允许使用相机后返回重试；也可返回手动输入配对码。",
+      detail: "打开手机「设置 → 应用 → DeskPanda → 权限 → 相机」，允许使用相机后返回重试；也可返回手动输入配对码。",
     };
   }
   if (context === "file-receive" || /接收目录|创建目录|create.*director/i.test(raw)) {

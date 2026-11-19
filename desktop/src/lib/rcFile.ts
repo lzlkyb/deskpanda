@@ -263,7 +263,7 @@ export function classifyErr(err?: string | null): ErrInfo {
   if (s.includes("[file_unsupported]")) {
     return {
       title: "对方可能是不支持文件传输的旧版本",
-      tip: "请对方升级 PastePanda 后再试；这不影响画面与控制。",
+      tip: "请对方升级 DeskPanda 后再试；这不影响画面与控制。",
       upgrade: true,
     };
   }

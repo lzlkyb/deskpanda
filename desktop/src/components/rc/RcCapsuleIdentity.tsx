@@ -102,7 +102,7 @@ export function RcCapsuleIdentity({
       {canControl && peerDgramInput === false && (
         <span
           className={styles.capPillWarn}
-          title="远程鼠标移动走数据报通道，官方 7.2.1 及更早的被控端收不到。请对方升级 PastePanda 到最新版后重新连接；按键/点击仍可尝试。"
+          title="远程鼠标移动走数据报通道，官方 7.2.1 及更早的被控端收不到。请对方升级 DeskPanda 到最新版后重新连接；按键/点击仍可尝试。"
         >
           对方版本偏旧
         </span>

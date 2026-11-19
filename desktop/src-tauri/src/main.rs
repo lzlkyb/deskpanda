@@ -563,6 +563,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         commands::rc_window_toggle_maximize,
         commands::rc_window_close,
         commands::rc_fit_window_to_video,
+        // —— 远程电脑 · 入站申请浮层（`rcask.html` 那个独立窗口的三条命令）——
+        // 它们定义在 `rc/ask_pop.rs` 而不是 `commands/`，所以 `commands::registry_guard`
+        // 扫不到；漏注册的表现是浮层窗口一挂载就 invoke 失败、卡片永远空白。
+        rc::ask_pop::rc_ask_state,
+        rc::ask_pop::rc_ask_hide,
+        rc::ask_pop::rc_ask_reopen,
         // —— 远程电脑 · 历史 ——
         commands::rc_session_history,
         commands::rc_history_clear,

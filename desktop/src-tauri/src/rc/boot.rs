@@ -98,6 +98,10 @@ fn install_notify(app: &AppHandle, svc: &Arc<RcService>) {
             if let Some(err) = svc.take_clip_push_err() {
                 let _ = handle.emit(EV_CLIP_PUSH_ERR, err);
             }
+            // 有人敲门 / 会话开合 → 换浮层形态（Ask 确认卡 ↔ Capsule 隐私角标）。
+            // 🔴 只能挂在**状态回调**上：浮层自己拿不到主窗 store，全靠这条驱动。
+            // 内部按 `SHOWN_MODE` 做同档空转，画质/光标那些 tick 不会把浮层拖着走。
+            super::ask_pop::on_change(&handle);
         }));
     }
     {

@@ -69,9 +69,9 @@ export function RcNearbyList({ neighbors, busy, onPair }: {
       <div className={lanStyles.lanNearbyEmpty}>
         <div className={lanStyles.lanNearbyEmptyTitle}>还没有发现附近设备</div>
         <ol className={lanStyles.lanNearbySteps}>
-          <li>另一台电脑安装并打开 <b>PastePanda</b></li>
+          <li>另一台电脑安装并打开 <b>DeskPanda</b></li>
           <li>确保在同一 Wi-Fi / 局域网</li>
-          <li>对方的 PastePanda 是<b>最新版</b>（旧版没有「附近的设备」，只能手动搬配对码）</li>
+          <li>对方的 DeskPanda 是<b>最新版</b>（旧版没有「附近的设备」，只能手动搬配对码）</li>
         </ol>
       </div>
     );

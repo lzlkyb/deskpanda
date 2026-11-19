@@ -195,9 +195,9 @@ describe("RcWorkbench 骨架：会话态收标题栏（A 方案稿 批2 / 批7 �
 
     expect(screen.getByRole("banner")).toBeTruthy();
     // 🔴 必须限定在 banner 里：2026-09-29 常驻配对卡的空态文案也含
-    // 「PastePanda」（「另一台电脑安装并打开 PastePanda」），全局 getByText
+    // 「DeskPanda」（「另一台电脑安装并打开 DeskPanda」），全局 getByText
     // 会一次匹配到两个。品牌这件事本来就只属于标题栏那一格。
-    expect(within(screen.getByRole("banner")).getByText("PastePanda")).toBeTruthy();
+    expect(within(screen.getByRole("banner")).getByText("DeskPanda")).toBeTruthy();
     // mock 的 running=false → 状态位落在「可点的补救入口」那一支（不是只读文字）
     expect(screen.getByRole("button", { name: /通道未启动 · 点击开启/ })).toBeTruthy();
     // 批7：窗口改 decorations(false) 后系统按钮没了，这三个得自己画

@@ -57,7 +57,7 @@ async function pickAccept(ask: RcFileAsk): Promise<string | null> {
 
 /**
  * 接收落点（push 主路径）：直接用 `rc_file_default_dir`——设置里可改的
- * 「文件接收目录」，未配置回落 `<下载>/PastePanda 接收`。拿不到（后端异常）
+ * 「文件接收目录」，未配置回落 `<下载>/DeskPanda 接收`。拿不到（后端异常）
  * 才返回 null，由调用方退回「其他位置」弹框，别让「点了接受什么也没发生」。
  */
 async function receiveDir(): Promise<string | null> {

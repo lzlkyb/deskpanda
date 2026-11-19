@@ -484,7 +484,7 @@ pub fn default_receive_dir() -> Result<PathBuf, String> {
         return ANDROID_RECEIVE_DIR
             .get()
             .cloned()
-            .ok_or_else(|| "手机接收位置尚未准备好，请重新打开 PastePanda 后重试".into());
+            .ok_or_else(|| "手机接收位置尚未准备好，请重新打开 DeskPanda 后重试".into());
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -496,7 +496,7 @@ pub fn default_receive_dir() -> Result<PathBuf, String> {
             Some(d) => d,
             None => crate::paths::home_dir()?.join("Downloads"),
         };
-        Ok(base.join("PastePanda 接收"))
+        Ok(base.join("DeskPanda 接收"))
     }
 }
 
@@ -507,7 +507,7 @@ static ANDROID_RECEIVE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::
 /// setup 传入 PathResolver::download_dir()，它调用 getExternalFilesDir(DIRECTORY_DOWNLOADS)。
 #[cfg(target_os = "android")]
 pub fn init_android_receive_dir(system_downloads: PathBuf) {
-    let _ = ANDROID_RECEIVE_DIR.set(system_downloads.join("PastePanda 接收"));
+    let _ = ANDROID_RECEIVE_DIR.set(system_downloads.join("DeskPanda 接收"));
 }
 
 /// 生效的接收目录 = 用户在设置里配置的覆盖目录，未配置回落 [`default_receive_dir`]。

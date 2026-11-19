@@ -60,10 +60,10 @@ fn android接收目录必须由系统提供且所有入口同源() {
     assert!(!transfer.contains("EXTERNAL_STORAGE"));
     assert!(!transfer.contains("/storage/emulated/0"));
     // 宿主的 Android 启动钩子（`download_dir()` + `init_android_receive_dir`）
-    // 属于壳层接线：本仓当前只交付 Windows，`lib.rs` 里没有那段。等 Android 落地
-    // 再打开（`--features ui-guards`），否则这里会以「源码里没这段」判红而实际是
-    // 那个平台还不存在。
-    #[cfg(feature = "ui-guards")]
+    // 属于壳层接线：本仓只交付 Windows，`lib.rs` 里没有那段代码。
+    // 门控从 `feature = "ui-guards"` 改成真实平台——Android 移植进来那天它会自动开跑，
+    // 平时不在 Windows 上假装审计一段不存在的源码。
+    #[cfg(target_os = "android")]
     {
         let boot = include_str!("../../lib.rs");
         assert!(boot.contains("handle.path().download_dir()"));

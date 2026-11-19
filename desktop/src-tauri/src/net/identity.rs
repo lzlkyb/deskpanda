@@ -75,7 +75,7 @@ impl NodeIdentity {
             let cipher = std::fs::read(&path).map_err(|e| format!("读身份文件失败：{}", e))?;
             let plain = crate::dpapi::unprotect(&cipher, ENTROPY).map_err(|e| {
                 #[cfg(target_os = "macos")]
-                { format!("身份文件暂时无法解密（{e}）。不会自动换新身份。请先检查 PastePanda 的系统钥匙串授权；不要删除身份文件或加密密钥，以免已配对设备失去关联。身份文件：{}", path.display()) }
+                { format!("身份文件暂时无法解密（{e}）。不会自动换新身份。请先检查 DeskPanda 的系统钥匙串授权；不要删除身份文件或加密密钥，以免已配对设备失去关联。身份文件：{}", path.display()) }
                 #[cfg(not(target_os = "macos"))]
                 { format!(
                     "身份文件解不开（{}）。**不会自动换新身份**——那会让所有已配对设备\

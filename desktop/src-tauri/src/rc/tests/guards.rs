@@ -615,38 +615,42 @@ fn 守卫_COM公寓初始化必须收口() {
 ///   在工具窗排除表里，否则会污染「自己的界面可见」判据）。DeskPanda 没有剪贴板
 ///   引擎、也就没有那张表，这条断言随子系统一起留在原仓。
 ///
-/// ❗ `cfg(feature = "ui-guards")`：本测试审计的是**壳层接线**（capabilities +
-///   invoke_handler），S4 之前那些东西还不存在。默认关不等于放弃守卫，
-///   见 `Cargo.toml` 里该 feature 的说明。
-#[cfg(feature = "ui-guards")]
+/// ❗ 2026-11-20（S4 第二段补线）从 `cfg(feature = "ui-guards")` 改成**常开**：
+///   这些接线当时确实还不存在，现在存在了——守卫的审计对象一落地就该一直跑，
+///   留着 feature 只会让它永远不进 pre-push（门禁那条是 `--no-default-features`）。
+///   同时按本仓结构改了三处路径：`invoke_handler` 在 `main.rs`（不在 `lib.rs`）、
+///   `on_change` 挂在 `rc/boot.rs` 的会话回调里、capabilities 只有 `default.json`
+///   （壳子没有 `desktop-plugins.json`）。
 #[test]
 fn 守卫_入站浮层三处接线() {
-    let caps = [
-        (
-            "capabilities/default.json",
-            include_str!("../../../capabilities/default.json"),
-        ),
-        (
-            "capabilities/desktop-plugins.json",
-            include_str!("../../../capabilities/desktop-plugins.json"),
-        ),
-    ];
-    for (name, src) in caps {
-        assert!(
-            src.contains("\"rc-ask\""),
-            "{name} 的 windows 名单里没有 rc-ask —— 浮层收不到任何事件"
-        );
-    }
-    let lib = include_str!("../../lib.rs");
+    let caps = (
+        "capabilities/default.json",
+        include_str!("../../../capabilities/default.json"),
+    );
     assert!(
-        lib.contains("rc::ask_pop::rc_ask_state,") && lib.contains("rc::ask_pop::rc_ask_hide,"),
-        "ask_pop 的两个命令没进 invoke_handler"
+        caps.1.contains("\"rc-ask\""),
+        "{} 的 windows 名单里没有 rc-ask —— 浮层收不到任何事件",
+        caps.0
+    );
+    // 注册表在 main.rs（两段 `generate_handler!`，rc 那条是 `cfg(windows)` 段）。
+    let main_rs = include_str!("../../main.rs");
+    assert!(
+        main_rs.contains("rc::ask_pop::rc_ask_state,")
+            && main_rs.contains("rc::ask_pop::rc_ask_hide,")
+            && main_rs.contains("rc::ask_pop::rc_ask_reopen,"),
+        "ask_pop 的命令没进 invoke_handler —— 浮层卡片永远空白"
     );
     // 丙-② 加了第二种形态（角标）之后，开关权整块收进 ask_pop：调用方只报「状态变了」。
     // 若有人把 on_change 换回按 pending 数开关的旧写法，角标就永远不会出现。
     assert!(
-        lib.contains("rc::ask_pop::on_change("),
-        "lib.rs 没接 on_change —— 桌面浮层不再随状态换档（丙-② 角标会消失）"
+        include_str!("../boot.rs").contains("ask_pop::on_change("),
+        "boot.rs 没接 on_change —— 桌面浮层不再随状态换档（丙-② 角标会消失）"
+    );
+    // 页面入口：`ask_pop.rs` 用 `WebviewUrl::App("rcask.html")` 指过来，
+    // 构建入口少一个不会报错，只会让浮层窗口加载 404 白页。
+    assert!(
+        include_str!("../../../../rcask.html").contains("/src/rcask.tsx"),
+        "rcask.html 缺了或没指向真入口 —— 浮层窗口会白屏"
     );
 }
 
@@ -685,17 +689,12 @@ fn 守卫_画面暂停五处接线成对() {
         "vpause 控制帧的两端字面量不成对 —— 暂停状态到不了发起端眼前"
     );
     // ⑤ 命令注册 + 状态投影：前端两处数据源（被控端按钮 / 发起端告知）都得有字段。
-    //    `lib.rs` 那段要等 S4 把命令接进 invoke_handler 才成立，单块门控
-    //    （不整条测试关掉：上面 ①②③④ 都是 rc 自己的接线，现在就有效）。
-    #[cfg(feature = "ui-guards")]
-    {
-        let lib = include_str!("../../lib.rs");
-        assert!(
-            lib.contains("commands::rc_video_pause_set,")
-                || lib.contains("commands::rc_video_pause_set::"),
-            "rc_video_pause_set 没进 invoke_handler —— 抽屉那颗按钮点了没反应"
-        );
-    }
+    //    注册表在本仓 `main.rs`（不是 `lib.rs`：壳子的 `generate_handler!` 在那里）。
+    let main_rs = include_str!("../../main.rs");
+    assert!(
+        main_rs.contains("commands::rc_video_pause_set,"),
+        "rc_video_pause_set 没进 invoke_handler —— 抽屉那颗按钮点了没反应"
+    );
     let status = include_str!("../service/lifecycle.rs");
     assert!(
         status.contains("video_paused: self.video_paused()")
@@ -1000,24 +999,21 @@ fn 守卫_会话防休眠六处接线成对() {
         cmd.contains("会话防休眠只支持 Windows 或 Mac 被控端"),
         "不支持的宿主必须明确报错，Windows 与 Mac 使用各自电源守卫"
     );
-    // 命令注册与前端两处要等 S4 接线（invoke_handler / rcCommands.ts），单块门控。
-    #[cfg(feature = "ui-guards")]
-    {
-        assert!(
-            include_str!("../../lib.rs").contains("commands::rc_set_keep_awake,"),
-            "rc_set_keep_awake 没进 invoke_handler —— 开关点了没反应"
-        );
-        let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");
-        assert!(
-            ts_cmd.contains("invoke(\"rc_set_keep_awake\", { enable })"),
-            "前端 invoke 的命令名与后端对不上 —— 保存直接失败"
-        );
-        let ts_types = include_str!("../../../../src/lib/api/rcTypes.ts");
-        assert!(
-            ts_types.contains("keep_awake?: boolean"),
-            "前端 RcStatus 没有 keep_awake 字段 —— 与后端投影脱节"
-        );
-    }
+    // 命令注册与前端两处成对（注册表在 `main.rs`，见文件头说明）。
+    assert!(
+        include_str!("../../main.rs").contains("commands::rc_set_keep_awake,"),
+        "rc_set_keep_awake 没进 invoke_handler —— 开关点了没反应"
+    );
+    let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");
+    assert!(
+        ts_cmd.contains("invoke(\"rc_set_keep_awake\", { enable })"),
+        "前端 invoke 的命令名与后端对不上 —— 保存直接失败"
+    );
+    let ts_types = include_str!("../../../../src/lib/api/rcTypes.ts");
+    assert!(
+        ts_types.contains("keep_awake?: boolean"),
+        "前端 RcStatus 没有 keep_awake 字段 —— 与后端投影脱节"
+    );
 }
 
 /// 非 Windows：`KeepAwake::start()` 恒 `None`（能力是 Windows 电源 API 专属，
@@ -1775,17 +1771,14 @@ fn 守卫_拉黑设备必须当场收会话_邀请作废前后端成对() {
         cmd.contains("pub fn rc_invite_revoke"),
         "rc_invite_revoke 命令不见了 —— 作废入口被删，用户只能干等 TTL"
     );
-    // 注册侧与前端侧要等 S4 接线，单块门控（上面那条命令体断言现在就有效）。
-    #[cfg(feature = "ui-guards")]
-    {
-        assert!(
-            include_str!("../../lib.rs").contains("commands::rc_invite_revoke,"),
-            "rc_invite_revoke 没进 invoke_handler —— 前端点了没反应"
-        );
-        let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");
-        assert!(
-            ts_cmd.contains("invoke(\"rc_invite_revoke\")"),
-            "前端没有 rc_invite_revoke 的 invoke —— 作废按钮是死的"
-        );
-    }
+    // 注册侧与前端侧成对（注册表在 `main.rs`）。
+    assert!(
+        include_str!("../../main.rs").contains("commands::rc_invite_revoke,"),
+        "rc_invite_revoke 没进 invoke_handler —— 前端点了没反应"
+    );
+    let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");
+    assert!(
+        ts_cmd.contains("invoke(\"rc_invite_revoke\")"),
+        "前端没有 rc_invite_revoke 的 invoke —— 作废按钮是死的"
+    );
 }

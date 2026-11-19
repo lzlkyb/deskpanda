@@ -748,7 +748,7 @@ mod tests {
 
     /// 真机冒烟（H264/HEVC 各跑一遍）：加载 DLL → 候选链打开 → 编 5 帧渐变
     /// NV12 → 首包必须是 Annex-B。DLL 目录缺失时 skip（CI/无硬件环境不红）。
-    /// 开发机跑法：`PASTEPANDA_FF_DLL_DIR=D:/AItool/ffbuild/stripdist cargo test ff_smoke`
+    /// 开发机跑法：`DESKPANDA_FF_DLL_DIR=D:/AItool/ffbuild/stripdist cargo test ff_smoke`
     fn smoke(codec: VideoCodec) {
         let (w, h, fps) = (320u32, 240u32, 30u32);
         let mut enc = match FfEncoder::open(codec, w, h, fps, 800_000) {

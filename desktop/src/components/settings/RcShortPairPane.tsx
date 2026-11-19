@@ -58,7 +58,7 @@ export function RcShortPairPane({ scan, toast, onPaired }: {
       </div>}
       {showOwn ? <div className={styles.hero}>
         <h3>{scan ? "用手机扫一扫，连接这台电脑" : "让对方输入这枚配对码"}</h3>
-        <p className={styles.hint}>{scan ? "打开手机端 PastePanda，在添加设备中选择扫一扫。" : "对方打开添加设备，选择配对码并输入下方数字。"}</p>
+        <p className={styles.hint}>{scan ? "打开手机端 DeskPanda，在添加设备中选择扫一扫。" : "对方打开添加设备，选择配对码并输入下方数字。"}</p>
         {own.ownCode && !own.expired && <>
           {scan && <div className={styles.qr}><RcShortCodeQr code={own.ownCode} size={216} onError={() => setError("二维码暂时无法显示，请让对方输入下方 8 位配对码。")} /></div>}
           <div className={styles.digits}>{formatShortCode(own.ownCode)}</div>

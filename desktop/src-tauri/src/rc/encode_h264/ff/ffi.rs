@@ -357,17 +357,21 @@ impl Ff {
 /// DLL 所在目录探测：env 覆盖 > 打包/开发各候选。返回第一个含 avcodec-63.dll 的目录。
 ///
 /// 候选说明：
-/// - env `PASTEPANDA_FF_DLL_DIR`：开发/测试时显式指到 `D:/AItool/ffbuild/stripdist`；
+/// - env `DESKPANDA_FF_DLL_DIR`：开发/测试时显式指到 `D:/AItool/ffbuild/stripdist`；
+///   （旧名 `PASTEPANDA_FF_DLL_DIR` 仍认，免得本机旧脚本一夜失效）
 /// - `exe_dir/ffmpeg`：打包形态（tauri.conf.json `resources/ffmpeg/* → resources/ffmpeg`，
 ///   Windows 上 resource_dir = exe 所在目录）；
 /// - `exe_dir/resources/ffmpeg`：tauri dev 把 resources 复制到 target 时的形态。
 pub(crate) fn dll_dir() -> Result<PathBuf, String> {
-    if let Ok(d) = std::env::var("PASTEPANDA_FF_DLL_DIR") {
+    let env_dir = std::env::var("DESKPANDA_FF_DLL_DIR")
+        .ok()
+        .or_else(|| std::env::var("PASTEPANDA_FF_DLL_DIR").ok());
+    if let Some(d) = env_dir {
         let p = PathBuf::from(&d);
         if p.join("avcodec-63.dll").exists() {
             return Ok(p);
         }
-        log::warn!("[RC] PASTEPANDA_FF_DLL_DIR={d} 里没有 avcodec-63.dll，忽略");
+        log::warn!("[RC] FF DLL 覆盖目录 {d} 里没有 avcodec-63.dll，忽略");
     }
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("拿不到当前 exe 路径：{e}"))?

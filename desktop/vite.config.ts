@@ -29,6 +29,13 @@ export default defineConfig({
   build: {
     target: "esnext",
     rollupOptions: {
+      // 两个页面：`index.html` = 工作台主窗口，`rcask.html` = 入站申请置顶浮层
+      // （`rc/ask_pop.rs` 用 `WebviewUrl::App("rcask.html")` 指过来）。
+      // 少一个入口的表现不是构建报错，而是**运行时白窗**——浮层窗口加载 404 页。
+      input: {
+        index: path.resolve(__dirname, "index.html"),
+        rcask: path.resolve(__dirname, "rcask.html"),
+      },
       output: {
         manualChunks: {
           "vendor-react": ["react", "react-dom"],

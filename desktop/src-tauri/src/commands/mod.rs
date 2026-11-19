@@ -41,8 +41,41 @@ mod registry_guard {
     //! 单条命令的接线守卫在 `rc/tests/guards.rs`，这里补一条**穷举式**的：
     //! 三个命令文件里的每个 `#[tauri::command]` 都必须出现在 `main.rs` 的注册列表里。
 
+    /// 去掉 `//` 行注释（保留换行，其余原样）。
+    ///
+    /// 🔴 必须做这一步，否则守卫有个**假绿**后门：把某条注册注释成
+    /// `// commands::rc_xxx,`，解析器照样从注释文本里抠出 `rc_xxx`，于是「注册行被
+    /// 注释掉」在守卫眼里等于仍然注册着（2026-11-20 实测：注释掉 `rc_ask_state`
+    /// 后 787 条测试全绿）。实现不做词法分析，会连带砍掉字符串里的 `//`——
+    /// 这个块里只有命令名和注释，没有字符串字面量。
+    fn strip_line_comments(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        let mut in_comment = false;
+        while let Some(c) = chars.next() {
+            if in_comment {
+                if c == '\n' {
+                    in_comment = false;
+                    out.push(c);
+                }
+            } else if c == '/' && chars.peek() == Some(&'/') {
+                in_comment = true;
+                chars.next();
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     /// 抠出 `main.rs` 里所有 `tauri::generate_handler![…]` 的命令名。
+    ///
+    /// ❗ 认两种前缀：`commands::` 与 `rc::ask_pop::`。后者是入站申请浮层的三条命令
+    /// （`rc_ask_state` / `hide` / `reopen`），定义在 `rc/ask_pop.rs` 而不是命令层里
+    /// —— 2026-11-20 它们就是这么漏注册的：本解析器只认 `commands::`，于是「注册表
+    /// 少三条」这件事在穷举守卫眼里等于什么都没发生，而浮层卡片永远空白。
     fn handler_lists() -> Vec<Vec<String>> {
+        const MARKS: [&str; 2] = ["commands::", "rc::ask_pop::"];
         let src = include_str!("../main.rs");
         let mut out = Vec::new();
         let mut rest = src;
@@ -52,16 +85,27 @@ mod registry_guard {
             let end = rest.find(']').expect("generate_handler! 没有闭合");
             let block = &rest[..end];
             rest = &rest[end..];
+            let clean = strip_line_comments(block);
             out.push(
-                block
+                clean
                     .split(',')
                     .filter_map(|item| {
-                        // 每个分组前面有一行 `// —— 分组名 ——` 注释，它和第一条命令
-                        // 落在同一个逗号段里 ⇒ 不能直接 trim 后 strip_prefix，
-                        // 必须找出段内的 `commands::` 再取标识符（否则每组第一条命令
-                        // 都会被当成「没注册」，这条守卫就会假红）。
-                        let at = item.find("commands::")?;
-                        item[at + "commands::".len()..]
+                        // 每个分组前面有一行 `// —— 分组名 ——` 注释（已在上面剥掉），
+                        // 这里再取**最靠右**的前缀：万一将来块里出现别的写法，
+                        // 靠右的那个才是紧贴命令名的。
+                        let mut best: Option<(usize, &str)> = None;
+                        for m in MARKS {
+                            let mut from = 0;
+                            while let Some(rel) = item[from..].find(m) {
+                                let at = from + rel;
+                                if best.is_none_or(|(b, _)| at > b) {
+                                    best = Some((at, m));
+                                }
+                                from = at + m.len();
+                            }
+                        }
+                        let (at, mark) = best?;
+                        item[at + mark.len()..]
                             .chars()
                             .take_while(|c| c.is_alphanumeric() || *c == '_')
                             .collect::<String>()
@@ -119,6 +163,8 @@ mod registry_guard {
             ("commands/rc.rs", include_str!("rc.rs")),
             ("commands/rc_file.rs", include_str!("rc_file.rs")),
             ("commands/rc_pair.rs", include_str!("rc_pair.rs")),
+            // 入站申请浮层的三条命令（定义在 rc 里，注册前缀是 `rc::ask_pop::`）。
+            ("rc/ask_pop.rs", include_str!("../rc/ask_pop.rs")),
         ];
         let mut missing = Vec::new();
         let mut count = 0;

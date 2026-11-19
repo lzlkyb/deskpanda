@@ -32,6 +32,16 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 
 ### 修复
 - 修复 macOS 发版作业打包步骤的工作目录缺陷：路径改为仓库根相对并加产物齐全校验，避免 Release 缺 mac 安装包
+- 修复「有人请求远程这台电脑时确认卡片不出现」：补上置顶浮层界面，并把它需要的三条命令接进应用
+
+### 变更
+- 安装包随附 FFmpeg 运行库，AV1 / 硬件编码后端在装好的机器上可用（缺失时仍自动退回家用编码）
+
+### 技术细节
+- 入站浮层（`rcask.html`）此前只迁了组件、没迁入口页与命令注册：`ask_pop.rs` 指向的页面不存在（白窗），`rc_ask_state/hide/reopen` 未进 `invoke_handler`（卡片空白），`on_change` 未挂到 `boot.rs` 的会话回调（浮层不随状态换档），`capabilities` 的 windows 名单也缺 `rc-ask`（`listen()` 全静默失败）。四处一起补，并加了源码守卫钉住。
+- 删除 `ui-guards` feature：它把「命令注册 / capabilities / 前端 invoke」三侧成对的守卫挡在默认测试之外，而 pre-push 跑的是 `--no-default-features` ⇒ 守卫永远不会执行。改为常开后按本仓结构校正路径（注册表在 `main.rs`、`on_change` 在 `rc/boot.rs`、capabilities 只有 `default.json`）。
+- 注册穷举守卫两处假绿：① 只认 `commands::` 前缀，`rc::ask_pop::` 的注册等于不存在；② 不剥行注释，注释掉一条注册仍会被解析成「已注册」（实测注释掉 `rc_ask_state` 后 787 条测试全绿）。已修，并用「注释掉注册 → 红」验证过。
+- FF DLL 覆盖环境变量改名 `DESKPANDA_FF_DLL_DIR`（旧名 `PASTEPANDA_FF_DLL_DIR` 仍认）。
 
 ## [0.1.1] - 2026-11-02
 

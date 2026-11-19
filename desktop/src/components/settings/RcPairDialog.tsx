@@ -67,7 +67,7 @@ export function RcPairDialog({ rc, toast, onClose, onPairAccepted, initialTab = 
           {ended && <div className={`${styles.status} ${styles.error}`} role="alert">这次配对已结束，对方取消或确认超时。可以重新发起。</div>}
           {near.error ? <div className={`${styles.status} ${styles.error}`} role="alert">附近设备读取失败，请重新查找。{near.error}</div>
             : near.loading ? <div className={styles.empty} role="status">正在查找附近设备…</div>
-            : near.neighbors.length === 0 ? <div className={styles.empty}><Radar size={36} aria-hidden="true" /><h3>暂未发现附近设备</h3><p className={styles.hint}>让另一台电脑打开最新版 PastePanda，<br />并连接同一个 Wi-Fi 或局域网。</p><div className={styles.actions}><button type="button" className={styles.button} onClick={() => setTab("code")}>改用配对码</button></div></div>
+            : near.neighbors.length === 0 ? <div className={styles.empty}><Radar size={36} aria-hidden="true" /><h3>暂未发现附近设备</h3><p className={styles.hint}>让另一台电脑打开最新版 DeskPanda，<br />并连接同一个 Wi-Fi 或局域网。</p><div className={styles.actions}><button type="button" className={styles.button} onClick={() => setTab("code")}>改用配对码</button></div></div>
             : <RcNearbyList neighbors={near.neighbors} busy={near.busy} onPair={(device) => { setEnded(false); void near.startPair(device.node_id).catch((error) => toast(`发起配对失败：${String(error)}`, "error")); }} />}
         </>}
     </div>

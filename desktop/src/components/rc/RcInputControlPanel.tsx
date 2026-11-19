@@ -112,7 +112,7 @@ export function RcInputControlPanel({
       </div>
       {(granted || lockActive) && /Mac/i.test(navigator.platform) && (
         <span className={styles.inputLockNow} role="status">
-          按 Control+Option+Esc 可立即解除输入锁定，PastePanda 窗口内仍可操作。
+          按 Control+Option+Esc 可立即解除输入锁定，DeskPanda 窗口内仍可操作。
         </span>
       )}
       {lockActive && (

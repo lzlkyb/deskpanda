@@ -38,12 +38,12 @@ export function RcA2TitleBar({
     /* role="banner" 显式写出来（不依赖 <header> 的隐含角色）：这一条就是本窗口的
        全局头，测试按 landmark 定位比按品牌文案稳——品牌文案会改。 */
     <header className={styles.titleBar} role="banner" data-tauri-drag-region="deep">
-      {/* 品牌：稿子 `.brand`——图标 mark + 「PastePanda」+ 灰字「远程电脑」 */}
+      {/* 品牌：稿子 `.brand`——图标 mark + 「DeskPanda」+ 灰字「远程电脑」 */}
       <div className={styles.brand}>
         <span className={styles.brandIcon} aria-hidden="true">
           <MonitorUp size={15} />
         </span>
-        <span className={styles.brandName}>PastePanda</span>
+        <span className={styles.brandName}>DeskPanda</span>
         <span className={styles.brandSection}>远程电脑</span>
       </div>
 

@@ -87,12 +87,25 @@ describe("跨端接线守卫", () => {
     expect(COMMANDS_TS).toContain('invoke("rc_ask_hide")');
   });
 
-  // ⏸ 暂缓（S4 第二段的多窗口部分）：`rc-ask` 入站申请浮层是**独立窗口**，
-  // 本仓第一版只交付主窗口（工作台），窗口与它的 capabilities 条目都还没建，
-  // 断言 `default.json` 里有没有 `"rc-ask"` 必然红。
-  // 这条守卫本身是对的（漏权限 = `listen()` 全静默失败、卡片永远空白），
-  // 所以**不删**：等浮层窗口落地时把 `.skip` 去掉，它会立刻替你验一遍权限名单。
-  it.skip("浮层窗口在权限名单里（漏了 = listen() 全静默失败，卡片永远空白）", () => {
+  // 🔴 这三条是浮层「窗口壳」的三处接线，任何一处漏掉都是**静默**失败：
+  // 缺权限 → `listen()` 全拒、卡片永远空白；缺注册 → invoke 报 command not found；
+  // 缺页面 → 窗口加载 404 白窗。2026-11-20 实测这三处**同时**漏（tsc/vitest 全绿，
+  // 因为都查不到 Rust 注册表与 html 入口），所以一并钉在这里。
+  it("浮层窗口在权限名单里（漏了 = listen() 全静默失败，卡片永远空白）", () => {
     expect(CAPS).toContain('"rc-ask"');
+  });
+
+  it("三条命令都在 invoke_handler 里注册过（定义在 rc/ask_pop.rs，注册守卫扫不到它）", () => {
+    const MAIN_RS = read("../../src-tauri/src/main.rs");
+    for (const cmd of ["rc_ask_state", "rc_ask_hide", "rc_ask_reopen"]) {
+      expect(MAIN_RS, `${cmd} 没进 invoke_handler`).toContain(`rc::ask_pop::${cmd}`);
+    }
+  });
+
+  it("浮层页面入口存在且指向真入口（缺了 = 窗口白屏，不报错）", () => {
+    const html = read("../../rcask.html");
+    expect(html).toContain("/src/rcask.tsx");
+    // 入口文件本身也要在：html 指过去但文件没了，构建期只会静默产出一个空壳页。
+    expect(read("../rcask.tsx")).toContain("<RcAskPop />");
   });
 });

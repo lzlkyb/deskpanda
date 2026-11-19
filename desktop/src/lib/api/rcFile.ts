@@ -122,7 +122,7 @@ export function rcFileSnapshot(): Promise<RcFileSnapshot> {
 }
 
 /**
- * 接收目录（设置里配置的覆盖目录；未配置 = `<下载>/PastePanda 接收/`）。
+ * 接收目录（设置里配置的覆盖目录；未配置 = `<下载>/DeskPanda 接收/`）。
  *
  * 由 Rust 给而不是前端拼：中文系统的下载目录叫「下载」，还可能被重定向到别的盘。
  * 2026-09-27：push 接受不再弹目录选择框，本命令是「落点」的唯一取值口。
