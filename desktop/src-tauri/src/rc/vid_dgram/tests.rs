@@ -6,7 +6,18 @@
 use super::*;
 
 fn dgrams(seq: u32, data: &[u8], key: bool) -> Vec<Vec<u8>> {
-    frame_dgrams(seq, data, key, 1_758_000_000_000, 3, 5, 1920, 1080, crate::rc::video::FrameCodec::H264, super::FRAG)
+    frame_dgrams(
+        seq,
+        data,
+        key,
+        1_758_000_000_000,
+        3,
+        5,
+        1920,
+        1080,
+        crate::rc::video::FrameCodec::H264,
+        super::FRAG,
+    )
 }
 
 /// 喂一批片，返回期间交付的全部帧。
@@ -129,7 +140,10 @@ fn 宽限过期才跳帧_置damage信号_锚定后恢复() {
     // 过了宽限期 seq3 才到：判定引用链断裂，跳帧 + damage 信号
     std::thread::sleep(std::time::Duration::from_millis(HOLE_GRACE_MS + 20));
     assert!(feed_all(&mut r, &dgrams(3, &data, false)).is_empty());
-    assert!(r.take_damaged(), "跳帧必须置 damage（调用方发 request_key）");
+    assert!(
+        r.take_damaged(),
+        "跳帧必须置 damage（调用方发 request_key）"
+    );
     assert!(!r.take_damaged(), "damage 信号一次性");
     // 走流的关键帧锚定 → 恢复交付
     assert_eq!(feed_all(&mut r, &dgrams(5, &data, true)).len(), 1);
@@ -218,7 +232,10 @@ fn 畸形奇偶片_槽位不自洽必须被拒且不下溢() {
     assert_eq!(feed_all(&mut r, &dgrams(0, &data, true)).len(), 1);
     // frag_count = 3（数据槽 0..3、奇偶槽 3..4），却谎称 frag_idx = 0 是奇偶片
     let bad = build_dg(1, FLAG_PARITY, 0, 3, 2500, &[0xAA; 100]);
-    assert!(r.feed(&bad).is_empty(), "槽位不自洽的包必须被丢弃（且不得 panic）");
+    assert!(
+        r.feed(&bad).is_empty(),
+        "槽位不自洽的包必须被丢弃（且不得 panic）"
+    );
     // 反向不自洽：frag_idx 落在奇偶槽却**没**置 PARITY 位
     let bad2 = build_dg(1, 0, 3, 3, 2500, &[0xBB; 100]);
     assert!(r.feed(&bad2).is_empty(), "奇偶槽却没标 PARITY：同样不自洽");
@@ -271,7 +288,10 @@ fn 脏包_声明大帧_单片到达_存储不放大() {
     //（首片非关键帧 → await_first_key 拦交付，锚定只能来自可靠流，与既有
     // `流关键帧锚定后补交付已缓冲帧` 测试同一条路径）
     let data: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect();
-    assert!(feed_all(&mut r, &dgrams(9, &data, false)).is_empty(), "锚定前 P 帧不交付");
+    assert!(
+        feed_all(&mut r, &dgrams(9, &data, false)).is_empty(),
+        "锚定前 P 帧不交付"
+    );
     let got = r.reset_after_stream_key(8);
     assert_eq!(got.len(), 1, "锚定后缓冲完整的 seq9 应立即补交付");
     assert!(!r.map.contains_key(&7), "锚定保留应清掉滞留的脏帧");
@@ -281,7 +301,10 @@ fn 脏包_声明大帧_单片到达_存储不放大() {
 #[test]
 fn frame_len_ok_三条边界全拒() {
     assert!(!frame_len_ok(0, 1, super::FRAG), "frame_len=0 必须拒");
-    assert!(!frame_len_ok(u32::MAX, 1, super::FRAG), "u32::MAX 必须拒（远程 OOM）");
+    assert!(
+        !frame_len_ok(u32::MAX, 1, super::FRAG),
+        "u32::MAX 必须拒（远程 OOM）"
+    );
     assert!(
         !frame_len_ok(16_384, 1, super::FRAG),
         "超过 frag_count*FRAG（1*1000）必须拒"
@@ -294,7 +317,11 @@ fn frame_len_ok_三条边界全拒() {
     assert!(frame_len_ok(1, 1, super::FRAG));
     assert!(frame_len_ok(FRAG as u32, 1, super::FRAG));
     assert!(
-        frame_len_ok((MAX_FRAG_COUNT as usize * FRAG) as u32, MAX_FRAG_COUNT, super::FRAG),
+        frame_len_ok(
+            (MAX_FRAG_COUNT as usize * FRAG) as u32,
+            MAX_FRAG_COUNT,
+            super::FRAG
+        ),
         "frag_count 满配时的物理最大帧长应放行"
     );
 }
@@ -360,7 +387,19 @@ fn take_seq_回绕跳过0() {
 // ── P3.1 RS FEC ──
 
 fn dgrams_rs(seq: u32, data: &[u8], key: bool, m: usize) -> Vec<Vec<u8>> {
-    frame_dgrams_rs(seq, data, key, 1_758_000_000_000, 3, 5, 1920, 1080, crate::rc::video::FrameCodec::H264, m, super::FRAG)
+    frame_dgrams_rs(
+        seq,
+        data,
+        key,
+        1_758_000_000_000,
+        3,
+        5,
+        1920,
+        1080,
+        crate::rc::video::FrameCodec::H264,
+        m,
+        super::FRAG,
+    )
 }
 
 #[test]
@@ -470,13 +509,30 @@ fn 旧格式xor路径不受影响() {
 #[test]
 fn 大分片往返_1400片宽_数据一致() {
     let data: Vec<u8> = (0..5_000u32).map(|i| (i % 249) as u8).collect();
-    let dgs = frame_dgrams(9, &data, true, 1_758_000_000_000, 3, 5, 1920, 1080, crate::rc::video::FrameCodec::H264, FRAG_BIG);
+    let dgs = frame_dgrams(
+        9,
+        &data,
+        true,
+        1_758_000_000_000,
+        3,
+        5,
+        1920,
+        1080,
+        crate::rc::video::FrameCodec::H264,
+        FRAG_BIG,
+    );
     // 5000B 按 1400 分 = 4 片（1400+1400+1400+800）+1 奇偶；1000 片宽则要 5+1
     assert_eq!(dgs.len(), 4 + 1, "1400 片宽下必须 4 数据片 + 1 奇偶");
     assert!(dgs.iter().all(|dg| dg[0] == DGRAM_TAG));
     // 全部数据报带 FLAG_FRAG_BIG 位（随帧自描述）
-    assert!(dgs.iter().all(|dg| dg[5] & FLAG_FRAG_BIG != 0), "每片都必须带大分片标记");
-    assert!(dgs.iter().all(|dg| dg.len() <= HEADER + FRAG_BIG), "任何一片不得超片宽+头");
+    assert!(
+        dgs.iter().all(|dg| dg[5] & FLAG_FRAG_BIG != 0),
+        "每片都必须带大分片标记"
+    );
+    assert!(
+        dgs.iter().all(|dg| dg.len() <= HEADER + FRAG_BIG),
+        "任何一片不得超片宽+头"
+    );
     let mut r = VidReassembler::new();
     let got = feed_all(&mut r, &dgs);
     assert_eq!(got.len(), 1);
@@ -492,7 +548,21 @@ fn 大分片_1000混排_同重组器都能解() {
     let mut r = VidReassembler::new();
     let mut got = Vec::new();
     got.extend(feed_all(&mut r, &dgrams(1, &d1000, true))); // 1000 片宽关键帧
-    got.extend(feed_all(&mut r, &frame_dgrams(2, &d1400, false, 1_758_000_000_000, 3, 5, 1920, 1080, crate::rc::video::FrameCodec::H264, FRAG_BIG)));
+    got.extend(feed_all(
+        &mut r,
+        &frame_dgrams(
+            2,
+            &d1400,
+            false,
+            1_758_000_000_000,
+            3,
+            5,
+            1920,
+            1080,
+            crate::rc::video::FrameCodec::H264,
+            FRAG_BIG,
+        ),
+    ));
     assert_eq!(got.len(), 2, "混排两帧都必须交付");
     assert_eq!(got[0].data, d1000);
     assert_eq!(got[1].data, d1400);
@@ -503,7 +573,19 @@ fn 大分片_RS路径_恢复一致() {
     // RS 版同样要支持大分片：encode/decode 的等长补零宽度必须同为片宽，
     // 错一位就是静默解不出（降级为丢帧，比数据错更难查）。
     let data: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
-    let dgs = frame_dgrams_rs(5, &data, true, 1_758_000_000_000, 3, 5, 1920, 1080, crate::rc::video::FrameCodec::H264, 2, FRAG_BIG);
+    let dgs = frame_dgrams_rs(
+        5,
+        &data,
+        true,
+        1_758_000_000_000,
+        3,
+        5,
+        1920,
+        1080,
+        crate::rc::video::FrameCodec::H264,
+        2,
+        FRAG_BIG,
+    );
     let mut r = VidReassembler::new();
     // 丢第 0 片（第 0 组），RS 校验恢复
     let mut got = Vec::new();

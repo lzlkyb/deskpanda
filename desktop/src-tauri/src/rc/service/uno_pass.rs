@@ -91,7 +91,13 @@ impl RcService {
         let established = {
             let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             // Credential：白名单行还没写（D1），信任由刚验过的码提供。
-            self.establish_inbound_with(&mut inner, peer, name.clone(), cap, InboundTrust::Credential)
+            self.establish_inbound_with(
+                &mut inner,
+                peer,
+                name.clone(),
+                cap,
+                InboundTrust::Credential,
+            )
         };
         match established {
             Ok(_) => {
@@ -122,10 +128,7 @@ impl RcService {
                     }
                 }
                 self.uno.consume(&grant.hash);
-                log::info!(
-                    "[RC] {short} 通过无人值守接入码连入（{}）",
-                    cap.as_str()
-                );
+                log::info!("[RC] {short} 通过无人值守接入码连入（{}）", cap.as_str());
                 UnoAdmit::Admitted
             }
             Err(e) => {
@@ -247,7 +250,13 @@ impl RcService {
         let established = {
             let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             // Credential：白名单行还没写（D1），信任由刚验过的密码提供。
-            self.establish_inbound_with(&mut inner, peer, name.clone(), cap, InboundTrust::Credential)
+            self.establish_inbound_with(
+                &mut inner,
+                peer,
+                name.clone(),
+                cap,
+                InboundTrust::Credential,
+            )
         };
         match established {
             Ok(_) => {

@@ -18,7 +18,11 @@ const SCALE_HOLD: std::time::Duration = std::time::Duration::from_secs(3);
 /// [`apply_bitrate_scale`] 的纯判断半（无环境可单测，见项目规则 11.1）：
 /// 距上次变更不足冷却期时放行吗？`last=None`（从未变更过）恒放行；
 /// 剧变（`diff ≥ SCALE_JUMP_PCT`）恒放行；其余在冷却期内拦截。
-fn scale_change_allowed(last: Option<std::time::Instant>, now: std::time::Instant, diff: u32) -> bool {
+fn scale_change_allowed(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    diff: u32,
+) -> bool {
     match last {
         None => true,
         Some(t) => {
@@ -32,7 +36,11 @@ fn scale_change_allowed(last: Option<std::time::Instant>, now: std::time::Instan
 
 /// [`apply_bitrate_scale`] 的稳定窗口半（纯函数，规则 11.1）：候选值稳够
 /// [`SCALE_HOLD`] 了吗？剧变（diff ≥ [`SCALE_JUMP_PCT`]）恒豁免。
-fn scale_hold_satisfied(candidate_since: std::time::Instant, now: std::time::Instant, diff: u32) -> bool {
+fn scale_hold_satisfied(
+    candidate_since: std::time::Instant,
+    now: std::time::Instant,
+    diff: u32,
+) -> bool {
     diff >= SCALE_JUMP_PCT || now.duration_since(candidate_since) >= SCALE_HOLD
 }
 
@@ -65,7 +73,11 @@ pub(in crate::rc) enum FailVerdict {
 /// 「静图幻灯片」放在最后一档，见上面那份对照文档 §0。
 pub(in crate::rc) fn encode_fail_verdict(streak: u32, hw_broken: bool) -> FailVerdict {
     if hw_broken {
-        if streak >= ENC_FAIL_FUSE { FailVerdict::Fuse } else { FailVerdict::RetrySameEngine }
+        if streak >= ENC_FAIL_FUSE {
+            FailVerdict::Fuse
+        } else {
+            FailVerdict::RetrySameEngine
+        }
     } else if streak >= ENC_FAIL_TO_SOFTWARE {
         FailVerdict::SwitchToSoftware
     } else {
@@ -159,7 +171,10 @@ pub(in crate::rc) enum Backend {
 
 impl Backend {
     fn set_bitrate(&mut self, bps: u32) -> bool {
-        match self { Self::Mf(e) => e.set_bitrate(bps), Self::Ff(e) => e.set_bitrate(bps) }
+        match self {
+            Self::Mf(e) => e.set_bitrate(bps),
+            Self::Ff(e) => e.set_bitrate(bps),
+        }
     }
     fn size(&self) -> (u32, u32) {
         match self {
@@ -266,15 +281,28 @@ impl H264SessionEncoder {
         self.next_capture_at = at_ms;
     }
 
-    fn stamp_packets(&mut self, result: Result<Vec<H264Packet>, String>) -> Result<Vec<H264Packet>, String> {
+    fn stamp_packets(
+        &mut self,
+        result: Result<Vec<H264Packet>, String>,
+    ) -> Result<Vec<H264Packet>, String> {
         match result {
             Ok(mut packets) => {
                 // 两个后端都禁止 B 帧；输出顺序与提交输入一致。
-                for p in &mut packets { p.at_ms = self.capture_times.pop_front().unwrap_or(self.next_capture_at); }
-                if self.capture_times.len() > 120 { self.capture_times.clear(); }
+                for p in &mut packets {
+                    p.at_ms = self
+                        .capture_times
+                        .pop_front()
+                        .unwrap_or(self.next_capture_at);
+                }
+                if self.capture_times.len() > 120 {
+                    self.capture_times.clear();
+                }
                 Ok(packets)
             }
-            Err(e) => { self.capture_times.clear(); Err(e) }
+            Err(e) => {
+                self.capture_times.clear();
+                Err(e)
+            }
         }
     }
     /// 按目标分辨率打开；基准码率由**宽度**决定（帧率因子与缩放在
@@ -351,14 +379,17 @@ impl H264SessionEncoder {
         let scale = scale_pct.clamp(10, 300);
         let base_bitrate = bitrate_for_width(width);
         // 初始打开的实际码率 = 基准 × 帧率因子 × 缩放，与 scaled_bitrate 同口径
-        let initial = ((base_bitrate as u64 * fps_bitrate_factor(fps) * scale as u64) / 10_000) as u32;
+        let initial =
+            ((base_bitrate as u64 * fps_bitrate_factor(fps) * scale as u64) / 10_000) as u32;
         match open_chain(codec, width, height, fps, initial, false, false) {
             Ok(enc) => Self::shell(codec, Some(enc), base_bitrate, fps, scale, false),
             Err(e) => {
                 if codec == VideoCodec::Hevc {
                     // HEVC 目标回落 H.264 时走同一条 open_chain：MF H264 也不行
                     // 还会试 FF（2026-09-19 P2 修复的延续，FF 是链上新增的下一级）。
-                    if let Ok(enc) = open_chain(VideoCodec::H264, width, height, fps, initial, false, false) {
+                    if let Ok(enc) =
+                        open_chain(VideoCodec::H264, width, height, fps, initial, false, false)
+                    {
                         log::warn!("[RC] HEVC 初始打开失败，按回落链改用 H.264：{e}");
                         return Self::shell(
                             VideoCodec::H264,
@@ -423,10 +454,18 @@ impl H264SessionEncoder {
         let enc = open_chain(codec, w, h, fps, bps, file, skip_hw);
         let mut result = match enc {
             Ok(enc) => Self::shell(codec, Some(enc), bitrate_for_width(w), fps, 100, false),
-            Err(_) if codec == VideoCodec::Hevc => Self::shell(VideoCodec::H264,
-                open_chain(VideoCodec::H264, w, h, fps, bps, file, skip_hw).ok(), bitrate_for_width(w), fps, 100, true),
-            Err(e) => { log::warn!("[RC] 编码器起播失败：{e}");
-                Self::shell(codec, None, bitrate_for_width(w), fps, 100, false) }
+            Err(_) if codec == VideoCodec::Hevc => Self::shell(
+                VideoCodec::H264,
+                open_chain(VideoCodec::H264, w, h, fps, bps, file, skip_hw).ok(),
+                bitrate_for_width(w),
+                fps,
+                100,
+                true,
+            ),
+            Err(e) => {
+                log::warn!("[RC] 编码器起播失败：{e}");
+                Self::shell(codec, None, bitrate_for_width(w), fps, 100, false)
+            }
         };
         result.budget_bps = Some(bps);
         result.file_mode = file;
@@ -436,7 +475,9 @@ impl H264SessionEncoder {
     pub(in crate::rc) fn apply_bitrate_budget(&mut self, bps: u32) {
         let bps = bps.max(400_000);
         let old = self.scaled_bitrate();
-        if old.abs_diff(bps) < (old / 10).max(50_000) { return; }
+        if old.abs_diff(bps) < (old / 10).max(50_000) {
+            return;
+        }
         let now = std::time::Instant::now();
         if self.enc.as_mut().is_some_and(|e| e.set_bitrate(bps)) {
             self.budget_bps = Some(bps);
@@ -468,8 +509,15 @@ impl H264SessionEncoder {
         self.pending_budget = Some((bps, since));
         // 容量骤降时连续变化的候选可能永远稳不住；大幅降码率必须允许
         // 提前重开，仍保留冷却以免每一轮拥塞反馈都重建编码器。
-        if bps > old / 2 && now.duration_since(since) < SCALE_HOLD { return; }
-        if self.last_scale_change.is_some_and(|t| now.duration_since(t) < SCALE_COOLDOWN) { return; }
+        if bps > old / 2 && now.duration_since(since) < SCALE_HOLD {
+            return;
+        }
+        if self
+            .last_scale_change
+            .is_some_and(|t| now.duration_since(t) < SCALE_COOLDOWN)
+        {
+            return;
+        }
         self.budget_bps = Some(bps);
         self.reopen_needed = true;
         self.pending_budget = None;
@@ -569,7 +617,9 @@ impl H264SessionEncoder {
     }
 
     pub(in crate::rc) fn scaled_bitrate(&self) -> u32 {
-        if let Some(bps) = self.budget_bps { return bps; }
+        if let Some(bps) = self.budget_bps {
+            return bps;
+        }
         // base（30fps 标定）× 帧率抬升 × RTT/丢包缩放；换档重开时生效
         ((self.base_bitrate as u64 * fps_bitrate_factor(self.fps) * self.scale_pct as u64) / 10_000)
             .max(400_000) as u32
@@ -600,14 +650,34 @@ impl H264SessionEncoder {
             // 全是硬件编码器，定罪之后复用它等于原地再撞一次同一堵墙。
             let opened = if !self.hw_broken && matches!(self.enc.as_ref(), Some(Backend::Ff(_))) {
                 let open_ff: fn(VideoCodec, u32, u32, u32, u32) -> Result<FfEncoder, String> =
-                    if self.file_mode { FfEncoder::open_file } else { FfEncoder::open };
+                    if self.file_mode {
+                        FfEncoder::open_file
+                    } else {
+                        FfEncoder::open
+                    };
                 open_ff(self.codec, ew, eh, self.fps, self.scaled_bitrate())
                     .map(Backend::Ff)
                     .or_else(|_| {
-                        open_chain(self.codec, ew, eh, self.fps, self.scaled_bitrate(), self.file_mode, self.hw_broken)
+                        open_chain(
+                            self.codec,
+                            ew,
+                            eh,
+                            self.fps,
+                            self.scaled_bitrate(),
+                            self.file_mode,
+                            self.hw_broken,
+                        )
                     })
             } else {
-                open_chain(self.codec, ew, eh, self.fps, self.scaled_bitrate(), self.file_mode, self.hw_broken)
+                open_chain(
+                    self.codec,
+                    ew,
+                    eh,
+                    self.fps,
+                    self.scaled_bitrate(),
+                    self.file_mode,
+                    self.hw_broken,
+                )
             };
             match opened {
                 Ok(e) => {
@@ -635,7 +705,11 @@ impl H264SessionEncoder {
         let enc = self.enc.as_mut().ok_or("无视频编码器")?;
         let encode_start = std::time::Instant::now();
         let encoded = enc.encode_nv12(&self.nv12_buf);
-        self.cpu_perf.note((w, h), (ew, eh), [open_time, scale_time, convert_time, encode_start.elapsed()]);
+        self.cpu_perf.note(
+            (w, h),
+            (ew, eh),
+            [open_time, scale_time, convert_time, encode_start.elapsed()],
+        );
         self.stamp_packets(encoded)
     }
 
@@ -747,8 +821,15 @@ impl H264SessionEncoder {
         if !self.gpu_mode || self.reopen_needed || size_changed {
             self.capture_times.clear();
             crate::rc::perf::bump(&crate::rc::perf::counters::ENC_REOPEN);
-            match MfH264Encoder::open_gpu(self.codec, device, ctx, ew, eh, self.fps, self.scaled_bitrate())
-            {
+            match MfH264Encoder::open_gpu(
+                self.codec,
+                device,
+                ctx,
+                ew,
+                eh,
+                self.fps,
+                self.scaled_bitrate(),
+            ) {
                 Ok(e) => {
                     // GPU 零拷贝仅 MF 有（FF 只接 CPU 路径）；从 FF 切回 MF 是升级，
                     // 从 MF 切回 MF 是常规重开 —— 两种都合法。
@@ -817,7 +898,15 @@ mod tests {
         let mut enc = H264SessionEncoder::shell(VideoCodec::H264, None, 4_000_000, 30, 100, false);
         enc.capture_times.extend([100, 133, 166]);
         enc.next_capture_at = 166;
-        let output = enc.stamp_packets(Ok(vec![H264Packet { at_ms: 0, data: vec![1], key: true, width: 64, height: 64 }])).unwrap();
+        let output = enc
+            .stamp_packets(Ok(vec![H264Packet {
+                at_ms: 0,
+                data: vec![1],
+                key: true,
+                width: 64,
+                height: 64,
+            }]))
+            .unwrap();
         assert_eq!(output[0].at_ms, 100);
         assert_eq!(enc.capture_times.len(), 2);
         assert!(enc.stamp_packets(Err("broken".into())).is_err());

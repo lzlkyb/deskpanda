@@ -72,7 +72,13 @@ pub fn h264_level_for(width: u32, height: u32, fps: u32) -> u32 {
     // 只升不降：低端按旧启发式（兼容性优先），超了才抬。
     let frame_mbs = (w.div_ceil(16) as u64) * (h.div_ceil(16) as u64) * fps.max(1) as u64;
     // [L4.0=40, L4.2=42, L5.0=50, L5.1=51, L5.2=52] 的 MaxMBPS（规范表）
-    for (lv, max_mbs) in [(40u32, 245_760u64), (42, 522_240), (50, 589_824), (51, 983_040), (52, 2_073_600)] {
+    for (lv, max_mbs) in [
+        (40u32, 245_760u64),
+        (42, 522_240),
+        (50, 589_824),
+        (51, 983_040),
+        (52, 2_073_600),
+    ] {
         if frame_mbs <= max_mbs {
             if lv > level {
                 level = lv;
@@ -124,12 +130,12 @@ mod ff;
 /// P2.3：AV1 硬编可用性（FF 候选链探测，caps 上报用）。
 pub use ff::av1_hw_available;
 mod mf;
-mod session;
 mod scale;
+mod session;
 
+pub(in crate::rc) use ff::FfEncoder;
 pub use mf::*;
 pub use session::*;
-pub(in crate::rc) use ff::FfEncoder;
 // to_annex_b 由 mf 模块实现；给测试与会话编码器一个父模块绑定。
 pub(in crate::rc) use mf::mf_err;
 #[cfg(test)]

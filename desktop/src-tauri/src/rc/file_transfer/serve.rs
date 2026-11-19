@@ -42,9 +42,7 @@ impl RcService {
             };
             conn.close(code.into(), gate.deny_code().as_bytes());
             if gate == crate::rc::session::Gate::NotPaired && self.has_remote_trust(&peer) {
-                log::info!(
-                    "[RC] {short} 文件连接被拒：仅笔记同步配对，尚未获得远程/文件权限"
-                );
+                log::info!("[RC] {short} 文件连接被拒：仅笔记同步配对，尚未获得远程/文件权限");
             } else {
                 log::info!("[RC] {short} 文件连接被拒：{}", gate.deny_reason());
             }
@@ -139,9 +137,9 @@ impl RcService {
             None => {
                 // 落点由用户在确认条上选（默认值由前端调 `rc_file_default_dir` 取），
                 // 这里**不猜**目录：猜错就是往一个莫名其妙的地方写文件。
-                let ask_id =
-                    self.file
-                        .ask(peer, &peer_name, AskKind::Push, name, size, now_ms());
+                let ask_id = self
+                    .file
+                    .ask(peer, &peer_name, AskKind::Push, name, size, now_ms());
                 self.emit_file_state();
                 let picked = loop {
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -209,7 +207,11 @@ impl RcService {
             return;
         }
         if plan.offset > 0 {
-            log::info!("[RC] {short} 续传 {}：从 {} 字节继续", plan.final_name, plan.offset);
+            log::info!(
+                "[RC] {short} 续传 {}：从 {} 字节继续",
+                plan.final_name,
+                plan.offset
+            );
         }
 
         let task_id = self.file.task_start(
@@ -223,7 +225,8 @@ impl RcService {
         );
         // 实际落盘路径（收侧）——净化过重名后的最终路径，不是对端报的那个名字。
         // 用**原始**路径：plan.final_path 可能带 `\\?\` 前缀（C6），explorer 不认。
-        self.file.task_note_path(&task_id, &dir.join(&plan.final_name));
+        self.file
+            .task_note_path(&task_id, &dir.join(&plan.final_name));
         self.emit_file_state();
         let (outcome, got) = recv_bytes(self, &mut recv, &plan, size, &task_id).await;
         let (state, err) = outcome.finish(got, size);
@@ -234,7 +237,10 @@ impl RcService {
         if state == TaskState::Done {
             log::info!("[RC] {short} 已接收 {}（{} 字节）", plan.final_name, size);
         } else {
-            log::warn!("[RC] {short} 接收 {} 未完成：{state:?} {err:?}", plan.final_name);
+            log::warn!(
+                "[RC] {short} 接收 {} 未完成：{state:?} {err:?}",
+                plan.final_name
+            );
         }
         self.finish_file(&task_id, state, err, size);
         // P1-3：**不在这里关连接**——多文件批次里后面还有文件要接，
@@ -258,7 +264,9 @@ impl RcService {
         let peer_name = self.peer_name(peer);
         // 文案与「对方要给你发文件」必须区分开：那个的按键是「选放哪儿」，
         // 这个的按键是「去选文件」（设计稿 11.2 的注意事项 2）。
-        let ask_id = self.file.ask(peer, &peer_name, AskKind::Pull, "", 0, now_ms());
+        let ask_id = self
+            .file
+            .ask(peer, &peer_name, AskKind::Pull, "", 0, now_ms());
         self.emit_file_state();
         let picked = loop {
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -338,14 +346,19 @@ impl RcService {
             return;
         }
 
-        let task_id = self
-            .file
-            .task_start(peer, &peer_name, TaskDir::Send, &name, size, offset, now_ms());
+        let task_id = self.file.task_start(
+            peer,
+            &peer_name,
+            TaskDir::Send,
+            &name,
+            size,
+            offset,
+            now_ms(),
+        );
         // 源文件绝对路径（发侧）——对方要走的那个文件在本机哪儿。
         self.file.task_note_path(&task_id, &path);
         self.emit_file_state();
-        let (outcome, sent) =
-            send_bytes(self, &mut send, &path, size, offset, &task_id).await;
+        let (outcome, sent) = send_bytes(self, &mut send, &path, size, offset, &task_id).await;
         let (state, err) = outcome.finish(sent, size);
         if state != TaskState::Done {
             log::warn!("[RC] {short} 发送 {name} 未完成：{state:?} {err:?}");
@@ -364,14 +377,24 @@ impl RcService {
     }
 
     /// 魔数 + 头帧（帧格式与 `rc/1` 的 write_frame 同款：大端长度前缀）。
-    pub(in crate::rc) async fn write_head(&self, send: &mut SendStream, bytes: &[u8]) -> Result<(), String> {
+    pub(in crate::rc) async fn write_head(
+        &self,
+        send: &mut SendStream,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         send.write_all(&MAGIC[..])
             .await
             .map_err(|e| format!("写流头失败：{}", e))?;
         write_frame(send, bytes).await
     }
 
-    pub(in crate::rc) fn finish_file(&self, task_id: &str, state: TaskState, err: Option<String>, _size: u64) {
+    pub(in crate::rc) fn finish_file(
+        &self,
+        task_id: &str,
+        state: TaskState,
+        err: Option<String>,
+        _size: u64,
+    ) {
         if self.file.task_finish(task_id, state, err, now_ms()) {
             self.emit_file_state();
         }

@@ -18,15 +18,18 @@ impl LossSampler {
 
     fn observe(&mut self, path: PathId, lost: u64, sent: u64) -> i64 {
         let previous = self.previous.replace((path, lost, sent));
-        let Some((old_path, old_lost, old_sent)) = previous else { return 0; };
+        let Some((old_path, old_lost, old_sent)) = previous else {
+            return 0;
+        };
         if old_path != path || lost < old_lost || sent < old_sent {
             // 新路径尚无窗口样本，清掉旧 EMA；不能让中继拥塞压低直连起步预算。
             self.ema = None;
             return 0;
         }
-        if sent == old_sent { return -1; }
-        let loss = lost.saturating_sub(old_lost).saturating_mul(1000)
-            / (sent - old_sent);
+        if sent == old_sent {
+            return -1;
+        }
+        let loss = lost.saturating_sub(old_lost).saturating_mul(1000) / (sent - old_sent);
         let loss = loss.min(1000);
         let next = self.ema.map_or(loss, |ema| (ema * 7 + loss * 3) / 10);
         self.ema = Some(next);
@@ -47,8 +50,11 @@ mod tests {
         assert_eq!(sampler.observe(relay, 10, 200), 100);
         assert_eq!(sampler.observe(direct, 0, 20), 0);
         assert_eq!(sampler.observe(direct, 0, 120), 0);
-        assert_eq!(sampler.observe(direct, 10, 220), 30,
-            "真实新路径丢包仍须触发码控，不能一直忽略");
+        assert_eq!(
+            sampler.observe(direct, 10, 220),
+            30,
+            "真实新路径丢包仍须触发码控，不能一直忽略"
+        );
         assert_eq!(sampler.observe(relay, 50, 400), 0);
     }
 

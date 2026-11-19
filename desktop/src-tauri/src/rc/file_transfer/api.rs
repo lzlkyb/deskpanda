@@ -5,7 +5,11 @@ use super::*;
 impl RcService {
     /// 把本机文件发给对端。**校验同步做完**（不合格的文件不该让整批卡住），
     /// 真正的传输在后台串行跑（弱网下并发文件互挤，总时长反而更长）。
-    pub async fn file_send(self: &Arc<Self>, peer: &str, paths: Vec<PathBuf>) -> Result<(), String> {
+    pub async fn file_send(
+        self: &Arc<Self>,
+        peer: &str,
+        paths: Vec<PathBuf>,
+    ) -> Result<(), String> {
         if paths.is_empty() {
             return Err("没有选中文件".into());
         }
@@ -15,10 +19,7 @@ impl RcService {
                 .await
                 .map_err(|e| format!("读不到 {}：{}", p.display(), e))?;
             if !meta.is_file() {
-                return Err(format!(
-                    "{} 不是文件——目录传输留到后续版本",
-                    p.display()
-                ));
+                return Err(format!("{} 不是文件——目录传输留到后续版本", p.display()));
             }
             if meta.len() > MAX_FILE_BYTES {
                 return Err(format!(
@@ -84,7 +85,8 @@ impl RcService {
     /// 取消一条进行中的任务。收侧保留 `.pppart`（下次可续），发侧直接停。
     pub fn file_cancel(&self, task_id: &str) {
         if self.file.is_running(task_id) {
-            self.file.task_finish(task_id, TaskState::Canceled, None, now_ms());
+            self.file
+                .task_finish(task_id, TaskState::Canceled, None, now_ms());
             self.emit_file_state();
         }
     }
@@ -167,15 +169,16 @@ impl RcService {
         let Some((ep, presence)) = self.transport_ready() else {
             return Err("[channel_down] 远程通道未启动——先打开「允许被远程协助」".into());
         };
-        let addr = self.peer_addr(peer, &presence)
+        let addr = self
+            .peer_addr(peer, &presence)
             .map_err(|e| format!("[bad_node_id] {e}"))?;
         // ❗ 失败要单独分档：旧版对端根本没有这条 ALPN，握手必然失败。
         //   塌缩成「连接失败」会让用户去查网络，而实际要做的是升级对方。
         // C-3：与 dial_and_request 同款超时——网络黑洞下后台任务不得无限挂。
         match tokio::time::timeout(Duration::from_secs(15), ep.connect(addr, FILE_ALPN)).await {
-            Err(_) => Err(
-                "[connect_timeout] 连接对方文件通道超时（对方可能离线或网络不可达）".into(),
-            ),
+            Err(_) => {
+                Err("[connect_timeout] 连接对方文件通道超时（对方可能离线或网络不可达）".into())
+            }
             Ok(Err(e)) => Err(format!(
                 "[file_unsupported] 对方没有响应文件通道（可能是不支持文件传输的旧版本）：{e}"
             )),

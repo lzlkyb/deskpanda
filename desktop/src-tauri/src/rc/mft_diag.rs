@@ -297,7 +297,10 @@ unsafe fn create_by_clsid(codec: VideoCodec, name_filter: &str) -> String {
             continue;
         }
         out = match a.GetGUID(&MFT_TRANSFORM_CLSID_Attribute) {
-            Err(e) => format!("CLSID 直创[{name}]：读 CLSID 失败 {:#010X}", e.code().0 as u32),
+            Err(e) => format!(
+                "CLSID 直创[{name}]：读 CLSID 失败 {:#010X}",
+                e.code().0 as u32
+            ),
             Ok(clsid) => {
                 let created: windows::core::Result<IMFTransform> =
                     CoCreateInstance(&clsid, None, CLSCTX_INPROC_SERVER);

@@ -69,7 +69,10 @@ impl Default for ProbeState {
 
 impl ProbeState {
     pub const fn new() -> Self {
-        Self { frag: AtomicUsize::new(FRAG), ack_seen: AtomicU64::new(0) }
+        Self {
+            frag: AtomicUsize::new(FRAG),
+            ack_seen: AtomicU64::new(0),
+        }
     }
 
     pub fn frag(&self) -> usize {
@@ -78,7 +81,10 @@ impl ProbeState {
 
     fn set_frag(&self, frag: usize) {
         // 线上格式只有大小两档（见 `LADDER`）：中间尺寸只能按回保守档。
-        self.frag.store(if frag >= FRAG_BIG { FRAG_BIG } else { FRAG }, Ordering::Relaxed);
+        self.frag.store(
+            if frag >= FRAG_BIG { FRAG_BIG } else { FRAG },
+            Ordering::Relaxed,
+        );
     }
 
     /// 只登记本会话的回显，数据报读取任务持有同一个实例。
@@ -153,9 +159,18 @@ async fn probe_loop(conn: &Connection, max_frag: usize, state: &ProbeState) {
                 // 线上没有的档位）照着日志排障会查错方向。
                 let applied = state.frag();
                 if applied > FRAG {
-                    log::info!("[PMTUD] 片宽升档 {} → {}（数据报 {}B）", FRAG, applied, total);
+                    log::info!(
+                        "[PMTUD] 片宽升档 {} → {}（数据报 {}B）",
+                        FRAG,
+                        applied,
+                        total
+                    );
                 } else {
-                    log::debug!("[PMTUD] 探针 {}B 通过，但线上格式没有对应档位，仍用 {}B 分片", total, applied);
+                    log::debug!(
+                        "[PMTUD] 探针 {}B 通过，但线上格式没有对应档位，仍用 {}B 分片",
+                        total,
+                        applied
+                    );
                 }
                 break;
             }
@@ -184,7 +199,9 @@ async fn probe_once(conn: &Connection, total: usize, state: &ProbeState) -> bool
     }
     // 等回显：任一 nonce 位被登记即成功。
     let deadline = tokio::time::Instant::now() + Duration::from_millis(ACK_WAIT_MS);
-    let want: u64 = (1..=PROBES_PER_SIZE as u64).map(nonce_bit).fold(0, |a, b| a | b);
+    let want: u64 = (1..=PROBES_PER_SIZE as u64)
+        .map(nonce_bit)
+        .fold(0, |a, b| a | b);
     while tokio::time::Instant::now() < deadline {
         if state.ack_seen.load(Ordering::Relaxed) & want != 0 {
             return true;
@@ -211,7 +228,11 @@ mod tests {
         assert_eq!(nonce_bit(3) & nonce_bit(1), 0);
         assert_eq!(nonce_bit(3) & nonce_bit(2), 0);
         let want: u64 = (1..=2u64).map(nonce_bit).fold(0, |a, b| a | b);
-        assert_eq!(want & nonce_bit(3), 0, "本轮只发了 2 个探针，3 号的确认不该命中");
+        assert_eq!(
+            want & nonce_bit(3),
+            0,
+            "本轮只发了 2 个探针，3 号的确认不该命中"
+        );
         assert_eq!(want & nonce_bit(1), nonce_bit(1), "1 号确认必须命中");
     }
 
@@ -223,7 +244,11 @@ mod tests {
         video[0] = super::super::vid_dgram::DGRAM_TAG;
         assert_eq!(parse_probe(&video), None, "0xD1 视频帧不许被当探针");
         assert_eq!(parse_probe(&[]), None);
-        assert_eq!(parse_probe(&[PROBE_TAG; 5]), None, "短于探针头的字节不许解析");
+        assert_eq!(
+            parse_probe(&[PROBE_TAG; 5]),
+            None,
+            "短于探针头的字节不许解析"
+        );
     }
 
     #[test]
@@ -237,7 +262,10 @@ mod tests {
         // 白跑 4 个探针 + 3s 等回显，还会让日志谎报「升档 1200」。
         for &rung in LADDER.iter() {
             let frag = rung - HEADER;
-            assert!(frag == FRAG || frag == FRAG_BIG, "梯级 {frag} 在线上格式里没有对应档位");
+            assert!(
+                frag == FRAG || frag == FRAG_BIG,
+                "梯级 {frag} 在线上格式里没有对应档位"
+            );
         }
         assert!(LADDER.windows(2).all(|w| w[0] > w[1]), "梯子必须降序");
     }
@@ -249,7 +277,10 @@ mod tests {
         // 曾在这里犯过「fetch_or(nonce) 而不是 bit」的错，这条守卫钉住它。
         let state = ProbeState::new();
         state.note_ack(2);
-        assert_eq!(state.ack_seen.load(Ordering::Relaxed) & nonce_bit(2), nonce_bit(2));
+        assert_eq!(
+            state.ack_seen.load(Ordering::Relaxed) & nonce_bit(2),
+            nonce_bit(2)
+        );
         assert_eq!(state.ack_seen.load(Ordering::Relaxed) & nonce_bit(1), 0);
         state.note_ack(1);
         assert_ne!(state.ack_seen.load(Ordering::Relaxed) & nonce_bit(1), 0);

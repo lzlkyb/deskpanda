@@ -86,7 +86,11 @@ fn test_pin前导零会补齐() {
         padded
     );
     let value: u32 = padded.parse().unwrap();
-    assert!(value < modulus / 10, "这条命中的必须是前导零档，实得 {}", padded);
+    assert!(
+        value < modulus / 10,
+        "这条命中的必须是前导零档，实得 {}",
+        padded
+    );
 }
 
 #[test]

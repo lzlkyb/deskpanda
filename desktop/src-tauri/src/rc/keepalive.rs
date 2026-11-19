@@ -23,9 +23,9 @@
 #[cfg(target_os = "android")]
 use serde::Serialize;
 use tauri::plugin::{Builder as PluginBuilder, TauriPlugin};
+use tauri::Runtime;
 #[cfg(target_os = "android")]
 use tauri::{plugin::PluginHandle, Manager};
-use tauri::Runtime;
 
 /// 传给 Kotlin `setKeepalive` 的参数（camelCase 对齐 `KeepaliveArgs`）。
 #[derive(Serialize)]

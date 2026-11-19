@@ -9,8 +9,8 @@ pub(in crate::rc) fn want_stream_codec(
     profile_hevc: bool,
     codec: &crate::rc::stream_cfg::StreamCodec,
 ) -> crate::rc::video_params::VideoCodec {
-    use crate::rc::video_params::VideoCodec;
     use crate::rc::stream_cfg::StreamCodec;
+    use crate::rc::video_params::VideoCodec;
     if profile_hevc {
         return VideoCodec::Hevc;
     }
@@ -24,15 +24,21 @@ pub(in crate::rc) fn want_stream_codec(
 #[cfg(test)]
 mod want_codec_tests {
     use super::want_stream_codec;
-    use crate::rc::video_params::VideoCodec;
     use crate::rc::stream_cfg::StreamCodec;
+    use crate::rc::video_params::VideoCodec;
 
     #[test]
     fn 编码标准决策_档位偏好优先_显式次之() {
         assert_eq!(want_stream_codec(true, &StreamCodec::Av1), VideoCodec::Hevc);
-        assert_eq!(want_stream_codec(false, &StreamCodec::Hevc), VideoCodec::Hevc);
+        assert_eq!(
+            want_stream_codec(false, &StreamCodec::Hevc),
+            VideoCodec::Hevc
+        );
         assert_eq!(want_stream_codec(false, &StreamCodec::Av1), VideoCodec::Av1);
-        assert_eq!(want_stream_codec(false, &StreamCodec::Auto), VideoCodec::H264);
+        assert_eq!(
+            want_stream_codec(false, &StreamCodec::Auto),
+            VideoCodec::H264
+        );
         assert_eq!(
             want_stream_codec(false, &StreamCodec::ForceJpeg),
             VideoCodec::H264,
@@ -151,7 +157,8 @@ mod melt_tests {
     use super::{melt_step, MeltAction, MELT_DROP_MIN_BYTES, MELT_EXIT_MS, MELT_SLOW_MS};
 
     #[test]
-    fn 健康路径永不熔断() {        assert_eq!(
+    fn 健康路径永不熔断() {
+        assert_eq!(
             melt_step(false, 0, false, MELT_DROP_MIN_BYTES),
             (false, MeltAction::Send)
         );
@@ -244,9 +251,7 @@ impl InboundVideo {
     #[cfg(target_os = "windows")]
     fn dgram_force() -> bool {
         static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *FORCE.get_or_init(|| {
-            std::env::var("PP_RC_DGRAM_FORCE").is_ok_and(|v| v == "1")
-        })
+        *FORCE.get_or_init(|| std::env::var("PP_RC_DGRAM_FORCE").is_ok_and(|v| v == "1"))
     }
 
     /// 会话存在、是入站活跃、且属于本 peer 才建；否则 `None`（启动前会话已结束）。
@@ -321,14 +326,16 @@ impl InboundVideo {
             my_id,
             send,
             enc,
-            #[cfg(target_os="macos")]
-            mac_video:Arc::new(std::sync::Mutex::new(crate::rc::mac_video::Encoder::default())),
-            #[cfg(target_os="macos")]
-            mac_video_retry:None,
-            #[cfg(target_os="macos")]
-            mac_video_seq:0,
-            #[cfg(target_os="macos")]
-            mac_video_codec:"H.264".into(),
+            #[cfg(target_os = "macos")]
+            mac_video: Arc::new(std::sync::Mutex::new(
+                crate::rc::mac_video::Encoder::default(),
+            )),
+            #[cfg(target_os = "macos")]
+            mac_video_retry: None,
+            #[cfg(target_os = "macos")]
+            mac_video_seq: 0,
+            #[cfg(target_os = "macos")]
+            mac_video_codec: "H.264".into(),
             #[cfg(target_os = "windows")]
             dxgi: crate::rc::dxgi::DxgiPool::new(),
             #[cfg(target_os = "windows")]
@@ -351,7 +358,7 @@ impl InboundVideo {
             dgram_allowed: false,
             peer_video_plane,
             peer_media_plane,
-            #[cfg(any(target_os = "windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             media_pipe: None,
             #[cfg(target_os = "windows")]
             stream_melt: false,
@@ -405,7 +412,10 @@ impl InboundVideo {
         let (pw, ph) = if virt {
             let (sx, sy, sw, sh) = virtual_screen_size();
             let _ = (sx, sy);
-            (((sw.max(64) as u32) + 1) & !1, ((sh.max(64) as u32) + 1) & !1)
+            (
+                ((sw.max(64) as u32) + 1) & !1,
+                ((sh.max(64) as u32) + 1) & !1,
+            )
         } else {
             primary_screen_size()
         };
@@ -414,7 +424,8 @@ impl InboundVideo {
         // 新建会话时还没跑过零拷贝判据 ⇒ `gpu_disabled = false`，但抓取范围
         // 已知，虚拟屏场景的降频仍要算进去。
         let id = svc.status().session.as_ref()?.id.clone();
-        let fps = want_fps_for(svc.encode_profile().interval_ms, virt, false).min(svc.media_fps_limit(&id));
+        let fps = want_fps_for(svc.encode_profile().interval_ms, virt, false)
+            .min(svc.media_fps_limit(&id));
         // 起播也使用发送器的绝对预算，不能按另一套百分比开出过量码流。
         let budget = svc.media_budget_kbps(&id) * 1000;
         let enc = crate::rc::encode_h264::H264SessionEncoder::try_open_with_budget(
@@ -482,7 +493,11 @@ impl InboundVideo {
             return (code, format!("JPEG（{why}）"));
         }
         // 编码标准取自编码器本体（HEVC 可能已回落 H.264）
-        match self.h264.as_ref().map(|e| (e.codec().as_str().to_uppercase(), e.uses_software_encoder())) {
+        match self
+            .h264
+            .as_ref()
+            .map(|e| (e.codec().as_str().to_uppercase(), e.uses_software_encoder()))
+        {
             // GPU 模式不好从外面读（`gpu_mode` 私有），但 `gpu_disabled` 能区分
             // 「零拷贝可用」与「已判死回落 CPU」，够诊断用了。档名仍是 `hw`：
             // 编码器没换，换的是送帧路径，发起端不该为它摆「降级」。
@@ -523,10 +538,20 @@ impl InboundVideo {
     /// mobile 宿主没有硬编管线，恒 JPEG（相关字段在这个 cfg 下根本不存在）。
     #[cfg(not(target_os = "windows"))]
     pub(in crate::rc) fn pipeline_state(&self) -> (&'static str, String) {
-        #[cfg(target_os="macos")]
-        {if self.tick_jpeg {("jpeg","JPEG".to_string())} else if self.mac_video_codec.starts_with("AV1"){("hw",self.mac_video_codec.clone())} else {("hw",format!("{} (VideoToolbox)",self.mac_video_codec))}}
-        #[cfg(not(target_os="macos"))]
-        {("jpeg", "JPEG".to_string())}
+        #[cfg(target_os = "macos")]
+        {
+            if self.tick_jpeg {
+                ("jpeg", "JPEG".to_string())
+            } else if self.mac_video_codec.starts_with("AV1") {
+                ("hw", self.mac_video_codec.clone())
+            } else {
+                ("hw", format!("{} (VideoToolbox)", self.mac_video_codec))
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            ("jpeg", "JPEG".to_string())
+        }
     }
 
     /// mobile 宿主的中文标签。
@@ -597,7 +622,10 @@ impl InboundVideo {
     /// R6 硬编路径：主屏 / 指定单屏 / 虚拟屏都走 DXGI + H.264；仅强制 JPEG 时回退。
     /// P1：fps120 档（interval ≤10ms）+ 单输出场景走 D3D11 零拷贝；
     /// 其余（多屏拼接 / 低档位 / GPU 路径不可用）走 CPU 管线，失败回 JPEG。
-    pub(in crate::rc) async fn try_hardware_path(&mut self, opts: &crate::rc::stream_cfg::StreamOpts) -> Step {
+    pub(in crate::rc) async fn try_hardware_path(
+        &mut self,
+        opts: &crate::rc::stream_cfg::StreamOpts,
+    ) -> Step {
         #[cfg(target_os = "windows")]
         {
             use crate::rc::encode_h264::{FailVerdict, ENC_FAIL_FUSE, ENC_FAIL_TO_SOFTWARE};
@@ -607,9 +635,7 @@ impl InboundVideo {
             // 一次性按当前倍率开对，省掉一次全链重开。
             if let Some(due) = self.enc_first_open_at {
                 let now = std::time::Instant::now();
-                if !opts.force_jpeg()
-                    && enc_first_open_due(due, now, self.svc.peer_net_seen())
-                {
+                if !opts.force_jpeg() && enc_first_open_due(due, now, self.svc.peer_net_seen()) {
                     self.enc_first_open_at = None;
                     // 等了多久 = 宽限 − 剩余（已过期则记满宽限）
                     let waited_ms = ENC_OPEN_GRACE_MS.saturating_sub(
@@ -649,7 +675,11 @@ impl InboundVideo {
                         if std::time::Instant::now() >= t {
                             log::info!(
                                 "[RC] 硬编冷却期满，尝试重新启用（{}）",
-                                if self.enc_hw_broken { "已定罪硬编 ⇒ 软编档" } else { "硬编档" }
+                                if self.enc_hw_broken {
+                                    "已定罪硬编 ⇒ 软编档"
+                                } else {
+                                    "硬编档"
+                                }
                             );
                             self.h264 =
                                 Self::open_h264(&self.svc, opts.virtual_screen, self.enc_hw_broken);
@@ -694,17 +724,27 @@ impl InboundVideo {
             // P0-2：对端解码断链 → 下一帧强制 IDR（设不中就等自然 GOP）
             if self.force_key.swap(false, Ordering::SeqCst) {
                 let ok = henc.force_key();
-                log::debug!("[RC] 对端请求关键帧：{}", if ok { "已强制" } else { "编码器不支持" });
+                log::debug!(
+                    "[RC] 对端请求关键帧：{}",
+                    if ok {
+                        "已强制"
+                    } else {
+                        "编码器不支持"
+                    }
+                );
             }
             // 时间戳 fps 跟档位走（120/60/30），判据收口在 `want_fps_for`：
             // 按**提帧上限**算而不是静止间隔——拖动时真实帧率就是它，
             // 编码器的 PTS 步进与 CBR 每帧 bit 分配才对得上（写错不崩，
             // 只会静默让码率腰斩，见该函数注释）。
-            henc.set_fps(want_fps_for(
-                opts.profile.interval_ms,
-                opts.virtual_screen,
-                self.gpu_disabled,
-            ).min(self.svc.media_fps_limit(&self.my_id)));
+            henc.set_fps(
+                want_fps_for(
+                    opts.profile.interval_ms,
+                    opts.virtual_screen,
+                    self.gpu_disabled,
+                )
+                .min(self.svc.media_fps_limit(&self.my_id)),
+            );
             // P1/G5 零拷贝门控（2026-09-28 重判）：硬件 MFT + 单输出 + GPU 路径没判死。
             // 旧判据绑档位（fps120/uhd60），60Hz 机器永远进不了高帧率档 ⇒ 永远 GDI
             // CPU 捕获（拖动实测 53–74ms/帧）——零拷贝是本地收益，与网络档位无关。
@@ -753,15 +793,11 @@ impl InboundVideo {
                             henc.set_capture_at(ts);
                             // 预算地板跟实际编码宽走（1080p 不许饿死，见 Flow::note_encode_width）
                             self.svc.media_note_encode_width(&self.my_id, g.width);
-                            let encoded =
-                                henc.encode_gpu(&dev, &ctx, &g.tex, g.width, g.height);
-                            let enc_ms =
-                                enc_t0.elapsed().as_millis().min(u16::MAX as u128) as u16;
+                            let encoded = henc.encode_gpu(&dev, &ctx, &g.tex, g.width, g.height);
+                            let enc_ms = enc_t0.elapsed().as_millis().min(u16::MAX as u128) as u16;
                             match encoded {
                                 Ok(pkts) => {
-                                    return self
-                                        .send_h264_pkts(pkts, ts, cap_ms, enc_ms)
-                                        .await;
+                                    return self.send_h264_pkts(pkts, ts, cap_ms, enc_ms).await;
                                 }
                                 Err(e) if e.starts_with("[gpu_disabled]") => {
                                     self.gpu_disabled = true;
@@ -821,7 +857,9 @@ impl InboundVideo {
                                     log::warn!(
                                         "[RC] 硬编连败 {ENC_FAIL_TO_SOFTWARE} 帧，本会话改用软编 H.264（下一帧重开选型只走软件 MFT）：{e}"
                                     );
-                                    crate::rc::perf::bump_u32(&crate::rc::perf::counters::ENC_SW_FALLBACK);
+                                    crate::rc::perf::bump_u32(
+                                        &crate::rc::perf::counters::ENC_SW_FALLBACK,
+                                    );
                                 }
                                 FailVerdict::Fuse => {
                                     if self.enc_retry_after.is_none() {
@@ -831,12 +869,16 @@ impl InboundVideo {
                                         );
                                         self.enc_retry_after = Some(
                                             std::time::Instant::now()
-                                                + std::time::Duration::from_secs(self.enc_retry_backoff),
+                                                + std::time::Duration::from_secs(
+                                                    self.enc_retry_backoff,
+                                                ),
                                         );
                                         // 真正的熔断动作：停掉每帧重开编码器
                                         self.h264 = None;
                                         // 探针：熔断次数（收尾行会带上）
-                                        crate::rc::perf::bump_u32(&crate::rc::perf::counters::ENC_FUSE);
+                                        crate::rc::perf::bump_u32(
+                                            &crate::rc::perf::counters::ENC_FUSE,
+                                        );
                                     }
                                     // 冷却是「暂停」不是「永久放弃」——但重开**不能在这里**：
                                     // 本分支每帧都会进，且开编码器要几百 ms，必须等
@@ -856,10 +898,15 @@ impl InboundVideo {
                 }
             }
         }
-        #[cfg(target_os="macos")]
-        { self.try_mac_video(opts).await }
-        #[cfg(not(any(target_os="windows",target_os="macos")))]
-        {let _=opts;Step::FallThrough}
+        #[cfg(target_os = "macos")]
+        {
+            self.try_mac_video(opts).await
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            let _ = opts;
+            Step::FallThrough
+        }
     }
 
     /// 推送 H.264 包（CPU/GPU 两路共用）。
@@ -972,7 +1019,8 @@ impl InboundVideo {
                 ))
         {
             self.dgram_allowed = true;
-            self.force_key.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.force_key
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             // 视频若此前走在专属流上：弃流。半途切数据报后，旧流里残留的
             // 积压帧会晚到并打断 dgram 帧序（corrupt 自愈代价可免则免）。
             self.discard_media_stream();
@@ -1022,7 +1070,10 @@ impl InboundVideo {
                     continue;
                 }
                 let t0 = std::time::Instant::now();
-                if !self.send_pkt_via_stream(&p, sq, ts, cap_ms, enc_ms, codec.as_str()).await {
+                if !self
+                    .send_pkt_via_stream(&p, sq, ts, cap_ms, enc_ms, codec.as_str())
+                    .await
+                {
                     return Step::End;
                 }
                 self.stream_last_write_ms = t0.elapsed().as_millis() as u64;
@@ -1043,19 +1094,36 @@ impl InboundVideo {
             match self
                 .dgram
                 .send_frame(
-                    &self.conn, sq, &p.data, p.key, ts, cap_ms, enc_ms, p.width, p.height,
-                    frame_codec, self.peer_fec_rs, loss, self.probe.frag(),
+                    &self.conn,
+                    sq,
+                    &p.data,
+                    p.key,
+                    ts,
+                    cap_ms,
+                    enc_ms,
+                    p.width,
+                    p.height,
+                    frame_codec,
+                    self.peer_fec_rs,
+                    loss,
+                    self.probe.frag(),
                 )
                 .await
             {
-                Ok(()) => { self.svc.media_sent(&self.my_id, self.media_started_ms(), ts, p.data.len()); }
+                Ok(()) => {
+                    self.svc
+                        .media_sent(&self.my_id, self.media_started_ms(), ts, p.data.len());
+                }
                 Err(crate::rc::vid_dgram::SendErr::Busy) if p.key => {
                     // 关键帧**不能弃**：丢了要等下一个 GOP（1s）才有锚，这期间
                     // 对端看到的全是花屏。数据报装不下（大 IDR 超过 iroh 的
                     // `datagram_send_buffer_size`，默认 1MiB）就回退可靠流——
                     // 慢一点，但一定到得了。
                     log::debug!("[RC] 关键帧装不进数据报缓冲，回退可靠流 #{sq}");
-                    if !self.send_pkt_via_stream(&p, sq, ts, cap_ms, enc_ms, codec.as_str()).await {
+                    if !self
+                        .send_pkt_via_stream(&p, sq, ts, cap_ms, enc_ms, codec.as_str())
+                        .await
+                    {
                         return Step::End;
                     }
                 }
@@ -1130,7 +1198,9 @@ impl InboundVideo {
         codec_label: &str,
     ) -> bool {
         if self.peer_video_plane {
-            return self.send_via_video_plane(p, sq, ts, cap_ms, enc_ms, codec_label).await;
+            return self
+                .send_via_video_plane(p, sq, ts, cap_ms, enc_ms, codec_label)
+                .await;
         }
         let mut guard = self.send.lock().await;
         if crate::rc::video::write_h264(
@@ -1145,7 +1215,6 @@ impl InboundVideo {
             sq,
             codec_label,
         )
-        
         .await
         .is_err()
         {

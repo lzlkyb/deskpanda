@@ -88,9 +88,7 @@ use iroh::{Endpoint, EndpointAddr};
 ///
 /// 接收侧把流接收窗口抬到 8 MiB（默认 1.25 MB）：不然「发完但对端一行都没读」
 /// 这个状态根本造不出来——`write_all` 会卡在流控上，反而把竞态等没了。
-async fn endpoint_pair(
-    roomy_receiver: bool,
-) -> (Endpoint, Endpoint, Connection, Connection) {
+async fn endpoint_pair(roomy_receiver: bool) -> (Endpoint, Endpoint, Connection, Connection) {
     let bind = |roomy: bool| async move {
         let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .alpns(vec![b"rc-file-test".to_vec()]);
@@ -108,10 +106,9 @@ async fn endpoint_pair(
     let mut socket = listener.bound_sockets()[0];
     socket.set_ip("127.0.0.1".parse().unwrap());
     let addr = EndpointAddr::new(listener.id()).with_ip_addr(socket);
-    let (conn, accepted) = tokio::join!(
-        dialer.connect(addr, b"rc-file-test"),
-        async { listener.accept().await.unwrap().await.unwrap() }
-    );
+    let (conn, accepted) = tokio::join!(dialer.connect(addr, b"rc-file-test"), async {
+        listener.accept().await.unwrap().await.unwrap()
+    });
     (dialer, listener, conn.unwrap(), accepted)
 }
 
@@ -262,7 +259,11 @@ fn every_file_close_waits_for_the_receipt_signal() {
     );
 
     // ② 取回：读方 finish 自己那半，再等对方关连接（顺序反了就又变成抢先 close）
-    let pull = between(transfer, "async fn run_pull_inner", "conn.close(0u32.into()");
+    let pull = between(
+        transfer,
+        "async fn run_pull_inner",
+        "conn.close(0u32.into()",
+    );
     let finish_at = pull
         .find("send.finish()")
         .expect("run_pull_inner 必须 finish 自己的半流（对方的等待靠它）");
@@ -337,7 +338,9 @@ fn code_only(src: &str) -> String {
 
 /// 取 `from` 之后、`from` 之后**首次**出现的 `to` 之间的片段。
 fn between<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
-    let a = src.find(from).unwrap_or_else(|| panic!("源码里找不到锚点 {from}"));
+    let a = src
+        .find(from)
+        .unwrap_or_else(|| panic!("源码里找不到锚点 {from}"));
     let rest = &src[a..];
     let b = rest
         .find(to)

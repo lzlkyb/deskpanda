@@ -112,7 +112,10 @@ pub fn announce_once(me: &NodeIdentity, a: Announce) -> Result<(), String> {
     } = a;
     let mut sent = 0usize;
     let mut last = String::new();
-    for (i, ifaddr) in crate::net::mcast::multicast_ifaces().into_iter().enumerate() {
+    for (i, ifaddr) in crate::net::mcast::multicast_ifaces()
+        .into_iter()
+        .enumerate()
+    {
         // 🔴 每块网卡**各建一份包、ts 不同**（2026-09-07 修）。
         //
         //    旧写法是上层 `build()` 一次、这里把**同一份字节**往每块网卡各发一份，

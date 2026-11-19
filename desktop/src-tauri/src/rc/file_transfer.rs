@@ -20,7 +20,7 @@
 
 use super::file_proto::{
     self, check_ack_accept, code, decode_ack, encode_ack, encode_head, final_from_part, part_path,
-    safe_file_name, FileAck, FileHead, ResumeHint, MAX_FILE_BYTES, MAGIC,
+    safe_file_name, FileAck, FileHead, ResumeHint, MAGIC, MAX_FILE_BYTES,
 };
 use super::file_state::{AskKind, AskOutcome, AskReply, TaskDir, TaskState};
 use super::protocol::FILE_ALPN;
@@ -124,7 +124,6 @@ impl Drop for PeerSlotGuard<'_> {
     }
 }
 
-
 /// 把文件从 `offset` 起灌进流。返回 (结局, 已发字节数)。
 async fn send_bytes(
     svc: &Arc<RcService>,
@@ -152,12 +151,7 @@ async fn send_bytes(
         }
         let want = ((size - sent) as usize).min(CHUNK);
         let n = match f.read(&mut buf[..want]).await {
-            Ok(0) => {
-                return (
-                    TxOutcome::Io("源文件在传输中被改短了".into()),
-                    sent,
-                )
-            }
+            Ok(0) => return (TxOutcome::Io("源文件在传输中被改短了".into()), sent),
             Ok(n) => n,
             Err(e) => return (TxOutcome::Io(format!("读源文件失败：{e}")), sent),
         };
@@ -245,8 +239,11 @@ async fn recv_bytes(
             return (TxOutcome::Canceled, got);
         }
         let want = ((size - got) as usize).min(CHUNK);
-        let n = match tokio::time::timeout(Duration::from_secs(STALL_SECS), recv.read(&mut buf[..want]))
-            .await
+        let n = match tokio::time::timeout(
+            Duration::from_secs(STALL_SECS),
+            recv.read(&mut buf[..want]),
+        )
+        .await
         {
             Err(_) => {
                 let _ = f.flush().await;
@@ -305,11 +302,7 @@ async fn recv_bytes(
 
 /// Claim the final name without overwriting. On conflict, bump the name and retry.
 /// `dir` is the receive directory used to re-check disk occupancy.
-fn finalize_recv_name(
-    part: &Path,
-    dir: &Path,
-    preferred: &str,
-) -> Result<String, String> {
+fn finalize_recv_name(part: &Path, dir: &Path, preferred: &str) -> Result<String, String> {
     let mut name = preferred.to_string();
     let mut tried: Vec<String> = vec![name.clone()];
     for _ in 0..32 {
@@ -547,7 +540,7 @@ pub fn effective_receive_dir(config: &serde_json::Value) -> Result<PathBuf, Stri
 #[cfg(target_os = "windows")]
 fn known_downloads_dir() -> Option<PathBuf> {
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Downloads, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    use windows::Win32::UI::Shell::{FOLDERID_Downloads, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
     // SAFETY: 返回的 PWSTR 由系统用 CoTaskMemAlloc 分配，取走字符串后立刻释放；
     // 中间不做任何可能 panic 的操作（`.ok()?` 失败时提前返回，会漏一次释放——
     // 代价是几十字节，换的是不在这里写 unsafe 的 drop guard）。
@@ -596,7 +589,9 @@ async fn wait_peer_stream_end(recv: &mut RecvStream) -> bool {
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(RECEIPT_WAIT_SECS), drained).await.unwrap_or(false)
+    tokio::time::timeout(Duration::from_secs(RECEIPT_WAIT_SECS), drained)
+        .await
+        .unwrap_or(false)
 }
 
 /// 对端是不是用「批次收尾」的理由（code 0 / `done`）主动关掉了连接。
@@ -655,8 +650,8 @@ async fn deny_file(send: &mut SendStream, reason: &str, c: &str) {
 
 // impl RcService 的文件传输方法按发起/批传/接收三组平移到子模块。
 mod api;
-mod transfer;
 mod serve;
+mod transfer;
 
 #[cfg(test)]
 mod tests;

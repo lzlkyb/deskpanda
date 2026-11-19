@@ -4,7 +4,7 @@
 //! 会永久卡在按下态。本模块在 `handle_inbound_input` 里记录每次按下/抬起，
 //! 由 `end_session` 调 `release_all()` 直接注入 up，不依赖会话能力校验。
 
-use super::input::{inject, InputEvent, InjectResult, KeyMode, ScreenRegion};
+use super::input::{inject, InjectResult, InputEvent, KeyMode, ScreenRegion};
 use std::collections::HashSet;
 
 /// 🔴 P1-3（2026-09-23 审计）：收口补发 up 时**重试后仍失败**的一项。
@@ -235,7 +235,10 @@ mod tests {
         assert!(failures.is_empty());
         let seen = seen.borrow();
         assert!(
-            seen.contains(&InputEvent::Key { vk: 160, down: false }),
+            seen.contains(&InputEvent::Key {
+                vk: 160,
+                down: false
+            }),
             "键要补发 up：{seen:?}"
         );
         assert!(

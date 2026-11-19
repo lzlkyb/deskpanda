@@ -3,11 +3,11 @@
 // 闸），与「黑盒用户会看到什么」对齐。
 
 use super::{set_cfg, store};
-use crate::store::DataStore;
 use crate::rc::protocol::{Capability, SessionPhase};
 use crate::rc::service::{RcService, UnoAdmit};
 use crate::rc::session::{CFG_CAPABILITY, CFG_DEVICE_DENY, CFG_ENABLED};
 use crate::rc::unop::{self, GateCheck};
+use crate::store::DataStore;
 
 const T0: i64 = 1_757_000_000_000;
 
@@ -22,7 +22,7 @@ fn pass_store(wan: bool, cap: Capability) -> (DataStore, String) {
     (s, cfg.phc)
 }
 
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[test]
 fn pass_admit_正确密码自动配对并建会话() {
     let (s, _) = pass_store(true, Capability::Control);
@@ -48,9 +48,15 @@ fn pass_admit_错密码拒_记失败_不落白名单() {
     let peer = "ac".repeat(32);
     svc.pass_admit(&peer, Capability::Control, "错密码", true, T0 + 1);
     assert!(svc.status().session.is_none(), "错密码不得建会话");
-    assert!(matches!(s.rc_device_get(&peer), Ok(None)), "错密码不得落白名单");
+    assert!(
+        matches!(s.rc_device_get(&peer), Ok(None)),
+        "错密码不得落白名单"
+    );
     // 闸记了一次失败：立刻再试要吃退避
-    assert!(matches!(svc.pass_gate.check(&peer, T0 + 1), GateCheck::Wait(_)));
+    assert!(matches!(
+        svc.pass_gate.check(&peer, T0 + 1),
+        GateCheck::Wait(_)
+    ));
 }
 
 #[test]
@@ -66,13 +72,16 @@ fn pass_admit_五连错后锁死_密码对了也进不来() {
     assert!(st.session.is_none());
     // 锁定期内给正确密码：闸先于验密，照样拒
     let after = T0 + 4 * 70_000 + 1000;
-    assert!(matches!(svc.pass_gate.check(&peer, after), GateCheck::Wait(_)));
+    assert!(matches!(
+        svc.pass_gate.check(&peer, after),
+        GateCheck::Wait(_)
+    ));
     svc.pass_admit(&peer, Capability::Control, "s3cret-密码", true, after);
     assert!(svc.status().session.is_none(), "锁定期内正确密码也不放行");
     assert!(matches!(s.rc_device_get(&peer), Ok(None)));
 }
 
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[test]
 fn pass_admit_默认仅局域网_跨网未开直接拒() {
     let (s, _) = pass_store(false, Capability::Control); // wan=false（默认）
@@ -87,7 +96,7 @@ fn pass_admit_默认仅局域网_跨网未开直接拒() {
     assert!(svc.status().session.is_some(), "局域网内正确密码要放行");
 }
 
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[test]
 fn pass_admit_压档_能力档超上限压到密码档() {
     let (s, _) = pass_store(true, Capability::View); // 密码档 = 只看
@@ -122,7 +131,10 @@ fn pass_admit_红线未开被控一律拒() {
     let svc = RcService::new(s);
     let peer = "b2".repeat(32);
     svc.pass_admit(&peer, Capability::Control, "s3cret-密码", true, T0 + 1);
-    assert!(svc.status().session.is_none(), "rc_enabled 红线先于一切凭证");
+    assert!(
+        svc.status().session.is_none(),
+        "rc_enabled 红线先于一切凭证"
+    );
 }
 
 #[test]
@@ -146,7 +158,7 @@ fn status_未开启时uno_pass为空_开启后只投影不含哈希() {
 /// 旧实现先落白名单再建会话，于是「密码对、但本机正忙」这种失败也留下了一行
 /// `rc_devices`——那台设备一次会话都没建立过，却已经出现在你的设备列表里，
 /// 还带着 `has_remote_trust = true`（此后可被当成已配对设备再敲门）。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[test]
 fn pass_admit_建会话失败时设备不入白名单() {
     let (s, _) = pass_store(true, Capability::Control);
@@ -179,7 +191,7 @@ fn pass_admit_建会话失败时设备不入白名单() {
 /// 🔴 D1（码路径）：`verify` 只判不消费，未 `consume` 之前一个码可被**多台**
 /// 设备命中。旧实现的写库点在验码之后，于是每命中一台就写一行白名单——
 /// 一次接入被洗成 N 台「已配对设备」。写库点后移后失败路径零副作用。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[test]
 fn uno_admit_建会话失败时设备不入白名单() {
     let s = store();
@@ -218,7 +230,7 @@ fn uno_admit_建会话失败时设备不入白名单() {
 /// 旧行为是「`request_session` 回 `Ok` 即视为成功」——而它是非阻塞的，
 /// 落一个 `OutboundPending` 就返回，于是第一圈永远「成功」、重试与 `gave_up`
 /// 不可达。网络拨号在单测里跑不起来，所以这里钉住判据本身。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[tokio::test]
 async fn 重连落地判据_只认本id的active会话() {
     let (s, _) = pass_store(true, Capability::Control);
@@ -242,13 +254,27 @@ async fn 重连落地判据_只认本id的active会话() {
     );
 }
 
-#[cfg(not(any(target_os="windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 #[test]
-fn unsupported_host_never_creates_session_or_trust_even_with_valid_credentials(){
-    let (store,_)=pass_store(true,Capability::Control);let service=RcService::new(store.clone());let peer="ab".repeat(32);
-    assert!(!matches!(service.pass_admit(&peer,Capability::Control,"s3cret-密码",true,T0+1),UnoAdmit::Admitted));
-    assert!(service.status().session.is_none());assert!(store.rc_device_get(&peer).unwrap().is_none());
-    let code=service.uno.generate(T0,900_000,true,Capability::View,false).unwrap();
-    assert!(!matches!(service.uno_admit(&peer,Capability::View,&code,T0+1),UnoAdmit::Admitted));
-    assert!(service.status().session.is_none());assert!(store.rc_device_get(&peer).unwrap().is_none());assert!(!service.has_remote_trust(&peer));
+fn unsupported_host_never_creates_session_or_trust_even_with_valid_credentials() {
+    let (store, _) = pass_store(true, Capability::Control);
+    let service = RcService::new(store.clone());
+    let peer = "ab".repeat(32);
+    assert!(!matches!(
+        service.pass_admit(&peer, Capability::Control, "s3cret-密码", true, T0 + 1),
+        UnoAdmit::Admitted
+    ));
+    assert!(service.status().session.is_none());
+    assert!(store.rc_device_get(&peer).unwrap().is_none());
+    let code = service
+        .uno
+        .generate(T0, 900_000, true, Capability::View, false)
+        .unwrap();
+    assert!(!matches!(
+        service.uno_admit(&peer, Capability::View, &code, T0 + 1),
+        UnoAdmit::Admitted
+    ));
+    assert!(service.status().session.is_none());
+    assert!(store.rc_device_get(&peer).unwrap().is_none());
+    assert!(!service.has_remote_trust(&peer));
 }

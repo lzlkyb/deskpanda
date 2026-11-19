@@ -10,9 +10,15 @@ fn deny_map(ids: &[&str]) -> HashMap<String, bool> {
 fn ttl_expired锚定单调钟_缺锚保守不过期() {
     // 🔴 C3 守卫：判据只吃单调口径；started_mono=0（漏填/残值）永不判过期，
     // 边界严格 `>`（正好 2 小时不算，与 link_stale_kick / should_pause 同口径）。
-    assert!(!ttl_expired(0, SESSION_TTL_MS * 10), "缺锚必须保守：不许秒杀活会话");
+    assert!(
+        !ttl_expired(0, SESSION_TTL_MS * 10),
+        "缺锚必须保守：不许秒杀活会话"
+    );
     // 锚在 1ms：「现在」= 1 + TTL ⇒ 恰好卡在阈值上，严格 `>` 不算过期
-    assert!(!ttl_expired(1, SESSION_TTL_MS + 1), "正好卡在 TTL 上不算过期");
+    assert!(
+        !ttl_expired(1, SESSION_TTL_MS + 1),
+        "正好卡在 TTL 上不算过期"
+    );
     assert!(ttl_expired(1, SESSION_TTL_MS + 2), "超出 1ms 就该过期");
 }
 
@@ -146,7 +152,10 @@ fn session_id_unique_within_same_millisecond() {
     }
     // 格式：三段（毫秒 / 纳秒尾 / 序号），前端只当不透明串比较，不解析
     let id = new_session_id(1_757_000_000_000);
-    assert!(id.starts_with("rc-1757000000000-"), "前缀变了前端会看不懂：{id}");
+    assert!(
+        id.starts_with("rc-1757000000000-"),
+        "前缀变了前端会看不懂：{id}"
+    );
     assert_eq!(id.split('-').count(), 4, "{id}");
 }
 

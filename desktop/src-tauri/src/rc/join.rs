@@ -119,11 +119,16 @@ impl RcJoins {
     }
 
     pub fn valid_short_code(&self, code: &str, now_ms: i64) -> bool {
-        self.short_code.lock().ok().and_then(|g| g.clone())
+        self.short_code
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
             .is_some_and(|current| current.code == code && now_ms < current.expires_at)
     }
 
-    pub fn begin_short(self: &Arc<Self>) -> Result<(RcShortAttempt, tokio::sync::watch::Receiver<bool>), String> {
+    pub fn begin_short(
+        self: &Arc<Self>,
+    ) -> Result<(RcShortAttempt, tokio::sync::watch::Receiver<bool>), String> {
         let mut active = self.short_active.lock().map_err(|_| "配对状态暂时不可用")?;
         if active.is_some() {
             return Err("正在等待对方确认，请先完成或等本次配对超时".into());
@@ -151,8 +156,17 @@ impl RcJoins {
         self.arm_exchange_addr(node_id, name, expires_at, None)
     }
 
-    pub fn arm_exchange_addr(&self, node_id: &str, name: &str, expires_at: i64, addr: Option<iroh::EndpointAddr>) -> Result<(), String> {
-        if addr.as_ref().is_some_and(|value| value.id.to_string() != node_id) {
+    pub fn arm_exchange_addr(
+        &self,
+        node_id: &str,
+        name: &str,
+        expires_at: i64,
+        addr: Option<iroh::EndpointAddr>,
+    ) -> Result<(), String> {
+        if addr
+            .as_ref()
+            .is_some_and(|value| value.id.to_string() != node_id)
+        {
             return Err("设备地址与身份不一致".into());
         }
         let mut g = self.exchange.lock().map_err(|_| "配对状态暂时不可用")?;
@@ -293,15 +307,22 @@ mod tests {
     #[test]
     fn rate_ledger_bounds_rejected_attempts() {
         let joins = RcJoins::new();
-        for _ in 0..10_000 { joins.knock("peer", 1000); }
+        for _ in 0..10_000 {
+            joins.knock("peer", 1000);
+        }
         let recent = joins.recent_knocks.lock().unwrap();
-        assert!(recent["peer"].len() <= KNOCK_RATE_MAX, "被拒请求不能无限追加时间戳");
+        assert!(
+            recent["peer"].len() <= KNOCK_RATE_MAX,
+            "被拒请求不能无限追加时间戳"
+        );
     }
 
     #[test]
     fn rate_ledger_reclaims_expired_peers() {
         let joins = RcJoins::new();
-        for i in 0..1000 { joins.knock(&format!("peer-{i}"), 1000); }
+        for i in 0..1000 {
+            joins.knock(&format!("peer-{i}"), 1000);
+        }
         assert!(joins.knock("new", 1000 + KNOCK_RATE_WINDOW_MS + 1));
         assert_eq!(joins.recent_knocks.lock().unwrap().len(), 1);
     }
@@ -309,9 +330,16 @@ mod tests {
     #[test]
     fn rate_ledger_limits_distinct_peers_without_forgetting_existing_limits() {
         let joins = RcJoins::new();
-        for _ in 0..KNOCK_RATE_MAX { assert!(joins.knock("first", 1000)); }
-        for i in 0..1000 { joins.knock(&format!("peer-{i}"), 1000); }
-        assert!(joins.recent_knocks.lock().unwrap().len() <= 128, "换身份也不能无限分配账本");
+        for _ in 0..KNOCK_RATE_MAX {
+            assert!(joins.knock("first", 1000));
+        }
+        for i in 0..1000 {
+            joins.knock(&format!("peer-{i}"), 1000);
+        }
+        assert!(
+            joins.recent_knocks.lock().unwrap().len() <= 128,
+            "换身份也不能无限分配账本"
+        );
         assert!(!joins.knock("first", 1001), "满员时不能驱逐账本绕过限速");
     }
 
@@ -345,7 +373,11 @@ mod tests {
         let j = RcJoins::new();
         let now = 10_000i64;
         for i in 0..KNOCK_RATE_MAX {
-            assert!(j.knock("a", now + i as i64 * 1_000), "窗口内第 {} 次应放行", i + 1);
+            assert!(
+                j.knock("a", now + i as i64 * 1_000),
+                "窗口内第 {} 次应放行",
+                i + 1
+            );
         }
         assert!(
             !j.knock("a", now + KNOCK_RATE_MAX as i64 * 1_000),
@@ -411,7 +443,10 @@ mod tests {
         drop(attempt);
         assert!(joins.begin_short().is_ok());
         assert!(!joins.valid_short_code(&first.code, first.expires_at));
-        assert_ne!(joins.short_code(first.expires_at).unwrap().expires_at, first.expires_at);
+        assert_ne!(
+            joins.short_code(first.expires_at).unwrap().expires_at,
+            first.expires_at
+        );
     }
 }
 

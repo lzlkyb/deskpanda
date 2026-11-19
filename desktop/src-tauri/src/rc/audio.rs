@@ -420,13 +420,12 @@ pub use capture::*;
 #[cfg(target_os = "windows")]
 use encode::mf_err;
 
-#[cfg(target_os = "macos")]
-#[path = "../macos/remote_audio.rs"]
-mod mac_capture;
+// 🔴 macOS 音频采集（原 `#[path = "../macos/remote_audio.rs"] mod mac_capture;`）
+// 本仓未迁：它依赖 `src/macos/remote_audio.m` 那套 Objective-C 桥接，
+// 属于「macOS 是否本轮交付」待定项（拆分方案 §S6）。
+// 删声明而不是留空指向——否则 `cargo fmt` 会去读不存在的文件而整条门禁失败。
 #[cfg(test)]
 mod tests;
-#[cfg(target_os = "macos")]
-pub use mac_capture::*;
 
 /// Apply one deadline to both acquiring stream credit and delivering its header.
 pub async fn open_stream(

@@ -750,7 +750,9 @@ impl VidReassembler {
         let start = g * GROUP;
         let end = (((start + GROUP) as u16).min(frag_count)) as usize;
         // 🔴 再审计 P3-4：`contains_key` 取代旧的 `is_none()`（按需存储的等价形式）
-        let missing: Vec<usize> = (start..end).filter(|i| !reasm.frags.contains_key(i)).collect();
+        let missing: Vec<usize> = (start..end)
+            .filter(|i| !reasm.frags.contains_key(i))
+            .collect();
         if missing.len() != 1 {
             return;
         }
@@ -793,7 +795,11 @@ impl VidReassembler {
             return;
         }
         let groups = n.div_ceil(RS_K);
-        let g = if slot >= n { (slot - n) / m } else { slot / RS_K };
+        let g = if slot >= n {
+            (slot - n) / m
+        } else {
+            slot / RS_K
+        };
         if g >= groups {
             return; // 防御：槽位换算出界（上游已校验，纵深防御不依赖上游）
         }
@@ -825,11 +831,8 @@ impl VidReassembler {
         if present.len() < dend - dstart {
             return; // 有效片不足 k，不可恢复
         }
-        let refs: Vec<(usize, &[u8])> =
-            present.iter().map(|(i, s)| (*i, s.as_slice())).collect();
-        let Some(out) =
-            super::rs_fec::decode_group(&refs, dend - dstart, m, frag)
-        else {
+        let refs: Vec<(usize, &[u8])> = present.iter().map(|(i, s)| (*i, s.as_slice())).collect();
+        let Some(out) = super::rs_fec::decode_group(&refs, dend - dstart, m, frag) else {
             return;
         };
         for (rel, rec) in out.iter().enumerate() {
@@ -848,11 +851,7 @@ impl VidReassembler {
 
     fn gc(&mut self) {
         let now = std::time::Instant::now();
-        if now
-            .duration_since(self.last_gc)
-            .as_millis()
-            < (REASM_TTL_MS / 2) as u128
-        {
+        if now.duration_since(self.last_gc).as_millis() < (REASM_TTL_MS / 2) as u128 {
             return;
         }
         self.last_gc = now;

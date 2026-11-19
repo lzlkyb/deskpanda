@@ -136,8 +136,8 @@ pub struct AVCodecContext {
     /// 编码器自报的流水线延迟（帧）。⚠️ 实测不可信（nvenc 报 0、真实第 3 帧出包），
     /// 只当参考，判延迟一律用真实出包。
     pub delay: i32, // offset 108
-    pub width: i32,  // offset 112
-    pub height: i32, // offset 116
+    pub width: i32,            // offset 112
+    pub height: i32,           // offset 116
     _pad120: [u8; 16],
     pub pix_fmt: i32, // offset 136
     _pad140: [u8; 60],

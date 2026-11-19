@@ -23,7 +23,11 @@ pub(super) fn push_h264_frame(
         width,
         height,
         jpeg: data,
-        at_ms: if ts > 0 { ts } else { chrono::Utc::now().timestamp_millis() },
+        at_ms: if ts > 0 {
+            ts
+        } else {
+            chrono::Utc::now().timestamp_millis()
+        },
         full: true,
         rect: None,
         codec,

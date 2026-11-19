@@ -63,10 +63,10 @@ mod win {
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, GetForegroundWindow,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW,
         GetWindowThreadProcessId, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-        UnhookWindowsHookEx, WindowFromPoint, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT, HHOOK,
-        KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT,
+        UnhookWindowsHookEx, WindowFromPoint, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+        LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT,
     };
 
     /// 钩子线程用的单调时钟（与 `service::now_ms` 同源，别在模块里再造第二把表）。
@@ -180,7 +180,8 @@ mod win {
         let tid = HOOK_THREAD_ID.swap(0, Ordering::SeqCst);
         if tid != 0 {
             unsafe {
-                let _ = PostThreadMessageW(tid as u32, WM_QUIT, WPARAM::default(), LPARAM::default());
+                let _ =
+                    PostThreadMessageW(tid as u32, WM_QUIT, WPARAM::default(), LPARAM::default());
             }
         }
     }
@@ -211,18 +212,43 @@ mod win {
     }
 }
 
-#[cfg(target_os="macos")]
+#[cfg(target_os = "macos")]
 mod win {
-    extern "C" {fn pp_rc_lock_set(on:bool)->bool;fn pp_rc_lock_active()->bool;fn pp_rc_watch_start()->i32;fn pp_rc_watch_stop();fn pp_rc_watching()->bool;fn pp_rc_last_keyboard()->u64;fn pp_rc_last_mouse()->u64;}
-    pub fn start_watching(){let code=unsafe{pp_rc_watch_start()};if code!=0{log::warn!("Mac 本机输入观察未启动（{code}）");}}
-    pub fn stop_watching(){unsafe{pp_rc_watch_stop()}}
-    pub fn set_swallow(on:bool)->bool{unsafe{pp_rc_lock_set(on)}}
-    pub fn is_locked()->bool{unsafe{pp_rc_lock_active()}}
-    pub fn last_kbd_ms()->u64{unsafe{pp_rc_last_keyboard()}}
-    pub fn last_mouse_ms()->u64{unsafe{pp_rc_last_mouse()}}
-    pub fn is_watching()->bool{unsafe{pp_rc_watching()}}
+    extern "C" {
+        fn pp_rc_lock_set(on: bool) -> bool;
+        fn pp_rc_lock_active() -> bool;
+        fn pp_rc_watch_start() -> i32;
+        fn pp_rc_watch_stop();
+        fn pp_rc_watching() -> bool;
+        fn pp_rc_last_keyboard() -> u64;
+        fn pp_rc_last_mouse() -> u64;
+    }
+    pub fn start_watching() {
+        let code = unsafe { pp_rc_watch_start() };
+        if code != 0 {
+            log::warn!("Mac 本机输入观察未启动（{code}）");
+        }
+    }
+    pub fn stop_watching() {
+        unsafe { pp_rc_watch_stop() }
+    }
+    pub fn set_swallow(on: bool) -> bool {
+        unsafe { pp_rc_lock_set(on) }
+    }
+    pub fn is_locked() -> bool {
+        unsafe { pp_rc_lock_active() }
+    }
+    pub fn last_kbd_ms() -> u64 {
+        unsafe { pp_rc_last_keyboard() }
+    }
+    pub fn last_mouse_ms() -> u64 {
+        unsafe { pp_rc_last_mouse() }
+    }
+    pub fn is_watching() -> bool {
+        unsafe { pp_rc_watching() }
+    }
 }
-#[cfg(not(any(target_os = "windows",target_os="macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod win {
     // 非 Windows 宿主没有注入链路，也就没有「要堵的那一路」：全部空实现。
     // `set_swallow` 恒返 false = 诚实回报「这台机器上锁不住」，不假装锁定成功。
@@ -258,7 +284,10 @@ mod tests {
 
     #[test]
     fn 注入的输入永不吞_关闸时永不吞() {
-        assert!(should_swallow(false, false, true), "物理输入 + 未投向自己 + 开着闸 = 吞");
+        assert!(
+            should_swallow(false, false, true),
+            "物理输入 + 未投向自己 + 开着闸 = 吞"
+        );
         assert!(
             !should_swallow(true, false, true),
             "远程注入那一路必须活着，否则锁定把发起端也锁外面了"
@@ -296,8 +325,15 @@ mod tests {
     }
 }
 
-#[cfg(target_os="macos")]
+#[cfg(target_os = "macos")]
 #[no_mangle]
-pub extern "C" fn pp_rc_should_swallow(injected:bool,own:bool,gate:bool)->bool{should_swallow(injected,own,gate)}
-#[cfg(target_os="macos")]
-pub(crate) fn refresh_lock_lease(){extern "C"{fn pp_rc_lock_refresh();}unsafe{pp_rc_lock_refresh()}}
+pub extern "C" fn pp_rc_should_swallow(injected: bool, own: bool, gate: bool) -> bool {
+    should_swallow(injected, own, gate)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn refresh_lock_lease() {
+    extern "C" {
+        fn pp_rc_lock_refresh();
+    }
+    unsafe { pp_rc_lock_refresh() }
+}

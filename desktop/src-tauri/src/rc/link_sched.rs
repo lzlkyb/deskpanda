@@ -99,7 +99,11 @@ pub enum SchedEvent {
     /// 看门狗判证据断供（`link_stale_kick` 为真时喂）。
     EvidenceLost { epoch: SchedEpoch },
     /// 观测到路径变化（`take_path_change` 的 (from, to)）。
-    PathChanged { epoch: SchedEpoch, from: PathKind, to: PathKind },
+    PathChanged {
+        epoch: SchedEpoch,
+        from: PathKind,
+        to: PathKind,
+    },
 }
 
 /// 迁移判定（对标 p2wlan `PathTransitionDecision` 的子集——我们的事件源少，
@@ -153,7 +157,11 @@ impl Default for LinkSched {
 impl LinkSched {
     pub const fn new() -> Self {
         Self {
-            epoch: SchedEpoch { network: 0, session: 0, path: 0 },
+            epoch: SchedEpoch {
+                network: 0,
+                session: 0,
+                path: 0,
+            },
             phase: Phase::Unbound,
             revision: 0,
             rejected: 0,
@@ -330,7 +338,13 @@ mod tests {
     const T0: i64 = 100_000;
 
     fn attached(s: &mut LinkSched, net: u64) -> SchedEpoch {
-        let ev = SchedEvent::Attached { epoch: SchedEpoch { network: net, session: 0, path: 0 } };
+        let ev = SchedEvent::Attached {
+            epoch: SchedEpoch {
+                network: net,
+                session: 0,
+                path: 0,
+            },
+        };
         let e = ev;
         let d = s.reduce(e, T0);
         assert_eq!(d, Decision::Applied);
@@ -344,9 +358,21 @@ mod tests {
         let e = attached(&mut s, 0);
         assert_eq!(s.snapshot().phase, Phase::Stable);
         // Stable 期间例行 pong：有效但不迁移
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e, rtt_ms: 20 }, T0 + 1), Decision::Observed);
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e,
+                    rtt_ms: 20
+                },
+                T0 + 1
+            ),
+            Decision::Observed
+        );
         assert_eq!(s.snapshot().phase, Phase::Stable);
-        assert_eq!(s.reduce(SchedEvent::Detached { epoch: e }, T0 + 2), Decision::Applied);
+        assert_eq!(
+            s.reduce(SchedEvent::Detached { epoch: e }, T0 + 2),
+            Decision::Applied
+        );
         assert_eq!(s.snapshot().phase, Phase::Unbound);
     }
 
@@ -355,10 +381,22 @@ mod tests {
         let mut s = LinkSched::new();
         let e = attached(&mut s, 0);
         // 证据断供 → Degraded（since = 事件时刻）
-        assert_eq!(s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0), Decision::Applied);
+        assert_eq!(
+            s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0),
+            Decision::Applied
+        );
         assert_eq!(s.snapshot().phase, Phase::Degraded { since: T0 });
         // 一条 pong → Recovering（观察窗起点 = pong 时刻）
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e, rtt_ms: 20 }, T0 + 100), Decision::Applied);
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e,
+                    rtt_ms: 20
+                },
+                T0 + 100
+            ),
+            Decision::Applied
+        );
         assert_eq!(s.snapshot().phase, Phase::Recovering { since: T0 + 100 });
         // 观察窗未满：poll 不升
         assert_eq!(s.poll(T0 + 100 + RECOVER_HOLD_MS - 1), Decision::Observed);
@@ -375,12 +413,30 @@ mod tests {
         let mut s = LinkSched::new();
         let e = attached(&mut s, 0);
         s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0);
-        s.reduce(SchedEvent::PongObserved { epoch: e, rtt_ms: 20 }, T0 + 100);
+        s.reduce(
+            SchedEvent::PongObserved {
+                epoch: e,
+                rtt_ms: 20,
+            },
+            T0 + 100,
+        );
         assert_eq!(s.snapshot().phase, Phase::Recovering { since: T0 + 100 });
-        assert_eq!(s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0 + 200), Decision::Applied);
+        assert_eq!(
+            s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0 + 200),
+            Decision::Applied
+        );
         assert_eq!(s.snapshot().phase, Phase::Degraded { since: T0 + 200 });
         // 会话仍然有效：pong 仍被接受（不是 Unbound）
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e, rtt_ms: 20 }, T0 + 300), Decision::Applied);
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e,
+                    rtt_ms: 20
+                },
+                T0 + 300
+            ),
+            Decision::Applied
+        );
     }
 
     #[test]
@@ -391,14 +447,39 @@ mod tests {
         let e1 = attached(&mut s, 0);
         let rev_after_e1 = s.snapshot().revision;
         // 新会话（session 世代 +1）
-        let ev2 = SchedEvent::Attached { epoch: SchedEpoch { network: 0, session: 0, path: 0 } };
+        let ev2 = SchedEvent::Attached {
+            epoch: SchedEpoch {
+                network: 0,
+                session: 0,
+                path: 0,
+            },
+        };
         s.reduce(ev2, T0 + 1);
         let e2 = s.snapshot().epoch;
-        assert_eq!(e2.session, e1.session + 1, "session 世代必须由状态机内部递增");
+        assert_eq!(
+            e2.session,
+            e1.session + 1,
+            "session 世代必须由状态机内部递增"
+        );
         // 旧会话的 pong / 断供 / detach 全被拒
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e1, rtt_ms: 20 }, T0 + 2), Decision::RejectedEpoch);
-        assert_eq!(s.reduce(SchedEvent::EvidenceLost { epoch: e1 }, T0 + 3), Decision::RejectedEpoch);
-        assert_eq!(s.reduce(SchedEvent::Detached { epoch: e1 }, T0 + 4), Decision::RejectedEpoch);
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e1,
+                    rtt_ms: 20
+                },
+                T0 + 2
+            ),
+            Decision::RejectedEpoch
+        );
+        assert_eq!(
+            s.reduce(SchedEvent::EvidenceLost { epoch: e1 }, T0 + 3),
+            Decision::RejectedEpoch
+        );
+        assert_eq!(
+            s.reduce(SchedEvent::Detached { epoch: e1 }, T0 + 4),
+            Decision::RejectedEpoch
+        );
         let snap = s.snapshot();
         assert_eq!(snap.phase, Phase::Stable, "被拒事件不得改变相位");
         assert_eq!(snap.revision, rev_after_e1 + 1, "revision 只计 attach");
@@ -408,11 +489,26 @@ mod tests {
         let mut s2 = LinkSched::new();
         let e_net1 = attached(&mut s2, 1);
         s2.reduce(SchedEvent::Detached { epoch: e_net1 }, T0);
-        let ev_net0 = SchedEvent::Attached { epoch: SchedEpoch { network: 0, session: 0, path: 0 } };
+        let ev_net0 = SchedEvent::Attached {
+            epoch: SchedEpoch {
+                network: 0,
+                session: 0,
+                path: 0,
+            },
+        };
         s2.reduce(ev_net0, T0);
         let e_net0 = s2.snapshot().epoch;
         assert_ne!(e_net0.network, e_net1.network);
-        assert_eq!(s2.reduce(SchedEvent::PongObserved { epoch: e_net1, rtt_ms: 20 }, T0), Decision::RejectedEpoch);
+        assert_eq!(
+            s2.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e_net1,
+                    rtt_ms: 20
+                },
+                T0
+            ),
+            Decision::RejectedEpoch
+        );
     }
 
     #[test]
@@ -420,15 +516,33 @@ mod tests {
         let mut s = LinkSched::new();
         let e1 = attached(&mut s, 0);
         // bound 期间再 attach = 重挂（上一场没 detach 的兜底）：世代 +1，旧世代立即失效
-        let re = SchedEvent::Attached { epoch: SchedEpoch { network: 0, session: 0, path: 0 } };
+        let re = SchedEvent::Attached {
+            epoch: SchedEpoch {
+                network: 0,
+                session: 0,
+                path: 0,
+            },
+        };
         assert_eq!(s.reduce(re, T0 + 1), Decision::Applied);
         let e2 = s.snapshot().epoch;
         assert_eq!(e2.session, e1.session + 1);
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e1, rtt_ms: 20 }, T0 + 2), Decision::RejectedEpoch);
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e1,
+                    rtt_ms: 20
+                },
+                T0 + 2
+            ),
+            Decision::RejectedEpoch
+        );
         // Degraded 期间反复 EvidenceLost → Duplicate（同效重复播报）
         s.reduce(SchedEvent::EvidenceLost { epoch: e2 }, T0 + 3);
         let snap1 = s.snapshot();
-        assert_eq!(s.reduce(SchedEvent::EvidenceLost { epoch: e2 }, T0 + 4), Decision::Duplicate);
+        assert_eq!(
+            s.reduce(SchedEvent::EvidenceLost { epoch: e2 }, T0 + 4),
+            Decision::Duplicate
+        );
         assert_eq!(s.snapshot().phase, snap1.phase);
     }
 
@@ -436,10 +550,29 @@ mod tests {
     fn test_无会话时事件被忽略_不是拒绝() {
         // 还没 attach 就收到 pong/detach：无害（迟到证据），Ignored 不计数。
         let mut s = LinkSched::new();
-        let e = SchedEpoch { network: 0, session: 99, path: 0 };
-        assert_eq!(s.reduce(SchedEvent::PongObserved { epoch: e, rtt_ms: 20 }, T0), Decision::Ignored);
-        assert_eq!(s.reduce(SchedEvent::Detached { epoch: e }, T0), Decision::Ignored);
-        assert_eq!(s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0), Decision::Ignored);
+        let e = SchedEpoch {
+            network: 0,
+            session: 99,
+            path: 0,
+        };
+        assert_eq!(
+            s.reduce(
+                SchedEvent::PongObserved {
+                    epoch: e,
+                    rtt_ms: 20
+                },
+                T0
+            ),
+            Decision::Ignored
+        );
+        assert_eq!(
+            s.reduce(SchedEvent::Detached { epoch: e }, T0),
+            Decision::Ignored
+        );
+        assert_eq!(
+            s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0),
+            Decision::Ignored
+        );
         let snap = s.snapshot();
         assert_eq!(snap.phase, Phase::Unbound);
         assert_eq!(snap.rejected, 0, "Ignored 不是拒绝");
@@ -452,7 +585,14 @@ mod tests {
         s.reduce(SchedEvent::EvidenceLost { epoch: e }, T0);
         // Degraded 中观测到换路（如 relay → direct）：换路本身是新证据
         assert_eq!(
-            s.reduce(SchedEvent::PathChanged { epoch: e, from: PathKind::Relay, to: PathKind::Direct }, T0 + 1),
+            s.reduce(
+                SchedEvent::PathChanged {
+                    epoch: e,
+                    from: PathKind::Relay,
+                    to: PathKind::Direct
+                },
+                T0 + 1
+            ),
             Decision::Applied
         );
         let snap = s.snapshot();
@@ -460,7 +600,10 @@ mod tests {
         assert_eq!(snap.epoch.path, 1, "path 世代必须递增");
         // 换路后旧路径（path=0）语境内的事件按同一 lineage 接受（path 位允许滞后），
         // 但新 path 语境内 detach 仍需同 network+session。
-        assert_eq!(s.reduce(SchedEvent::Detached { epoch: snap.epoch }, T0 + 2), Decision::Applied);
+        assert_eq!(
+            s.reduce(SchedEvent::Detached { epoch: snap.epoch }, T0 + 2),
+            Decision::Applied
+        );
     }
 
     #[test]

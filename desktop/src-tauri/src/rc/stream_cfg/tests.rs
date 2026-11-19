@@ -188,7 +188,13 @@ fn 码率倍率默认200_与自动缩放相乘_越界被拒() {
     assert!(s.set_user_bitrate_pct(201).is_err());
     assert_eq!(s.bitrate_scale(), 50, "被拒就不能留下半截改动");
     // 新会话复位：上一场的用户倍率不带走，回归默认 200
-    s.reset_from_cfg(super::super::video::EncodeProfile::default(), true, false, StreamCodec::Auto, false);
+    s.reset_from_cfg(
+        super::super::video::EncodeProfile::default(),
+        true,
+        false,
+        StreamCodec::Auto,
+        false,
+    );
     s.set_peer_rtt(300);
     assert_eq!(s.bitrate_scale(), 80, "复位后回到默认 200 × 弱网 40%");
 }
@@ -228,7 +234,13 @@ fn 会话初始化会重置推流参数() {
     let s = c();
     s.set_scope("primary").expect("合法");
     s.set_codec("jpeg").expect("合法");
-    s.reset_from_cfg(super::super::video::EncodeProfile::default(), true, false, StreamCodec::Auto, false);
+    s.reset_from_cfg(
+        super::super::video::EncodeProfile::default(),
+        true,
+        false,
+        StreamCodec::Auto,
+        false,
+    );
     let o = s.snapshot();
     assert!(o.virtual_screen, "由配置决定");
     assert_eq!(o.monitor, -1);
@@ -343,7 +355,7 @@ fn skew_高rtt样本也参与校准() {
 fn skew_只信接近历史最快的往返() {
     let s = c();
     s.note_clock_skew(10, 40); // 历史最快 40ms，立锚
-    // 突刺样本：rtt 990 远超 min+100，纯排队产物，必须整条拒
+                               // 突刺样本：rtt 990 远超 min+100，纯排队产物，必须整条拒
     s.note_clock_skew(910, 990);
     assert_eq!(s.clock_skew_ms(), 10);
     s.note_clock_skew(14, 200); // 200 > 40+100 → 拒
@@ -451,7 +463,6 @@ fn bw_采样后参与三信号取min() {
     assert_eq!(s.bitrate_scale(), 100);
 }
 
-
 // ── 2026-09-28：帧龄快速码控（AP 队列 in-band 观测）────────────────────────
 
 #[test]
@@ -473,7 +484,7 @@ fn 排队压力EMA_升快降慢() {
     s.set_user_bitrate_pct(100).expect("合法"); // 只测 auto 分层，见 loss 同款注释
     s.set_peer_queue_ms(170);
     assert_eq!(s.bitrate_scale(), 70); // 170ms → 立刻压
-    // 队列暴涨：升 α=1/2——两拍就到位大半
+                                       // 队列暴涨：升 α=1/2——两拍就到位大半
     s.set_peer_queue_ms(600);
     s.set_peer_queue_ms(600);
     let after_up = s.bitrate_scale();
@@ -564,12 +575,24 @@ fn 对端发言信号_两路置位_每场清零() {
 #[test]
 fn rtt下限_只认安静样本_尖峰只收敛四分之一() {
     // 没收到过帧龄上报（旧对端）→ 下限永不建立，行为退回绝对 RTT
-    assert_eq!(next_rtt_floor(0, 600, false, 70, 0), 0, "无帧龄上报不能定锚");
+    assert_eq!(
+        next_rtt_floor(0, 600, false, 70, 0),
+        0,
+        "无帧龄上报不能定锚"
+    );
     // 首个安静样本直接立锚
     assert_eq!(next_rtt_floor(0, 600, true, 70, 0), 600);
     // 队列/丢包任一不安静 → 下限不动（反棘轮的核心）
-    assert_eq!(next_rtt_floor(600, 2_600, true, 1_035, 0), 600, "排队样本不能抬下限");
-    assert_eq!(next_rtt_floor(600, 2_600, true, 40, 60), 600, "丢包样本不能抬下限");
+    assert_eq!(
+        next_rtt_floor(600, 2_600, true, 1_035, 0),
+        600,
+        "排队样本不能抬下限"
+    );
+    assert_eq!(
+        next_rtt_floor(600, 2_600, true, 40, 60),
+        600,
+        "丢包样本不能抬下限"
+    );
     assert_eq!(next_rtt_floor(600, 0, true, 40, 0), 600, "非正值不算样本");
     // 安静但更慢：只升 1/4（LAN→中继这类迁移不能拿一两个样本重锚）
     assert_eq!(next_rtt_floor(600, 1_000, true, 40, 0), 700);
@@ -585,7 +608,11 @@ fn rtt下限_只认安静样本_尖峰只收敛四分之一() {
 fn 中继固有延迟不砍码率_旧对端保守回退() {
     let s = c();
     s.set_peer_queue_ms(70); // 帧龄必须先到（inbound.rs 的顺序契约）
-    assert_eq!(s.set_peer_rtt(600), 200, "600ms 全是传播 → 超额 0 → 全速×默认倍率");
+    assert_eq!(
+        s.set_peer_rtt(600),
+        200,
+        "600ms 全是传播 → 超额 0 → 全速×默认倍率"
+    );
     // 排队尖峰：floor 收敛到 725，超额 375ms → 40% 档 × 200% = 80%
     assert_eq!(s.set_peer_rtt(1_100), 80, "比安静时刻慢 500ms 必须还砍得动");
     s.set_peer_queue_ms(2_000); // EMA 升到 1035 → 雪崩熔断，倍率不参与
@@ -612,7 +639,11 @@ fn 自动档看超额延迟_中继传播不踩档() {
     // 在超额口径下 = 「必须比本场安静时刻更慢才准升档」，于是固有传播这条路
     // 永远攒不满保持窗。修好后超额 0ms + 零丢包 + 帧龄 70ms 就该拿到升档资格
     // —— 这正是用户要的「换到好链路画质自己回来」。
-    assert_eq!(s.auto_tier_name(), "sharp", "固有延迟不该降档，且干净链路要能升档");
+    assert_eq!(
+        s.auto_tier_name(),
+        "sharp",
+        "固有延迟不该降档，且干净链路要能升档"
+    );
 
     let legacy = c();
     legacy.set_quality("auto").expect("合法");
@@ -620,7 +651,11 @@ fn 自动档看超额延迟_中继传播不踩档() {
     for i in 0..40i64 {
         legacy.auto_note_frame(10_000, base + i * 500);
     }
-    assert_eq!(legacy.auto_tier_name(), "smooth", "无安静样本时按绝对延迟照降");
+    assert_eq!(
+        legacy.auto_tier_name(),
+        "smooth",
+        "无安静样本时按绝对延迟照降"
+    );
 }
 
 // ===== 内网直连的码率上限（2026-10-11 乙-2）=====
@@ -665,14 +700,18 @@ fn lan_ceiling_uses_the_documented_ladder_per_profile() {
     let s = c();
     s.set_user_bitrate_pct(100).expect("合法");
     for (quality, lan_want) in [
-        ("smooth", 2_400u32),  // 960 宽 × 60fps 提帧上限
-        ("sharp", 12_800),     // 1080p × 60
-        ("ultra", 22_400),     // 2.5K × 60
-        ("fps120", 20_800),    // 1080p × 120
-        ("fps165", 26_800),    // 1080p × 165
+        ("smooth", 2_400u32), // 960 宽 × 60fps 提帧上限
+        ("sharp", 12_800),    // 1080p × 60
+        ("ultra", 22_400),    // 2.5K × 60
+        ("fps120", 20_800),   // 1080p × 120
+        ("fps165", 26_800),   // 1080p × 165
     ] {
         s.set_quality(quality).expect("合法");
-        assert_eq!(s.media_ceiling_kbps(true), lan_want, "{quality} 的 LAN 上限");
+        assert_eq!(
+            s.media_ceiling_kbps(true),
+            lan_want,
+            "{quality} 的 LAN 上限"
+        );
     }
     // 非 LAN 一侧逐值仍是旧阶梯（≤1280 ⇒ 4_000，1281..=1920 ⇒ 8_000，更宽 ⇒ 12_000），
     // 200% 倍率照旧被 16_000 帽钳住——1754b1f / 6bb442c7 的落地口径不在这次改动里。
@@ -693,7 +732,11 @@ fn rtt_ema_起播首样不许定罪() {
     assert_eq!(ema, -1, "宽限期内的样本不许建 EMA");
     assert_eq!(warm_min, 4_655);
     assert_eq!(warm_seen, 1);
-    assert_eq!(rtt_hint_tier(0, ema), (0, false), "EMA 未建立时不许发 NetHint");
+    assert_eq!(
+        rtt_hint_tier(0, ema),
+        (0, false),
+        "EMA 未建立时不许发 NetHint"
+    );
 }
 
 #[test]

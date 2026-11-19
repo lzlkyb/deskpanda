@@ -107,7 +107,12 @@ impl FloatMode {
 /// - `dismissed_ms`：用户上次**主动收起**确认卡的时刻。收起不等于答复，所以旧的
 ///   pending 不该被下一次画质 tick 又顶回来；只有比它更新的申请（或更新的原因）
 ///   才重新抢回 `Ask`。
-pub fn mode_of(pending_ms: &[i64], note_ms: i64, inbound_live: bool, dismissed_ms: i64) -> FloatMode {
+pub fn mode_of(
+    pending_ms: &[i64],
+    note_ms: i64,
+    inbound_live: bool,
+    dismissed_ms: i64,
+) -> FloatMode {
     let newest = pending_ms.iter().max().copied().unwrap_or(0).max(note_ms);
     if newest > dismissed_ms {
         FloatMode::Ask
@@ -145,8 +150,7 @@ pub fn mode_now() -> FloatMode {
     };
     let st = svc.status();
     mode_of(
-        &st
-            .pending
+        &st.pending
             .iter()
             .map(|k| k.first_seen_ms)
             .collect::<Vec<_>>(),

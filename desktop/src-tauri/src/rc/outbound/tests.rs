@@ -13,8 +13,7 @@ fn test_守卫_收流断开的理由真的过了explain() {
         "收流 Err 分支没过 `explain`——对端关连接的理由会退化成 `connection lost`"
     );
     assert!(
-        src.contains("let reason = self")
-            && src.contains("peer_end_reason"),
+        src.contains("let reason = self") && src.contains("peer_end_reason"),
         "对端 End 帧的理由要带进 `force_end_if_session`（P2-10：否则历史记成「画面流中断」）"
     );
     // 连接句柄必须从 `dial_and_request` 交出来——没有它，收流侧拿不到 `close_reason`。

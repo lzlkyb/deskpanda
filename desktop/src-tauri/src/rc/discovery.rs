@@ -17,11 +17,11 @@
 //! 那张表在验签之前就把未配对设备拦掉了（见 `sync::presence::Nearby` 的模块头），
 //! 所以它里面**根本不会**有未配对的邻居。附近设备走的是明文招呼包那条独立通道。
 
-use crate::store::DataStore;
-use crate::rc::join::RcJoins;
-use crate::rc::pin::{Confirmed, Done, Outgoing, PairPrompt, PinOkIn, Pairs};
 use crate::net::identity::NodeIdentity;
 use crate::net::presence::{self, Extras, Nearby, Neighbor, PlainPacket, PresenceApp, WireKind};
+use crate::rc::join::RcJoins;
+use crate::rc::pin::{Confirmed, Done, Outgoing, PairPrompt, Pairs, PinOkIn};
+use crate::store::DataStore;
 use std::sync::{Arc, Mutex};
 
 /// 「这台机器已经配过对了」的判据。由调用方给（通常是查 `rc_devices` ∪ `devices`），

@@ -277,10 +277,10 @@ impl RcService {
         };
         self.input_gate.lock_requested.store(on, Ordering::SeqCst);
         let err = if on && !actual {
-            #[cfg(target_os="macos")]
-            let message="本机输入拦截未运行，请检查辅助功能权限后重新连接";
-            #[cfg(not(target_os="macos"))]
-            let message="本机输入监视未运行，无法锁定";
+            #[cfg(target_os = "macos")]
+            let message = "本机输入拦截未运行，请检查辅助功能权限后重新连接";
+            #[cfg(not(target_os = "macos"))]
+            let message = "本机输入监视未运行，无法锁定";
             Some(message.to_string())
         } else {
             None
@@ -304,7 +304,8 @@ impl RcService {
         let g = &self.input_gate;
         let now = InputGate::mono_now();
         g.peer_kbd_at.store(now, Ordering::Relaxed);
-        g.peer_kbd_blocked_at.store(if injected { 0 } else { now }, Ordering::Relaxed);
+        g.peer_kbd_blocked_at
+            .store(if injected { 0 } else { now }, Ordering::Relaxed);
     }
 
     /// 对端一条鼠标事件到达（移动也算——「谁在动鼠标」问的就是它）。
@@ -312,7 +313,8 @@ impl RcService {
         let g = &self.input_gate;
         let now = InputGate::mono_now();
         g.peer_mouse_at.store(now, Ordering::Relaxed);
-        g.peer_mouse_blocked_at.store(if injected { 0 } else { now }, Ordering::Relaxed);
+        g.peer_mouse_blocked_at
+            .store(if injected { 0 } else { now }, Ordering::Relaxed);
     }
 
     /// 两枚 pill 的当前结论（status 投影用）。
@@ -367,7 +369,10 @@ impl RcService {
 
     /// 发起端：记下对端报来的输入权状态（`outbound.rs` 解出 `input_state` 后调用）。
     pub(in crate::rc) fn set_peer_input_state(&self, st: PeerInputState) {
-        *self.peer_input_state.lock().unwrap_or_else(|p| p.into_inner()) = Some(st);
+        *self
+            .peer_input_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(st);
     }
 
     /// 发起端：对端报来的输入权状态（快照用）。None = 旧对端不发这条帧。
@@ -405,7 +410,10 @@ impl RcService {
     ///（见 [`RcService::set_input_hold`]），这里只做清位。
     pub(in crate::rc) fn input_reset(&self) {
         self.input_gate_begin();
-        *self.peer_input_state.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .peer_input_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
     }
 }
 
@@ -445,7 +453,10 @@ mod tests {
         let svc = RcService::new(crate::rc::tests::store());
         assert!(svc.input_injection_allowed(), "默认不收回，注入照常");
         svc.input_gate.hold.store(true, Ordering::SeqCst);
-        assert!(!svc.input_injection_allowed(), "收回期间对端的键鼠必须进不来");
+        assert!(
+            !svc.input_injection_allowed(),
+            "收回期间对端的键鼠必须进不来"
+        );
         svc.input_gate.lock_requested.store(true, Ordering::SeqCst);
         assert!(!svc.input_injection_allowed(), "只是收回，仍拦");
         svc.input_gate.hold.store(false, Ordering::SeqCst);

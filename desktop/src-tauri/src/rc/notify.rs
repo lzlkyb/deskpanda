@@ -208,8 +208,7 @@ impl NotifyState {
         if now_ms - last < FRAME_READY_MIN_GAP_MS {
             return;
         }
-        self.last_frame_emit_ms
-            .store(now_ms, Ordering::Relaxed);
+        self.last_frame_emit_ms.store(now_ms, Ordering::Relaxed);
         let f = self
             .notify_frame
             .lock()

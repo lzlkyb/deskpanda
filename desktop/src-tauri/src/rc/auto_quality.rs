@@ -80,10 +80,7 @@ const AUTO_DOWN_QUEUE_MS: i64 = 300;
 // `LinkSample.down_bytes`，判据保持纯函数。）
 
 /// profile → 自动阶梯下标（不在阶梯内如 uhd/fps120 返回 None）。
-pub(super) fn ladder_index_of(
-    p: &super::video::EncodeProfile,
-    has_gpu: bool,
-) -> Option<usize> {
+pub(super) fn ladder_index_of(p: &super::video::EncodeProfile, has_gpu: bool) -> Option<usize> {
     auto_ladder(has_gpu)
         .iter()
         .position(|name| &super::video::EncodeProfile::of_name(name) == p)
@@ -320,14 +317,31 @@ mod tests {
     #[test]
     fn 稳定公网时延可恢复画质但排队仍挡升档() {
         let sample = |queue_ms| LinkSample {
-            tier: 0, ladder_len: 4, down_bytes: 150_000,
-            rtt_ms: 80, rtt_measured: true, queue_ms, queue_measured: true, transport_clear: false,
-            avg_bytes: 5_000, loss_permille: 0,
-            high_since: None, low_since: Some(0), last_change_ms: 0, now_ms: 30_000,
+            tier: 0,
+            ladder_len: 4,
+            down_bytes: 150_000,
+            rtt_ms: 80,
+            rtt_measured: true,
+            queue_ms,
+            queue_measured: true,
+            transport_clear: false,
+            avg_bytes: 5_000,
+            loss_permille: 0,
+            high_since: None,
+            low_since: Some(0),
+            last_change_ms: 0,
+            now_ms: 30_000,
         };
-        assert_eq!(auto_decide(sample(80)).0, Some(1),
-            "已稳定 30 秒的公网直连不能因不是局域网 RTT 永久保留 smooth");
-        assert_eq!(auto_decide(sample(160)).0, None, "码控已降速的队列不能升画质");
+        assert_eq!(
+            auto_decide(sample(80)).0,
+            Some(1),
+            "已稳定 30 秒的公网直连不能因不是局域网 RTT 永久保留 smooth"
+        );
+        assert_eq!(
+            auto_decide(sample(160)).0,
+            None,
+            "码控已降速的队列不能升画质"
+        );
         let mut high_rtt = sample(80);
         high_rtt.rtt_ms = 150;
         assert_eq!(auto_decide(high_rtt).0, None, "更慢链路不满足恢复条件");
@@ -336,20 +350,36 @@ mod tests {
     #[test]
     fn bounded_lossy_delivery_can_restore_quality_but_congestion_still_downgrades() {
         let sample = |queue_ms| LinkSample {
-            tier: 0, ladder_len: 4, down_bytes: 150_000,
-            rtt_ms: 40, rtt_measured: true, queue_ms, queue_measured: true, transport_clear: false,
-            avg_bytes: 5_000, loss_permille: 60,
-            high_since: None, low_since: Some(0), last_change_ms: 0, now_ms: 30_000,
+            tier: 0,
+            ladder_len: 4,
+            down_bytes: 150_000,
+            rtt_ms: 40,
+            rtt_measured: true,
+            queue_ms,
+            queue_measured: true,
+            transport_clear: false,
+            avg_bytes: 5_000,
+            loss_permille: 60,
+            high_since: None,
+            low_since: Some(0),
+            last_change_ms: 0,
+            now_ms: 30_000,
         };
         let healthy = auto_decide(sample(50));
         assert_eq!(healthy.0, Some(1));
-        assert_eq!(healthy.1, None, "bounded delivery is not sustained congestion");
+        assert_eq!(
+            healthy.1, None,
+            "bounded delivery is not sustained congestion"
+        );
         let mut congested = sample(120);
         congested.tier = 1;
         congested.high_since = Some(0);
         let bad = auto_decide(congested);
         assert_eq!(bad.0, Some(0));
-        assert_eq!(bad.2, None, "loss with queue pressure cannot restore quality");
+        assert_eq!(
+            bad.2, None,
+            "loss with queue pressure cannot restore quality"
+        );
     }
 
     /// A-乙 的**反例侧**：传输层不清白（有丢包）时，帧龄 ≥300ms 仍要独立定罪。
@@ -383,7 +413,11 @@ mod tests {
         s.set_peer_queue_ms(1100);
         for i in 0..60 {
             feed(&s, 10_000, i);
-            assert_ne!(s.auto_tier_name(), "smooth", "第 {i} 帧：传输层清白时帧龄不能定罪降档");
+            assert_ne!(
+                s.auto_tier_name(),
+                "smooth",
+                "第 {i} 帧：传输层清白时帧龄不能定罪降档"
+            );
         }
     }
 
@@ -522,7 +556,13 @@ mod tests {
         use crate::rc::video::EncodeProfile as EP;
         // 有硬编：balanced → sharp → ultra → fps60（三次升档，各自 30s 持续 + 15s 冷却）
         let s = StreamCfg::new();
-        s.reset_from_cfg(EP::of_name("balanced"), false, true, StreamCodec::Auto, true);
+        s.reset_from_cfg(
+            EP::of_name("balanced"),
+            false,
+            true,
+            StreamCodec::Auto,
+            true,
+        );
         s.set_peer_rtt(20);
         let mut hit = false;
         for i in 0..400 {
@@ -534,7 +574,13 @@ mod tests {
         assert!(hit, "有硬编时应能升到 fps60 天花板");
         // 无硬编：怎么喂都到不了 fps60
         let s2 = StreamCfg::new();
-        s2.reset_from_cfg(EP::of_name("balanced"), false, true, StreamCodec::Auto, false);
+        s2.reset_from_cfg(
+            EP::of_name("balanced"),
+            false,
+            true,
+            StreamCodec::Auto,
+            false,
+        );
         s2.set_peer_rtt(20);
         for i in 0..400 {
             feed(&s2, 1_000, i);

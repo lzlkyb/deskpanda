@@ -47,9 +47,9 @@
 //! 仍可偷换公钥。那条路的检测靠两端配对码人眼核对（SAS）——系统验不了
 //! 「两端显示的数字一样」，这是本方案的边界，不是遗漏。
 
-use crate::store::DataStore;
 use crate::net::lan_pair::{hex, hkdf32, PairRole, PendingPair};
 use crate::net::presence::WireKind;
+use crate::store::DataStore;
 use serde::Serialize;
 use std::sync::Mutex;
 
@@ -348,13 +348,7 @@ impl Pairs {
             return None;
         }
         let shared = s.pair.shared.as_ref()?;
-        if !verify_pin_ok_proof(
-            shared,
-            &req.peer_id,
-            &req.my_node_id,
-            req.ts,
-            &req.ok_proof,
-        ) {
+        if !verify_pin_ok_proof(shared, &req.peer_id, &req.my_node_id, req.ts, &req.ok_proof) {
             log::warn!(
                 "[RC] 伪造或过期的 pin_ok 证明，已拒绝（{}）",
                 short_id(&req.peer_id)
@@ -418,8 +412,10 @@ impl Pairs {
             // 要等 discovery 发包那一刻才算（绑定发包 ts）。没有这一步，commit
             // 分支返回的包在 make_extras 里算不出证明，A2 的修复就白修。
             if let Some(shared) = s.pair.shared.clone() {
-                *self.just_committed.lock().unwrap_or_else(|p| p.into_inner()) =
-                    Some((id.clone(), shared));
+                *self
+                    .just_committed
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some((id.clone(), shared));
             }
             *guard = None;
             // 对端落库依赖「收到我的 pin_ok」——我先点、他的 pin_ok 先到把我这侧
@@ -534,7 +530,11 @@ impl Pairs {
     ///
     /// 写失败不清洗用户：错误往上报，会话已经结束了（再点确认没意义）。
     fn commit(&self, peer_id: &str, peer_name: &str, initiator: bool, now_ms: i64) -> Confirmed {
-        match commit_outcome(self.store.rc_device_pair(peer_id, peer_name), peer_id, peer_name) {
+        match commit_outcome(
+            self.store.rc_device_pair(peer_id, peer_name),
+            peer_id,
+            peer_name,
+        ) {
             Ok((id, name)) => {
                 *self.done.lock().unwrap_or_else(|p| p.into_inner()) = Some(Done {
                     peer_id: id,

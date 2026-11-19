@@ -257,8 +257,8 @@ impl InboundVideo {
         let my_id = self.my_id.clone();
         let conn = self.conn.clone();
         tauri::async_runtime::spawn(async move {
-            #[cfg(target_os="macos")]
-            let mut previous_lock=crate::rc::local_input::is_locked();
+            #[cfg(target_os = "macos")]
+            let mut previous_lock = crate::rc::local_input::is_locked();
             let mut loss_sampler = crate::rc::media::LossSampler::default();
             let mut last_route = None;
             let mut last_transport_log = std::time::Instant::now();
@@ -267,12 +267,20 @@ impl InboundVideo {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                #[cfg(target_os="macos")]
+                #[cfg(target_os = "macos")]
                 {
-                    if !svc.session_id_is(&my_id){break;}
-                    if !svc.should_pause_stream(){crate::rc::local_input::refresh_lock_lease();}
-                    let current=crate::rc::local_input::is_locked();
-                    if current!=previous_lock{previous_lock=current;svc.emit_input_state(None).await;svc.notify.emit_changed();}
+                    if !svc.session_id_is(&my_id) {
+                        break;
+                    }
+                    if !svc.should_pause_stream() {
+                        crate::rc::local_input::refresh_lock_lease();
+                    }
+                    let current = crate::rc::local_input::is_locked();
+                    if current != previous_lock {
+                        previous_lock = current;
+                        svc.emit_input_state(None).await;
+                        svc.notify.emit_changed();
+                    }
                 }
                 let Some((rtt, sample)) = loss_sampler.sample(&conn) else {
                     continue;
@@ -483,11 +491,11 @@ pub(super) async fn send_caps_frame(
         };
         (caps.h264_gpu && single_out && hz >= 100, hz)
     };
-    #[cfg(target_os="macos")]
-    let(hz,mac_high)=crate::rc::mac_video::scope_support(opts.monitor,opts.virtual_screen);
-    #[cfg(target_os="macos")]
-    let fps120=mac_high>=120;
-    #[cfg(not(any(target_os="windows",target_os="macos")))]
+    #[cfg(target_os = "macos")]
+    let (hz, mac_high) = crate::rc::mac_video::scope_support(opts.monitor, opts.virtual_screen);
+    #[cfg(target_os = "macos")]
+    let fps120 = mac_high >= 120;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let (fps120, hz) = (false, 0u32);
     // 2026-09-22：fps144/fps165 档 caps。后端统一判定最高可用档（跑不到的档
     // 不卖），发起端按它过滤菜单；旧版发起端忽略此字段，无兼容问题。
@@ -502,16 +510,16 @@ pub(super) async fn send_caps_frame(
     } else {
         0
     };
-    #[cfg(target_os="macos")]
-    let fps_high=mac_high;
-    #[cfg(not(any(target_os="windows",target_os="macos")))]
+    #[cfg(target_os = "macos")]
+    let fps_high = mac_high;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let fps_high: u32 = 0;
     // Q3：HEVC 硬编可用性。旧版本对端忽略；uhd60 档的 UI 门控靠它。
     #[cfg(target_os = "windows")]
     let hevc = caps.hevc_hw;
-    #[cfg(target_os="macos")]
-    let hevc=crate::rc::mac_video::hardware_available(true);
-    #[cfg(not(any(target_os="windows",target_os="macos")))]
+    #[cfg(target_os = "macos")]
+    let hevc = crate::rc::mac_video::hardware_available(true);
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let hevc = false;
     // Q7：顺带报告在线显示器列表（几何信息齐全），发起端会话内出逐屏选项 +
     // 「下一屏」轮换按钮。旧版本对端会忽略这个字段，无兼容问题。

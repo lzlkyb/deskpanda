@@ -61,7 +61,11 @@ impl RcService {
         self.video_pause.paused.store(on, Ordering::SeqCst);
         log::info!(
             "[RC] 本机画面{}（会话不断，键鼠与剪贴板照常）",
-            if on { "已暂停推送" } else { "已恢复推送" }
+            if on {
+                "已暂停推送"
+            } else {
+                "已恢复推送"
+            }
         );
         self.emit_video_pause().await;
         self.notify.emit_changed();
@@ -143,7 +147,10 @@ mod tests {
         svc.video_pause.paused.store(true, Ordering::SeqCst);
         svc.set_peer_video_paused(true);
         svc.video_pause_begin();
-        assert!(!svc.video_paused(), "上一场的暂停漏进下一场 = 新对端看到冻帧");
+        assert!(
+            !svc.video_paused(),
+            "上一场的暂停漏进下一场 = 新对端看到冻帧"
+        );
         assert!(
             !svc.peer_video_paused(),
             "发起端那份对端状态跨会话残留 = 下一场凭空挂着「对方已暂停画面」"

@@ -18,15 +18,9 @@ impl RcService {
                 let peer_name = self.peer_name(peer);
                 let reason = format!("连不上对方，未发送：{e}");
                 for (p, nm, sz) in &items {
-                    let tid = self.file.task_start(
-                        peer,
-                        &peer_name,
-                        TaskDir::Send,
-                        nm,
-                        *sz,
-                        0,
-                        now_ms(),
-                    );
+                    let tid =
+                        self.file
+                            .task_start(peer, &peer_name, TaskDir::Send, nm, *sz, 0, now_ms());
                     self.file.task_note_path(&tid, p);
                     self.finish_file(&tid, TaskState::Failed, Some(reason.clone()), *sz);
                 }
@@ -64,15 +58,9 @@ impl RcService {
                 }
             };
 
-            let task_id = self.file.task_start(
-                peer,
-                &peer_name,
-                TaskDir::Send,
-                &name,
-                size,
-                0,
-                now_ms(),
-            );
+            let task_id =
+                self.file
+                    .task_start(peer, &peer_name, TaskDir::Send, &name, size, 0, now_ms());
             // 源文件绝对路径：完成态「打开所在文件夹」用（去找原件）。
             self.file.task_note_path(&task_id, &path);
             self.emit_file_state();
@@ -134,8 +122,7 @@ impl RcService {
                 FileAck::Accept { offset, .. } => offset.min(size),
             };
 
-            let (outcome, sent) =
-                send_bytes(&self, &mut send, &path, size, offset, &task_id).await;
+            let (outcome, sent) = send_bytes(&self, &mut send, &path, size, offset, &task_id).await;
             let (state, err) = outcome.finish(sent, size);
             if state == TaskState::Done {
                 log::info!("[RC] 已发送 {}（{} 字节）", name, size);
@@ -162,7 +149,11 @@ impl RcService {
     /// C1（2026-09-23 复审）：inner 里所有 `?` 都发生在**建任务行之前**
     /// （连不上 / 开流失败 / 对方没响应 / 头帧坏）——这类失败过去只留一行
     /// 日志，传输面板静悄悄。外层兜底补一条 Failed 任务，让失败看得见。
-    pub(in crate::rc) async fn run_pull(self: Arc<Self>, peer: &str, dir: PathBuf) -> Result<(), String> {
+    pub(in crate::rc) async fn run_pull(
+        self: Arc<Self>,
+        peer: &str,
+        dir: PathBuf,
+    ) -> Result<(), String> {
         let err = match self.clone().run_pull_inner(peer, dir).await {
             Ok(()) => return Ok(()),
             Err(e) => e,
@@ -192,12 +183,13 @@ impl RcService {
         self.write_head(&mut send, &bytes).await?;
 
         // 对方要先选文件（人工），超时给足
-        let raw = match tokio::time::timeout(Duration::from_secs(ACK_WAIT_SECS), read_frame(&mut recv))
-            .await
-        {
-            Err(_) => return Err("对方没有响应（可能没看到确认条）".into()),
-            Ok(r) => r?,
-        };
+        let raw =
+            match tokio::time::timeout(Duration::from_secs(ACK_WAIT_SECS), read_frame(&mut recv))
+                .await
+            {
+                Err(_) => return Err("对方没有响应（可能没看到确认条）".into()),
+                Ok(r) => r?,
+            };
         let ack = decode_ack(&raw)?;
         let (name, size, offset) = match ack {
             FileAck::Deny { reason, code } => {
@@ -205,7 +197,7 @@ impl RcService {
                 return Err(match code.as_deref() {
                     Some(c) => format!("[{c}] {reason}"),
                     None => reason,
-                })
+                });
             }
             FileAck::Accept { name, size, offset } => {
                 // 名字与大小由**对端**给，落盘前必须过同一套判据（这是最容易被
@@ -229,20 +221,27 @@ impl RcService {
         // （命中场景：hints 被截掉 / 幻影 hint 对上了别的 part。）
         if offset == 0 && plan.offset > 0 {
             let _ = tokio::fs::remove_file(&plan.part).await;
-            log::info!("[RC] 续传偏移对不上，已丢弃旧 part 从头接收：{}", plan.final_name);
+            log::info!(
+                "[RC] 续传偏移对不上，已丢弃旧 part 从头接收：{}",
+                plan.final_name
+            );
         }
 
-        let task_id = self
-            .file
-            .task_start(peer, &peer_name, TaskDir::Recv, &plan.final_name, size, offset, now_ms());
+        let task_id = self.file.task_start(
+            peer,
+            &peer_name,
+            TaskDir::Recv,
+            &plan.final_name,
+            size,
+            offset,
+            now_ms(),
+        );
         // 实际落盘路径（收侧）：给前端展示的用**原始**路径——`plan.final_path`
         // 可能带 `\\?\` 长路径前缀（C6），explorer 打开不认那个形态。
-        self.file.task_note_path(&task_id, &dir.join(&plan.final_name));
+        self.file
+            .task_note_path(&task_id, &dir.join(&plan.final_name));
         self.emit_file_state();
-        let plan = RecvPlan {
-            offset,
-            ..plan
-        };
+        let plan = RecvPlan { offset, ..plan };
 
         let (outcome, got) = recv_bytes(&self, &mut recv, &plan, size, &task_id).await;
         let (state, err) = outcome.finish(got, size);

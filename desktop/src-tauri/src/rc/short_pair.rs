@@ -55,10 +55,7 @@ pub fn pair_secret_pin(code: &str, listen: bool) -> Result<SecretKey, String> {
         if listen { "listen" } else { "dial" }
     );
     let digest = ring::digest::digest(&ring::digest::SHA256, input.as_bytes());
-    let seed: [u8; 32] = digest
-        .as_ref()
-        .try_into()
-        .map_err(|_| "生成临时身份失败")?;
+    let seed: [u8; 32] = digest.as_ref().try_into().map_err(|_| "生成临时身份失败")?;
     Ok(SecretKey::from_bytes(&seed))
 }
 
@@ -239,8 +236,11 @@ async fn run_dialer(
                 "等待对方确认超时，请重新交换配对码。最近一次连接：{last_error}"
             ));
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(8), endpoint.connect(addr.clone(), ALPN))
-            .await
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            endpoint.connect(addr.clone(), ALPN),
+        )
+        .await
         {
             Ok(Ok(conn)) => break conn,
             Ok(Err(error)) => last_error = error.to_string(),
@@ -324,7 +324,15 @@ pub async fn exchange_pin(
         temp.close().await;
         result
     } else {
-        run_dialer(&endpoint, dial_target_pk(code)?, code, code, &hello, deadline).await
+        run_dialer(
+            &endpoint,
+            dial_target_pk(code)?,
+            code,
+            code,
+            &hello,
+            deadline,
+        )
+        .await
     }
 }
 
@@ -355,11 +363,23 @@ mod tests {
         // 两端用的是同一枚码，但角色不同 → 两个不同身份
         assert_ne!(listen.public(), dial.public());
         // 同一角色必须稳定（两端各算各的，结果要对上）
-        assert_eq!(listen.public(), pair_secret_pin("41820620", true).unwrap().public());
-        assert_eq!(dial.public(), pair_secret_pin("41820620", false).unwrap().public());
+        assert_eq!(
+            listen.public(),
+            pair_secret_pin("41820620", true).unwrap().public()
+        );
+        assert_eq!(
+            dial.public(),
+            pair_secret_pin("41820620", false).unwrap().public()
+        );
         // 另一位码不可能撞进这条通道
-        assert_ne!(listen.public(), pair_secret_pin("41820621", true).unwrap().public());
-        assert_ne!(dial.public(), pair_secret_pin("41820621", false).unwrap().public());
+        assert_ne!(
+            listen.public(),
+            pair_secret_pin("41820621", true).unwrap().public()
+        );
+        assert_ne!(
+            dial.public(),
+            pair_secret_pin("41820621", false).unwrap().public()
+        );
     }
 
     /// 🔴 域分离：同一枚码不能在两套流程里派生出同一个临时身份，否则
@@ -397,7 +417,10 @@ mod tests {
             "拨号方不能拨自己那枚——没人监听那个地址"
         );
         // 换一枚码，目标必须跟着换（否则两枚码会撞进同一条通道）
-        assert_ne!(dial_target_pk("41820620").unwrap(), dial_target_pk("41820621").unwrap());
+        assert_ne!(
+            dial_target_pk("41820620").unwrap(),
+            dial_target_pk("41820621").unwrap()
+        );
         assert!(dial_target_pk("4182062").is_err(), "坏码不许派生目标");
     }
 

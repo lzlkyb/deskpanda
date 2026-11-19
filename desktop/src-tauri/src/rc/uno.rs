@@ -146,7 +146,8 @@ impl UnoCodes {
         rng.fill(&mut bytes)
             .map_err(|_| "系统随机源不可用，无法生成接入码".to_string())?;
         // 40 bit → 8 × 5 bit，逐段查表
-        let mut bits = u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
+        let mut bits =
+            u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
         let mut chars = [0u8; CODE_LEN];
         for c in chars.iter_mut() {
             *c = ALPHABET[(bits & 0x1f) as usize];
@@ -312,14 +313,19 @@ mod tests {
     #[test]
     fn 生成与验证闭环_格式为四四分组() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         assert_eq!(code.len(), 9, "8 字符 + 1 个分隔横杠");
         assert_eq!(code.as_bytes()[4], b'-');
         for (i, c) in code.bytes().enumerate() {
             if i == 4 {
                 continue;
             }
-            assert!(ALPHABET.contains(&c.to_ascii_uppercase()), "字符 {c} 不在去歧义字符集里");
+            assert!(
+                ALPHABET.contains(&c.to_ascii_uppercase()),
+                "字符 {c} 不在去歧义字符集里"
+            );
         }
         let g = verify_ok(&u, &code, T0 + 1);
         assert_eq!(g.capability, Capability::Control);
@@ -329,7 +335,9 @@ mod tests {
     #[test]
     fn 大小写横杠与易混字符都能归一化() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::View, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::View, false)
+            .unwrap();
         let bare: String = code.chars().filter(|c| *c != '-').collect();
         // P3-2：verify 会占位，每种写法验完退占位再验下一种（本测试只考察归一化，
         // 不考察并发）。
@@ -348,20 +356,29 @@ mod tests {
     #[test]
     fn 错码_垃圾_长度不对都拒() {
         let u = UnoCodes::default();
-        u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
-        assert!(matches!(u.verify("AAAAAAAA", T0 + 1), UnoVerify::Invalid), "没这个码");
+        u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
+        assert!(
+            matches!(u.verify("AAAAAAAA", T0 + 1), UnoVerify::Invalid),
+            "没这个码"
+        );
         assert!(
             matches!(u.verify("带着垃圾字!@#", T0 + 1), UnoVerify::Invalid),
             "非法字符整码拒绝"
         );
-        assert!(matches!(u.verify("ABCD", T0 + 1), UnoVerify::Invalid), "长度不对");
+        assert!(
+            matches!(u.verify("ABCD", T0 + 1), UnoVerify::Invalid),
+            "长度不对"
+        );
         assert!(matches!(u.verify("", T0 + 1), UnoVerify::Invalid), "空串");
     }
 
     #[test]
     fn 过期即作废() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         assert!(
             matches!(u.verify(&code, T0 + TTL_SHORT_MS - 1), UnoVerify::Ok(_)),
             "窗口内有效"
@@ -380,7 +397,9 @@ mod tests {
     #[test]
     fn 一次码消费后即废_并发第二台被占位拒绝_p3_2() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         let g = verify_ok(&u, &code, T0 + 1);
         // 占位期内第二台 verify：不是「有效」也不是「无效」，而是「正在使用中」
         assert!(
@@ -399,7 +418,9 @@ mod tests {
     #[test]
     fn 占位过期码可再用_p3_2() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         assert!(matches!(u.verify(&code, T0 + 1), UnoVerify::Ok(_)));
         assert!(matches!(u.verify(&code, T0 + 2), UnoVerify::InUse));
         assert!(
@@ -413,7 +434,9 @@ mod tests {
     #[test]
     fn 准入失败退占位后立即可重验_p3_2() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         let g = verify_ok(&u, &code, T0 + 1);
         assert!(matches!(u.verify(&code, T0 + 2), UnoVerify::InUse));
         u.release(&g.hash);
@@ -426,7 +449,9 @@ mod tests {
     #[test]
     fn 二十四小时档可反复消费() {
         let u = UnoCodes::default();
-        let code = u.generate(T0, TTL_DAY_MS, true, Capability::Control, false).unwrap();
+        let code = u
+            .generate(T0, TTL_DAY_MS, true, Capability::Control, false)
+            .unwrap();
         for i in 1..5 {
             let g = verify_ok(&u, &code, T0 + i);
             u.consume(&g.hash);
@@ -440,8 +465,10 @@ mod tests {
     #[test]
     fn 撤销全部_生成端一键作废() {
         let u = UnoCodes::default();
-        u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
-        u.generate(T0, TTL_SHORT_MS, false, Capability::View, true).unwrap();
+        u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
+        u.generate(T0, TTL_SHORT_MS, false, Capability::View, true)
+            .unwrap();
         assert_eq!(u.active(T0).len(), 2);
         assert_eq!(u.revoke_all(), 2);
         assert!(u.active(T0).is_empty());
@@ -451,7 +478,8 @@ mod tests {
     #[test]
     fn 在效列表不给码本身只给摘要信息() {
         let u = UnoCodes::default();
-        u.generate(T0, TTL_DAY_MS, true, Capability::View, true).unwrap();
+        u.generate(T0, TTL_DAY_MS, true, Capability::View, true)
+            .unwrap();
         let list = u.active(T0);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].capability, "view");
@@ -474,8 +502,12 @@ mod tests {
     #[test]
     fn 两个码不同_不共享随机() {
         let u = UnoCodes::default();
-        let a = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
-        let b = u.generate(T0, TTL_SHORT_MS, false, Capability::Control, false).unwrap();
+        let a = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
+        let b = u
+            .generate(T0, TTL_SHORT_MS, false, Capability::Control, false)
+            .unwrap();
         assert_ne!(a, b, "两次生成撞码 = 随机源坏了");
     }
 }

@@ -32,13 +32,14 @@ use super::input::{
     assert_control_allowed, converge_key_vk, get_clipboard_text_async, inject,
     set_clipboard_text_async,
 };
-use super::input::{InputEvent, capture_region};
+use super::input::{capture_region, InputEvent};
 // VideoCodec 仅 Windows 宿主编码路径使用（mobile 无推流管线）
 #[cfg(target_os = "windows")]
 use super::encode_h264::VideoCodec;
 use super::protocol::SessionPhase;
 use super::service::{
-    clip_payload_ok, clip_pull_json_bytes, clip_push_json_bytes, RcService, CLIPBOARD_MAX_JSON_BYTES,
+    clip_payload_ok, clip_pull_json_bytes, clip_push_json_bytes, RcService,
+    CLIPBOARD_MAX_JSON_BYTES,
 };
 use crate::net::transport::write_frame;
 
@@ -59,14 +60,14 @@ pub(super) struct InboundVideo {
     /// 输入与画面共用的发送半流（对端收到的一切都从这里出去）。
     pub(super) send: Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
     pub(super) enc: Arc<std::sync::Mutex<super::video::EncoderState>>,
-    #[cfg(target_os="macos")]
-    pub(super) mac_video:Arc<std::sync::Mutex<super::mac_video::Encoder>>,
-    #[cfg(target_os="macos")]
-    pub(super) mac_video_retry:Option<std::time::Instant>,
-    #[cfg(target_os="macos")]
-    pub(super) mac_video_seq:u32,
-    #[cfg(target_os="macos")]
-    pub(super) mac_video_codec:String,
+    #[cfg(target_os = "macos")]
+    pub(super) mac_video: Arc<std::sync::Mutex<super::mac_video::Encoder>>,
+    #[cfg(target_os = "macos")]
+    pub(super) mac_video_retry: Option<std::time::Instant>,
+    #[cfg(target_os = "macos")]
+    pub(super) mac_video_seq: u32,
+    #[cfg(target_os = "macos")]
+    pub(super) mac_video_codec: String,
     /// 本会话连接句柄：数据报读取（鼠标低延迟通道）与 QUIC stats 采样都要用。
     pub(super) conn: iroh::endpoint::Connection,
     /// 探测状态只属于这场会话，旧任务的迟到回显不能改变下一场片宽。
@@ -130,7 +131,7 @@ pub(super) struct InboundVideo {
     /// 抢同一把发送锁；false = 旧版对端，视频留在会话半流（历史形态）。
     pub(super) peer_video_plane: bool,
     pub(super) peer_media_plane: bool,
-    #[cfg(any(target_os = "windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(super) media_pipe: Option<media_pipe::MediaPipe>,
     /// 🔴 视频专属 uni 流（仅 `peer_video_plane` 时使用）：只由推流任务写，
     /// **不与任何任务共锁**——这是「视频写不再阻塞 pong」的物理基础。
@@ -250,7 +251,11 @@ pub(crate) enum MotionVerdict {
 ///
 /// 「动了」的判据：帧字节 ≥ 动帧基准的 1/6——静止画面的跳块 P 帧只有
 /// 基准的零头。基准未建立（0）时任何非关键帧都算动（负责建立基准）。
-pub(crate) fn motion_verdict(is_key: bool, motion_ema_bytes: u64, frame_bytes: u64) -> MotionVerdict {
+pub(crate) fn motion_verdict(
+    is_key: bool,
+    motion_ema_bytes: u64,
+    frame_bytes: u64,
+) -> MotionVerdict {
     if is_key {
         MotionVerdict::Ignore
     } else if motion_ema_bytes == 0 || frame_bytes >= motion_ema_bytes / 6 {
@@ -352,19 +357,29 @@ pub(super) async fn handle_inbound_input(
     request_id: Option<&str>,
     send: &Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
 ) {
-    if !svc.session_id_is(session_id) { return; }
+    if !svc.session_id_is(session_id) {
+        return;
+    }
     if let Some((key, _)) = super::settings::event_setting(&ev) {
         let result = svc.apply_inbound_setting(session_id, peer, &ev, request_id.is_some());
         if let Some(id) = request_id {
             let frame = match result {
-                Ok(value) => serde_json::json!({"t":"setting_ack","request_id":id,"key":key,"status":"accepted","value":value}),
-                Err(error) => serde_json::json!({"t":"setting_ack","request_id":id,"key":key,"status":"rejected","error":error}),
+                Ok(value) => {
+                    serde_json::json!({"t":"setting_ack","request_id":id,"key":key,"status":"accepted","value":value})
+                }
+                Err(error) => {
+                    serde_json::json!({"t":"setting_ack","request_id":id,"key":key,"status":"rejected","error":error})
+                }
             };
             if let Ok(bytes) = serde_json::to_vec(&frame) {
                 let mut guard = send.lock().await;
-                if let Err(error) = write_frame(&mut guard, &bytes).await { log::debug!("[RC] 设置回执发送失败：{error}"); }
+                if let Err(error) = write_frame(&mut guard, &bytes).await {
+                    log::debug!("[RC] 设置回执发送失败：{error}");
+                }
             }
-        } else if let Err(error) = result { log::warn!("[RC] 设置失败：{error}"); }
+        } else if let Err(error) = result {
+            log::warn!("[RC] 设置失败：{error}");
+        }
         return;
     }
     // C-2 / P1-2：会话切换竞态窗口内，旧连接迟到的输入不得挂在新会话能力上执行。
@@ -397,10 +412,7 @@ pub(super) async fn handle_inbound_input(
             // 第二道。超限必须回 `clip_push_err`，禁止静默。
             let json_bytes = clip_push_json_bytes(text);
             if !clip_payload_ok(json_bytes) {
-                log::warn!(
-                    "[RC] 入站剪贴板帧过大（JSON {} 字节），已拒绝",
-                    json_bytes
-                );
+                log::warn!("[RC] 入站剪贴板帧过大（JSON {} 字节），已拒绝", json_bytes);
                 reply_clip_err(
                     send,
                     "clip_push_err",
@@ -428,8 +440,12 @@ pub(super) async fn handle_inbound_input(
             if assert_control_allowed(cap).is_err() {
                 // 与 push 对齐：只看会话拉不了主机剪贴板，回帧让对端立刻说清，
                 // 而不是干等 4s 超时后报一句含糊的「对方剪贴板为空或拉取失败」。
-                reply_clip_err(send, "clip_err", "当前是只看会话，不能读取对方剪贴板".into())
-                    .await;
+                reply_clip_err(
+                    send,
+                    "clip_err",
+                    "当前是只看会话，不能读取对方剪贴板".into(),
+                )
+                .await;
                 return;
             }
             if !svc.session_peer_unchanged(&snap) {
@@ -540,24 +556,31 @@ pub(super) async fn handle_inbound_input(
                 Some("当前会话仅为「只看」，无法改对方主机声音".to_string())
             } else {
                 // 扬声器静音走 Windows 音频端点（mobile 宿主不存在，诚实回报不支持）
-                #[cfg(any(target_os="windows",target_os="macos"))]
-                { match super::audio::spk_mute_set(*on) {
-                    Ok(actual) => {
-                        // 记「对端操作过且未撤销」——横幅据此摆提示与恢复入口。
-                        svc.set_spk_muted_by_peer(actual);
-                        // 本机前端的快照要跟着变，否则横幅提示与恢复按钮不会出现
-                        // （这个分支不像命令层那样自带 emit）。
-                        svc.notify.emit_changed();
-                        log::info!("[RC] 对端{}本机扬声器", if actual { "静音了" } else { "恢复了" });
-                        None
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                {
+                    match super::audio::spk_mute_set(*on) {
+                        Ok(actual) => {
+                            // 记「对端操作过且未撤销」——横幅据此摆提示与恢复入口。
+                            svc.set_spk_muted_by_peer(actual);
+                            // 本机前端的快照要跟着变，否则横幅提示与恢复按钮不会出现
+                            // （这个分支不像命令层那样自带 emit）。
+                            svc.notify.emit_changed();
+                            log::info!(
+                                "[RC] 对端{}本机扬声器",
+                                if actual { "静音了" } else { "恢复了" }
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            log::warn!("[RC] 切换本机扬声器静音失败：{e}");
+                            Some(format!("切换主机扬声器失败：{e}"))
+                        }
                     }
-                    Err(e) => {
-                        log::warn!("[RC] 切换本机扬声器静音失败：{e}");
-                        Some(format!("切换主机扬声器失败：{e}"))
-                    }
-                } }
-                #[cfg(not(any(target_os="windows",target_os="macos")))]
-                { Some("本机无音频输出链路（宿主仅 Windows）".to_string()) }
+                }
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                {
+                    Some("本机无音频输出链路（宿主仅 Windows）".to_string())
+                }
             };
             // 回帧带**读回的真实值**（可能与我们请求的不同），发起端的按钮态以它为准。
             svc.emit_host_audio(err.as_deref()).await;
@@ -750,13 +773,13 @@ pub(super) async fn handle_inbound_input(
 }
 
 // impl InboundVideo 的推流方法平移到子模块（硬编路径 / 运行循环）。
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(target_os = "macos")]
+mod mac_video;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media;
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media_pipe;
 mod video;
-#[cfg(target_os="macos")]
-mod mac_video;
 mod video_run;
 
 #[cfg(test)]

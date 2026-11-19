@@ -73,7 +73,9 @@ fn 静止超过阈值发一次高保真回补帧() {
 #[test]
 fn 零拷贝门控_要求硬编可用且单输出() {
     // 硬编可用 + 单输出 + 没判死 ⇒ 全档位都走零拷贝（含 60Hz 机器的 fps60/balanced）
-    for q in ["fps60", "fps120", "uhd60", "uhd", "ultra", "sharp", "balanced", "smooth"] {
+    for q in [
+        "fps60", "fps120", "uhd60", "uhd", "ultra", "sharp", "balanced", "smooth",
+    ] {
         assert!(
             EncodeProfile::of_name(q).wants_zero_copy(false, false, true),
             "{q} 在硬编可用时该走零拷贝"
@@ -162,14 +164,24 @@ fn h264_frame(key: bool) -> VideoFrame {
 #[test]
 fn all_interframe_codecs_wait_for_key_after_outbox_overflow() {
     for codec in [FrameCodec::H264, FrameCodec::Hevc, FrameCodec::Av1] {
-        let frame = |key| { let mut f = h264_frame(key); f.codec = codec; f };
+        let frame = |key| {
+            let mut f = h264_frame(key);
+            f.codec = codec;
+            f
+        };
         let mut outbox = FrameOutbox::new();
         outbox.push(frame(true));
-        for _ in 0..FrameOutbox::CAP { outbox.push(frame(false)); }
+        for _ in 0..FrameOutbox::CAP {
+            outbox.push(frame(false));
+        }
         assert_eq!(outbox.drain().len(), FrameOutbox::CAP - 1, "{codec:?}");
         outbox.push(frame(false));
-        assert!(outbox.drain().is_empty(), "{codec:?} broken references must wait for key");
-        outbox.push(frame(true)); outbox.push(frame(false));
+        assert!(
+            outbox.drain().is_empty(),
+            "{codec:?} broken references must wait for key"
+        );
+        outbox.push(frame(true));
+        outbox.push(frame(false));
         assert_eq!(outbox.drain().len(), 2);
     }
 }

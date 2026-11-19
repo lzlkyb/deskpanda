@@ -153,9 +153,7 @@ pub enum RcFrame {
         code: Option<String>,
     },
     /// 任一方结束会话。
-    End {
-        reason: String,
-    },
+    End { reason: String },
     // 🔴 这里曾有 R1 时代的单元变体 `Ping` / `Pong`（注释写"心跳占位，画面流前先保活"），
     //    2026-09-23 删除。它们是**死代码**（全库零生产者），却因为 `#[serde(tag = "t")]`
     //    与真正的心跳 JSON `{"t":"pong","ts":…,"hts":…}` **tag 撞车**：serde 按 tag 命中
@@ -242,27 +240,81 @@ mod tests {
 
     #[test]
     fn pair_identity_is_compatible_with_older_frames() {
-        assert_eq!(RcFrame::decode(br#"{"t":"pair_check"}"#).unwrap(),
-            RcFrame::PairCheck { name: None, os: None });
-        assert_eq!(RcFrame::decode(br#"{"t":"pair_status","paired":true}"#).unwrap(),
-            RcFrame::PairStatus { paired: true, name: None, os: None });
-        let frame = RcFrame::PairCheck { name: Some("Pixel 9".into()), os: Some("Android".into()) };
+        assert_eq!(
+            RcFrame::decode(br#"{"t":"pair_check"}"#).unwrap(),
+            RcFrame::PairCheck {
+                name: None,
+                os: None
+            }
+        );
+        assert_eq!(
+            RcFrame::decode(br#"{"t":"pair_status","paired":true}"#).unwrap(),
+            RcFrame::PairStatus {
+                paired: true,
+                name: None,
+                os: None
+            }
+        );
+        let frame = RcFrame::PairCheck {
+            name: Some("Pixel 9".into()),
+            os: Some("Android".into()),
+        };
         assert_eq!(RcFrame::decode(&frame.encode().unwrap()).unwrap(), frame);
         // Older peers ignore new optional fields on both variants.
         #[derive(serde::Deserialize)]
         #[serde(tag = "t", rename_all = "snake_case")]
-        enum Legacy { PairCheck, PairStatus { paired: bool } }
-        assert!(matches!(serde_json::from_slice::<Legacy>(&frame.encode().unwrap()).unwrap(), Legacy::PairCheck));
-        let response = RcFrame::PairStatus { paired: true, name: Some("PC".into()), os: Some("Windows 11".into()) };
-        assert!(matches!(serde_json::from_slice::<Legacy>(&response.encode().unwrap()).unwrap(), Legacy::PairStatus { paired: true }));
+        enum Legacy {
+            PairCheck,
+            PairStatus { paired: bool },
+        }
+        assert!(matches!(
+            serde_json::from_slice::<Legacy>(&frame.encode().unwrap()).unwrap(),
+            Legacy::PairCheck
+        ));
+        let response = RcFrame::PairStatus {
+            paired: true,
+            name: Some("PC".into()),
+            os: Some("Windows 11".into()),
+        };
+        assert!(matches!(
+            serde_json::from_slice::<Legacy>(&response.encode().unwrap()).unwrap(),
+            Legacy::PairStatus { paired: true }
+        ));
     }
 
     #[test]
     fn frame_roundtrip() {
-        assert_eq!(RcFrame::decode(&RcFrame::PairCheck { name: None, os: None }.encode().unwrap()).unwrap(), RcFrame::PairCheck { name: None, os: None });
         assert_eq!(
-            RcFrame::decode(&RcFrame::PairStatus { paired: true, name: None, os: None }.encode().unwrap()).unwrap(),
-            RcFrame::PairStatus { paired: true, name: None, os: None }
+            RcFrame::decode(
+                &RcFrame::PairCheck {
+                    name: None,
+                    os: None
+                }
+                .encode()
+                .unwrap()
+            )
+            .unwrap(),
+            RcFrame::PairCheck {
+                name: None,
+                os: None
+            }
+        );
+        assert_eq!(
+            RcFrame::decode(
+                &RcFrame::PairStatus {
+                    paired: true,
+                    name: None,
+                    os: None
+                }
+                .encode()
+                .unwrap()
+            )
+            .unwrap(),
+            RcFrame::PairStatus {
+                paired: true,
+                name: None,
+                os: None
+            }
         );
         let f = RcFrame::Request {
             capability: Capability::Control,
@@ -339,19 +391,39 @@ mod tests {
     fn media_feedback_capability_is_independent_of_media_plane() {
         // 上一轮版本支持独立视频流，却没有媒体 ACK；不能把两个能力混为一谈。
         let old = br#"{"t":"request","capability":"view","media_plane":true}"#;
-        assert!(matches!(RcFrame::decode(old).unwrap(), RcFrame::Request {
-            media_plane: Some(true), media_feedback: None, ..
-        }));
-        let new = br#"{"t":"request","capability":"view","media_plane":true,"media_feedback":true}"#;
-        assert!(matches!(RcFrame::decode(new).unwrap(), RcFrame::Request {
-            media_plane: Some(true), media_feedback: Some(true), ..
-        }));
+        assert!(matches!(
+            RcFrame::decode(old).unwrap(),
+            RcFrame::Request {
+                media_plane: Some(true),
+                media_feedback: None,
+                ..
+            }
+        ));
+        let new =
+            br#"{"t":"request","capability":"view","media_plane":true,"media_feedback":true}"#;
+        assert!(matches!(
+            RcFrame::decode(new).unwrap(),
+            RcFrame::Request {
+                media_plane: Some(true),
+                media_feedback: Some(true),
+                ..
+            }
+        ));
         #[derive(Deserialize)]
         #[serde(tag = "t", rename_all = "snake_case")]
-        enum Legacy { Request { capability: Capability, media_plane: Option<bool> } }
-        assert!(matches!(serde_json::from_slice::<Legacy>(new).unwrap(), Legacy::Request {
-            capability: Capability::View, media_plane: Some(true)
-        }));
+        enum Legacy {
+            Request {
+                capability: Capability,
+                media_plane: Option<bool>,
+            },
+        }
+        assert!(matches!(
+            serde_json::from_slice::<Legacy>(new).unwrap(),
+            Legacy::Request {
+                capability: Capability::View,
+                media_plane: Some(true)
+            }
+        ));
     }
 
     #[test]
@@ -373,7 +445,18 @@ mod tests {
         // 旧版对端发来的 Request 没有 uno_code/uno_pass 字段，也要能解（default 补 None）
         let old = r#"{"t":"request","capability":"control"}"#.as_bytes();
         match RcFrame::decode(old).unwrap() {
-            RcFrame::Request { capability, uno_code, uno_pass, vid_dgram, fec_rs, audio, video_plane, media_plane, media_feedback, vd_frag } => {
+            RcFrame::Request {
+                capability,
+                uno_code,
+                uno_pass,
+                vid_dgram,
+                fec_rs,
+                audio,
+                video_plane,
+                media_plane,
+                media_feedback,
+                vd_frag,
+            } => {
                 assert_eq!(capability, Capability::Control);
                 assert_eq!(uno_code, None, "旧对端没有这个字段，反序列化补 None");
                 assert_eq!(uno_pass, None, "固定密码位同理（方案 C）");

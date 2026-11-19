@@ -18,7 +18,9 @@ fn nv12_len() {
 
 #[test]
 fn nv12_mixed_block_ignores_alpha_and_reuses_output() {
-    let bgra = [0, 0, 255, 0, 0, 255, 0, 255, 255, 0, 0, 0, 255, 255, 255, 255];
+    let bgra = [
+        0, 0, 255, 0, 0, 255, 0, 255, 255, 0, 0, 0, 255, 255, 255, 255,
+    ];
     let mut out = Vec::with_capacity(64);
     let allocated = out.as_ptr();
     bgra_to_nv12_into(&bgra, 2, 2, &mut out).unwrap();
@@ -50,7 +52,10 @@ fn nv12_灰色输入uv中性() {
     }
     let nv = bgra_to_nv12(&bgra, w as u32, h as u32).unwrap();
     for &y in &nv[..w * h] {
-        assert!((y as i32 - 126).abs() <= 2, "灰色 Y 应 ≈126（limited range：0.859×128+16），得到 {y}");
+        assert!(
+            (y as i32 - 126).abs() <= 2,
+            "灰色 Y 应 ≈126（limited range：0.859×128+16），得到 {y}"
+        );
     }
     for &uv in &nv[w * h..] {
         assert_eq!(uv, 128, "灰色的 U/V 必须是 128");
@@ -81,7 +86,10 @@ fn nv12_色彩矩阵是_bt709_limited() {
     assert!((yb as i32 - 32).abs() <= 1, "709 limited 蓝的 Y，得到 {yb}");
     assert!((ub as i32 - 240).abs() <= 1, "蓝的 Cb，得到 {ub}");
     let (yg, _, _) = px(0, 255, 0);
-    assert!((yg as i32 - 173).abs() <= 1, "709 limited 绿的 Y，得到 {yg}");
+    assert!(
+        (yg as i32 - 173).abs() <= 1,
+        "709 limited 绿的 Y，得到 {yg}"
+    );
     let _ = (ur, ub);
 }
 
@@ -113,7 +121,10 @@ fn 熔断必须排上一次自动重试() {
         p.retry_after.is_some(),
         "熔断不排重试 = 一次瞬态失败变成整场 JPEG（2026-10-06 的原病）"
     );
-    assert_eq!(p.disabled_reason, "测试：重建失败", "熔断原因要能在错误串里读出来");
+    assert_eq!(
+        p.disabled_reason, "测试：重建失败",
+        "熔断原因要能在错误串里读出来"
+    );
 }
 
 #[test]
@@ -126,7 +137,10 @@ fn 重复熔断不得把冷却一直往后推() {
     assert!(scheduled.is_some());
     p.note_disabled("第二次");
     assert_eq!(p.retry_after, scheduled, "已熔断时不得重排重试时刻");
-    assert_eq!(p.retry_backoff_secs, DISABLE_RETRY_START_SECS, "退避只在重建失败时翻倍");
+    assert_eq!(
+        p.retry_backoff_secs, DISABLE_RETRY_START_SECS,
+        "退避只在重建失败时翻倍"
+    );
 }
 
 #[test]

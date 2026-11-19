@@ -141,9 +141,7 @@ impl OutboundVideo {
                     // 两端唯一公共基座是墙钟（原 JS 实现同口径）。
                     // 发送失败 = 会话已收口/正在收口，静默退出。
                     if svc
-                        .send_input(&super::input::InputEvent::Ping {
-                            ts: Some(now_ms()),
-                        })
+                        .send_input(&super::input::InputEvent::Ping { ts: Some(now_ms()) })
                         .await
                         .is_err()
                     {
@@ -233,8 +231,7 @@ impl OutboundVideo {
         // 对端主动结束、TTL 到期都不走这条（那些路径 end_reason 为 None）。
         if end_reason.is_some() {
             if let Some((cap, peer_name)) = ended {
-                self.svc
-                    .begin_auto_reconnect(&self.peer, peer_name, cap);
+                self.svc.begin_auto_reconnect(&self.peer, peer_name, cap);
             }
         }
     }
@@ -272,8 +269,10 @@ impl OutboundVideo {
                 if !svc.outbound_heartbeat_stale() {
                     continue;
                 }
-                log::info!("[RC] 被控端失联（心跳超时），自动结束会话，恢复窗口={}ms",
-                    svc.heartbeat_timeout_ms());
+                log::info!(
+                    "[RC] 被控端失联（心跳超时），自动结束会话，恢复窗口={}ms",
+                    svc.heartbeat_timeout_ms()
+                );
                 // Q6：收口前取走能力/设备名——force_end 之后会话就没了
                 let ended = svc.session_brief_if(&my_id);
                 svc.force_end_if_session(&my_id, "对端失联（心跳超时）")
@@ -304,70 +303,60 @@ impl OutboundVideo {
             let conn = self.conn.clone();
             let reasm = self.reasm.clone();
             tauri::async_runtime::spawn(async move {
-            let mut last_key_req: Option<std::time::Instant> = None;
-            loop {
-                if !svc.session_id_is(&my_id) {
-                    break;
-                }
-                let dg = tokio::select! {
-                    r = conn.read_datagram() => match r {
-                        Ok(b) => b,
-                        Err(_) => break,
-                    },
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => continue,
-                };
-                // 🔴 P3（2026-10-15）：pmtud 探针（0xD2）——原样回发。
-                // 回显到达被控端 = 本端**真的收到**了那个尺寸的数据报
-                // （收不到就不可能回），被控端据此才敢升 1400B 大分片。
-                // 回发失败（本地塞不下等）就吞掉：被控端探测超时自动保持
-                // 1000B，零风险。旧被控端发的探针不存在——此分支只对
-                // 新版对端生效，旧版互操作路径完全不进这段。
-                if dg.first() == Some(&super::pmtud::PROBE_TAG) {
-                    let _ = conn.send_datagram(dg.clone());
-                    continue;
-                }
-                let (frames, damaged) = {
-                    let mut g = reasm.lock().unwrap_or_else(|p| p.into_inner());
-                    let frames = g.feed(&dg);
-                    let damaged = g.take_damaged();
-                    (frames, damaged)
-                };
-                // P2-1 D1：数据报侧丢帧是「静默」的——帧根本到不了前端，前端只在
-                // 解码出错时才发 request_key。引用链断裂必须在这里喊话，把
-                // ForceKeyFrame 自愈从「等 1s 自然 GOP」提速到 RTT 级。限频 1s/次。
-                let due = last_key_req
-                    .map(|t| t.elapsed().as_millis() >= 1000)
-                    .unwrap_or(true);
-                if damaged && due {
-                    last_key_req = Some(std::time::Instant::now());
-                    super::probe_out::bump_damaged();
-                    let svc = svc.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = svc
-                            .send_input(&super::input::InputEvent::RequestKey)
-                            .await;
-                    });
-                }
-                for f in frames {
-                    // 2026-09-28：FEC 逐帧反馈——本帧靠校验片恢复过数据片就计数，
-                    // NetHint 按窗口捎回发送端上调 RS 冗余。
-                    if f.recovered {
-                        super::probe_out::bump_fec_recovered();
+                let mut last_key_req: Option<std::time::Instant> = None;
+                loop {
+                    if !svc.session_id_is(&my_id) {
+                        break;
                     }
-                    push_h264_frame(
-                        &svc,
-                        &my_id,
-                        f.key,
-                        f.width,
-                        f.height,
-                        f.data,
-                        f.at_ms,
-                        f.cap_ms,
-                        f.enc_ms,
-                        f.codec,
-                    );
+                    let dg = tokio::select! {
+                        r = conn.read_datagram() => match r {
+                            Ok(b) => b,
+                            Err(_) => break,
+                        },
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => continue,
+                    };
+                    // 🔴 P3（2026-10-15）：pmtud 探针（0xD2）——原样回发。
+                    // 回显到达被控端 = 本端**真的收到**了那个尺寸的数据报
+                    // （收不到就不可能回），被控端据此才敢升 1400B 大分片。
+                    // 回发失败（本地塞不下等）就吞掉：被控端探测超时自动保持
+                    // 1000B，零风险。旧被控端发的探针不存在——此分支只对
+                    // 新版对端生效，旧版互操作路径完全不进这段。
+                    if dg.first() == Some(&super::pmtud::PROBE_TAG) {
+                        let _ = conn.send_datagram(dg.clone());
+                        continue;
+                    }
+                    let (frames, damaged) = {
+                        let mut g = reasm.lock().unwrap_or_else(|p| p.into_inner());
+                        let frames = g.feed(&dg);
+                        let damaged = g.take_damaged();
+                        (frames, damaged)
+                    };
+                    // P2-1 D1：数据报侧丢帧是「静默」的——帧根本到不了前端，前端只在
+                    // 解码出错时才发 request_key。引用链断裂必须在这里喊话，把
+                    // ForceKeyFrame 自愈从「等 1s 自然 GOP」提速到 RTT 级。限频 1s/次。
+                    let due = last_key_req
+                        .map(|t| t.elapsed().as_millis() >= 1000)
+                        .unwrap_or(true);
+                    if damaged && due {
+                        last_key_req = Some(std::time::Instant::now());
+                        super::probe_out::bump_damaged();
+                        let svc = svc.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = svc.send_input(&super::input::InputEvent::RequestKey).await;
+                        });
+                    }
+                    for f in frames {
+                        // 2026-09-28：FEC 逐帧反馈——本帧靠校验片恢复过数据片就计数，
+                        // NetHint 按窗口捎回发送端上调 RS 冗余。
+                        if f.recovered {
+                            super::probe_out::bump_fec_recovered();
+                        }
+                        push_h264_frame(
+                            &svc, &my_id, f.key, f.width, f.height, f.data, f.at_ms, f.cap_ms,
+                            f.enc_ms, f.codec,
+                        );
+                    }
                 }
-            }
             });
         }
         #[cfg(not(target_os = "windows"))]
@@ -393,7 +382,9 @@ impl OutboundVideo {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if let Some((_, loss)) = loss_sampler.sample(&conn) {
-                    if loss >= 0 { svc.note_remote_loss(loss as u32); }
+                    if loss >= 0 {
+                        svc.note_remote_loss(loss as u32);
+                    }
                 }
             }
         });
@@ -429,8 +420,10 @@ impl OutboundVideo {
                             // P2-10：采集时间戳随帧到，前端算「画面链路延迟」用
                             self.pending_ts = Some(v["ts"].as_i64().unwrap_or(0));
                             // P0-2：采集/编码耗时同帧到，HUD 分段显示
-                            self.pending_cap_ms = v["cap"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
-                            self.pending_enc_ms = v["enc"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
+                            self.pending_cap_ms =
+                                v["cap"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
+                            self.pending_enc_ms =
+                                v["enc"].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
                         }
                         Some("cursor") => {
                             // 🔴 B 方案（2026-10-02）：P1-6 的“只有形状”升级成
@@ -521,8 +514,10 @@ impl OutboundVideo {
                                 self.rtt_ema_ms = ema;
                                 self.rtt_warm_min_ms = warm_min;
                                 self.rtt_warm_samples = warm_seen;
-                                let (tier, changed) =
-                                    super::stream_cfg::rtt_hint_tier(self.rtt_hint_tier, self.rtt_ema_ms);
+                                let (tier, changed) = super::stream_cfg::rtt_hint_tier(
+                                    self.rtt_hint_tier,
+                                    self.rtt_ema_ms,
+                                );
                                 // 2026-09-28：NetHint 节拍从「只在档位变化」扩成
                                 // 「档位变化 ∨ 排队压力超阈 ∨ 每 5 个 pong」——帧龄
                                 // 排队压力（AP 队列）只在帧龄里可见，pong 档位看不见；
@@ -572,7 +567,10 @@ impl OutboundVideo {
                                     .get("local_mute")
                                     .and_then(|x| x.as_bool())
                                     .unwrap_or(false),
-                                spk_mute: v.get("spk_mute").and_then(|x| x.as_bool()).unwrap_or(false),
+                                spk_mute: v
+                                    .get("spk_mute")
+                                    .and_then(|x| x.as_bool())
+                                    .unwrap_or(false),
                                 err: v.get("err").and_then(|x| x.as_str()).map(str::to_string),
                             };
                             self.svc.set_peer_host_audio(st);
@@ -608,18 +606,23 @@ impl OutboundVideo {
                             // 丙（2026-10-12，Issue #19）：对方报来的**编码管线档位**。
                             // 缺字段 = 空串 ⇒ 前端读成「没收到」，不摆降级断言
                             // （不许在这里给 `c` 兜一个默认档位，那是编造对端事实）。
-                            let code = v.get("c").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                            let label = v.get("p").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let code = v
+                                .get("c")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let label = v
+                                .get("p")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             self.svc.set_peer_video_pipe(&code, &label);
                         }
                         Some("caps") => {
                             // P1：被控端画面能力（fps120 可用性 + 刷新率），UI 诚实出档
                             let fps120 = v.get("fps120").and_then(|x| x.as_bool()).unwrap_or(false);
-                            let hz = v
-                                .get("hz")
-                                .and_then(|x| x.as_u64())
-                                .unwrap_or(0)
-                                .min(1000) as u32;
+                            let hz =
+                                v.get("hz").and_then(|x| x.as_u64()).unwrap_or(0).min(1000) as u32;
                             // Q3：对端 HEVC 硬编可用性（旧版本对端没有这个字段 → false）
                             let hevc = v.get("hevc").and_then(|x| x.as_bool()).unwrap_or(false);
                             // P2.3：对端 AV1 硬编可用性（旧版本对端 → false）
@@ -630,15 +633,18 @@ impl OutboundVideo {
                                 .and_then(|x| serde_json::from_value(x.clone()).ok())
                                 .unwrap_or_default();
                             // R3：旧版对端（官方 7.2.1 及更早）没有这个字段 → false
-                            let dgram_input =
-                                v.get("dgram_input").and_then(|x| x.as_bool()).unwrap_or(false);
+                            let dgram_input = v
+                                .get("dgram_input")
+                                .and_then(|x| x.as_bool())
+                                .unwrap_or(false);
                             // 探针（2026-09-27）：能力上报落日志——被控端硬编可用性
                             // 分诊的第一手证据（caps 一次会话至多几条，量可忽略）。
                             log::info!(
                                 "[RC] 对端 caps：fps120={fps120} hz={hz} hevc硬编={hevc} dgram_input={dgram_input} 显示器 {} 台",
                                 monitors.len()
                             );
-                            self.svc.note_peer_caps(fps120, hz, hevc, av1, monitors, dgram_input);
+                            self.svc
+                                .note_peer_caps(fps120, hz, hevc, av1, monitors, dgram_input);
                         }
                         Some("inject_err") => {
                             if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
@@ -732,7 +738,18 @@ impl OutboundVideo {
                 .unwrap_or_else(|p| p.into_inner())
                 .reset_after_stream_key(sq);
         }
-        push_h264_frame(&self.svc, &self.my_id, key, width, height, data, ts, cap_ms, enc_ms, codec);
+        push_h264_frame(
+            &self.svc,
+            &self.my_id,
+            key,
+            width,
+            height,
+            data,
+            ts,
+            cap_ms,
+            enc_ms,
+            codec,
+        );
         // D2：锚定后按序补交付缓冲完整的 P 帧——走流的关键帧被拥塞延迟时，
         // 先到的数据报 P 帧已缓存，等锚一到就能续播（不再整 GOP 作废）。
         for f in drained {

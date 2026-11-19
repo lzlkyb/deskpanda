@@ -12,7 +12,15 @@ use std::time::{Duration, Instant};
 /// `pace_step` 的入参基线：均衡档 16ms 节拍、倍率 1x、链路清白、满负荷出帧。
 /// 各测用结构更新语法只覆盖自己在意的那一格（六个位置参数会把 bool 读反）。
 fn base() -> PaceBeat {
-    PaceBeat { boosted: false, produced: true, work_ms: 8, ema_ms: 0, interval_ms: 16, scale: 1, link_clear: true }
+    PaceBeat {
+        boosted: false,
+        produced: true,
+        work_ms: 8,
+        ema_ms: 0,
+        interval_ms: 16,
+        scale: 1,
+        link_clear: true,
+    }
 }
 
 /// 🔴 提帧上限从 33ms（30fps）降到 16ms（60fps）——原生桌面的窗口拖动与
@@ -20,7 +28,11 @@ fn base() -> PaceBeat {
 /// 回归钉：任何把普通档位提帧上限改回 30fps 的改动都会在这里红。
 #[test]
 fn 提帧上限到位60fps() {
-    assert_eq!(boost_gap_ms(100), 16, "均衡档（静止 10fps）拖动时可到 60fps");
+    assert_eq!(
+        boost_gap_ms(100),
+        16,
+        "均衡档（静止 10fps）拖动时可到 60fps"
+    );
     assert_eq!(boost_gap_ms(80), 16, "超清档");
     assert_eq!(boost_gap_ms(66), 16, "清晰档");
     assert_eq!(boost_gap_ms(33), 16, "比上限慢的间隔照样被收到 16ms");
@@ -42,7 +54,11 @@ fn 高帧率档不被提帧上限拖慢() {
 #[test]
 fn 无零拷贝时fps120降回60fps体感() {
     assert_eq!(effective_interval_ms(8, false, false), 8, "正常路径不动");
-    assert_eq!(effective_interval_ms(8, true, false), 16, "虚拟屏（多屏拼接）");
+    assert_eq!(
+        effective_interval_ms(8, true, false),
+        16,
+        "虚拟屏（多屏拼接）"
+    );
     assert_eq!(effective_interval_ms(8, false, true), 16, "GPU 路径已判死");
     assert_eq!(
         effective_interval_ms(100, true, false),
@@ -75,7 +91,11 @@ fn 编码器fps跟提帧上限走() {
 #[test]
 fn 高帧率144与165也要看到D6b降频() {
     assert_eq!(want_fps_for(7, true, false), 60, "虚拟屏 + fps144 降到 60");
-    assert_eq!(want_fps_for(6, false, true), 60, "GPU 判死 + fps165 降到 60");
+    assert_eq!(
+        want_fps_for(6, false, true),
+        60,
+        "GPU 判死 + fps165 降到 60"
+    );
     assert_eq!(want_fps_for(7, false, false), 144, "正常路径仍是 144");
     assert_eq!(want_fps_for(6, false, false), 165, "正常路径仍是 165");
 }
@@ -114,14 +134,22 @@ fn 主动要IDR必须限频() {
 /// 用户报的「看不到动画」正是这个。所以四个边界都要钉住。
 #[test]
 fn 画面在动就按60fps抓不动就省() {
-    assert_eq!(next_period_ms(true, 100, 1), 16, "活跃：均衡档也按 60fps 抓");
+    assert_eq!(
+        next_period_ms(true, 100, 1),
+        16,
+        "活跃：均衡档也按 60fps 抓"
+    );
     assert_eq!(
         next_period_ms(true, 100, 4),
         16,
         "活跃圈不受 pace_scale 降频影响（否则一拖就自己降频）"
     );
     assert_eq!(next_period_ms(false, 100, 1), 100, "空闲：用档位间隔省 CPU");
-    assert_eq!(next_period_ms(false, 100, 2), 200, "空闲：吃 pace_scale 降频");
+    assert_eq!(
+        next_period_ms(false, 100, 2),
+        200,
+        "空闲：吃 pace_scale 降频"
+    );
     assert_eq!(next_period_ms(true, 8, 1), 8, "fps120 档活跃时保持 120fps");
     assert_eq!(next_period_ms(false, 8, 1), 8, "fps120 档空闲也跟随档位");
 }
@@ -163,10 +191,23 @@ fn 守卫_推流节拍必须过next_period_ms() {
 fn 空转圈不涨降频倍率() {
     // 同一份 30ms 耗时：空转圈记 0，出帧圈才记进去。反例半边证明这条
     // 断言不是「怎么改都绿」。
-    let (ema, scale) = pace_step(PaceBeat { produced: false, work_ms: 30, link_clear: false, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        produced: false,
+        work_ms: 30,
+        link_clear: false,
+        ..base()
+    });
     assert_eq!((ema, scale), (0, 1), "空转圈必须记 0 工作量");
-    let (ema, scale) = pace_step(PaceBeat { work_ms: 30, link_clear: false, ..base() });
-    assert_eq!((ema, scale), (30, 2), "真出了 30ms 的帧就该放大——差别只在 produced");
+    let (ema, scale) = pace_step(PaceBeat {
+        work_ms: 30,
+        link_clear: false,
+        ..base()
+    });
+    assert_eq!(
+        (ema, scale),
+        (30, 2),
+        "真出了 30ms 的帧就该放大——差别只在 produced"
+    );
 }
 
 /// ② 输入提帧的圈（正在拖动）冻结 EMA、更不许放大倍率——「一拖就自己降频」
@@ -174,10 +215,23 @@ fn 空转圈不涨降频倍率() {
 /// 才退，拖动期间就一直是 4x。
 #[test]
 fn 提帧圈不放大但可以从4x缩回() {
-    let (ema, scale) = pace_step(PaceBeat { boosted: true, work_ms: 40, ema_ms: 20, link_clear: false, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        boosted: true,
+        work_ms: 40,
+        ema_ms: 20,
+        link_clear: false,
+        ..base()
+    });
     assert_eq!((ema, scale), (20, 1), "提帧圈既不吃工作量也不放大");
 
-    let (ema, scale) = pace_step(PaceBeat { boosted: true, work_ms: 40, ema_ms: 5, scale: 4, link_clear: false, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        boosted: true,
+        work_ms: 40,
+        ema_ms: 5,
+        scale: 4,
+        link_clear: false,
+        ..base()
+    });
     assert_eq!(ema, 5, "boosted 圈绝不更新 EMA");
     assert_eq!(scale, 3, "倍率仍要能退，否则 4x 会一路跟到拖动结束");
 }
@@ -188,7 +242,11 @@ fn 提帧圈不放大但可以从4x缩回() {
 /// 顶到 4x 后释放判据永远够不着，名义 15fps 实际约 2fps。
 #[test]
 fn 链路清白且编码富余时倍率直接回1x() {
-    let (ema, scale) = pace_step(PaceBeat { ema_ms: 2, scale: 4, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        ema_ms: 2,
+        scale: 4,
+        ..base()
+    });
     assert_eq!((ema, scale), (2, 1), "清白链路上的历史棘轮没有分步退的理由");
 }
 
@@ -198,13 +256,31 @@ fn 链路清白且编码富余时倍率直接回1x() {
 #[test]
 fn 链路清白也拦不住编码跑不动时的降频() {
     // 起跑：EMA 20ms > 16ms 档位 ⇒ 仍要放大。
-    let (ema, scale) = pace_step(PaceBeat { work_ms: 40, ema_ms: 18, ..base() });
-    assert_eq!((ema, scale), (20, 2), "跑不满档位间隔就该放大，与链路清白无关");
+    let (ema, scale) = pace_step(PaceBeat {
+        work_ms: 40,
+        ema_ms: 18,
+        ..base()
+    });
+    assert_eq!(
+        (ema, scale),
+        (20, 2),
+        "跑不满档位间隔就该放大，与链路清白无关"
+    );
     // 已顶到 4x：既不复位也不缩（ema*4 不小于 scaled）。
-    let (ema, scale) = pace_step(PaceBeat { work_ms: 40, ema_ms: 20, scale: 4, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        work_ms: 40,
+        ema_ms: 20,
+        scale: 4,
+        ..base()
+    });
     assert_eq!((ema, scale), (22, 4), "真跑不动时 4x 必须站住");
     // 链路脏（拥塞）时同样不许白送复位。
-    let (ema, scale) = pace_step(PaceBeat { ema_ms: 2, scale: 4, link_clear: false, ..base() });
+    let (ema, scale) = pace_step(PaceBeat {
+        ema_ms: 2,
+        scale: 4,
+        link_clear: false,
+        ..base()
+    });
     assert_eq!((ema, scale), (2, 3), "链路不清白仍按每圈退一格");
 }
 

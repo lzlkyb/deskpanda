@@ -22,12 +22,12 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoContext1,
     ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET,
-    D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
-    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
-    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-    D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+    D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
+    D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+    D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
@@ -59,8 +59,10 @@ impl GpuNv12Converter {
     ) -> Result<Self, String> {
         let (w, h) = ((w.max(64) & !1), (h.max(64) & !1));
         unsafe {
-            let video_device: ID3D11VideoDevice = device.cast().map_err(|e| format!("VideoDevice：{e}"))?;
-            let video_ctx: ID3D11VideoContext = ctx.cast().map_err(|e| format!("VideoContext：{e}"))?;
+            let video_device: ID3D11VideoDevice =
+                device.cast().map_err(|e| format!("VideoDevice：{e}"))?;
+            let video_ctx: ID3D11VideoContext =
+                ctx.cast().map_err(|e| format!("VideoContext：{e}"))?;
             let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
                 InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
                 InputFrameRate: DXGI_RATIONAL {
@@ -110,7 +112,8 @@ impl GpuNv12Converter {
                 Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
                     Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
                 },
-            };            let out_view = {
+            };
+            let out_view = {
                 let mut v: Option<ID3D11VideoProcessorOutputView> = None;
                 video_device
                     .CreateVideoProcessorOutputView(&out_tex, &enumerator, &ov_desc, Some(&mut v))
@@ -187,7 +190,10 @@ impl GpuNv12Converter {
     }
 
     /// 输入视图按纹理地址缓存；纹理换了（DD 重建/分辨率变化）自动重建。
-    fn input_view(&mut self, tex: &ID3D11Texture2D) -> Result<ID3D11VideoProcessorInputView, String> {
+    fn input_view(
+        &mut self,
+        tex: &ID3D11Texture2D,
+    ) -> Result<ID3D11VideoProcessorInputView, String> {
         let key = tex.as_raw() as isize;
         if let Some(v) = self.in_views.get(&key) {
             return Ok(v.clone());
@@ -243,13 +249,15 @@ unsafe fn probe_encode_caps() -> GpuEncodeCaps {
     // STA，这次请求拿到 `RPC_E_CHANGED_MODE` 而公寓**仍是 STA**，下面 `ActivateObject`
     // 激活 async 硬编 MFT 就会报 `E_UNEXPECTED` —— 原先 `let _ =` 让它完全隐形。
     super::mft_diag::ensure_mta_quiet("编码能力探测");
-    let h264_gpu = hardware_mft_d3d11_aware(&windows::Win32::Media::MediaFoundation::MFVideoFormat_H264);
+    let h264_gpu =
+        hardware_mft_d3d11_aware(&windows::Win32::Media::MediaFoundation::MFVideoFormat_H264);
     let hevc_hw =
         hardware_mft_d3d11_aware(&windows::Win32::Media::MediaFoundation::MFVideoFormat_HEVC);
     let refresh_hz = primary_refresh_hz();
     let monitors = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
         windows::Win32::UI::WindowsAndMessaging::SM_CMONITORS,
-    ).max(0) as u32;
+    )
+    .max(0) as u32;
     let caps = GpuEncodeCaps {
         h264_gpu,
         hevc_hw,
@@ -391,14 +399,12 @@ unsafe fn display_refresh_hz(device: Option<&str>) -> u32 {
     };
     let dev_wide: Option<Vec<u16>> = device.map(|s| s.encode_utf16().chain([0]).collect());
     let ok = match dev_wide.as_deref() {
-        Some(w) => {
-            windows::Win32::Graphics::Gdi::EnumDisplaySettingsW(
-                windows::core::PCWSTR(w.as_ptr()),
-                ENUM_CURRENT_SETTINGS,
-                &mut dm,
-            )
-            .as_bool()
-        }
+        Some(w) => windows::Win32::Graphics::Gdi::EnumDisplaySettingsW(
+            windows::core::PCWSTR(w.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut dm,
+        )
+        .as_bool(),
         None => windows::Win32::Graphics::Gdi::EnumDisplaySettingsW(
             windows::core::PCWSTR::null(),
             ENUM_CURRENT_SETTINGS,

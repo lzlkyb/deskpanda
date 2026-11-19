@@ -187,8 +187,11 @@ impl EncodeProfile {
 /// 排列，caps 判定取第一个刷新率达标的档。
 /// 🔴 240 及以上刻意不进表：编码预算 4.2ms 贴硬编极限、1080p240 宏块率贴死
 /// L5.2（1.96M / 2.07M MB/s），受众极窄——档位表到 165 为止。
-pub const HIGH_FPS_LADDER: [(&str, u32, u32); 3] =
-    [("fps165", 165, 165), ("fps144", 144, 144), ("fps120", 120, 100)];
+pub const HIGH_FPS_LADDER: [(&str, u32, u32); 3] = [
+    ("fps165", 165, 165),
+    ("fps144", 144, 144),
+    ("fps120", 120, 100),
+];
 
 /// 档位对应的刷新率下限；非高帧率档返回 None（不走能力校验）。
 pub fn high_fps_min_hz(quality: &str) -> Option<u32> {
@@ -216,7 +219,12 @@ impl EncodeProfile {
     ///
     /// 做成纯函数/方法是因为**判据错了不会崩**——只会静默跑 CPU 管线，表现为
     /// 「档位给了但跑不满」，这种问题在双机手测里极难定位（见 11.7 的教训）。
-    pub fn wants_zero_copy(&self, virtual_screen: bool, gpu_disabled: bool, has_hw_mft: bool) -> bool {
+    pub fn wants_zero_copy(
+        &self,
+        virtual_screen: bool,
+        gpu_disabled: bool,
+        has_hw_mft: bool,
+    ) -> bool {
         has_hw_mft && !virtual_screen && !gpu_disabled
     }
 }
@@ -236,7 +244,9 @@ pub enum FrameCodec {
 
 impl FrameCodec {
     /// Every predictive codec needs its keyframe/reference chain intact.
-    pub fn interframe(self) -> bool { self != Self::Jpeg }
+    pub fn interframe(self) -> bool {
+        self != Self::Jpeg
+    }
 
     /// IPC 批量帧头里的 `codec u8`。前端 `parseFrameBatch` 按同一张表读。
     pub fn as_u8(self) -> u8 {
@@ -290,7 +300,7 @@ pub struct DirtyRect {
 
 /// 自适应质量状态（被控端每会话一份）。
 pub struct EncoderState {
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     mac_capture: Option<crate::rc::mac_capture::Capture>,
     quality: u8,
     last_rgb: Option<(u32, u32, Vec<u8>)>,
@@ -314,7 +324,7 @@ impl EncoderState {
 
     pub fn with_profile(profile: EncodeProfile, virtual_screen: bool) -> Self {
         Self {
-            #[cfg(target_os="macos")]
+            #[cfg(target_os = "macos")]
             mac_capture: None,
             quality: profile.q_default,
             last_rgb: None,
@@ -328,9 +338,11 @@ impl EncoderState {
         }
     }
 
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     pub(crate) fn suspend_capture(&mut self) {
-        self.mac_capture.take();self.last_rgb=None;self.frame_idx=0;
+        self.mac_capture.take();
+        self.last_rgb = None;
+        self.frame_idx = 0;
     }
     pub fn quality(&self) -> u8 {
         self.quality
@@ -350,7 +362,9 @@ impl EncoderState {
 
     /// 会话中远程改档：换 profile / 截取范围，质量回到新档默认。
     /// 新媒体流不能依赖旧流的 JPEG 差分基准。
-    pub fn reset_reference(&mut self) { self.last_rgb = None; }
+    pub fn reset_reference(&mut self) {
+        self.last_rgb = None;
+    }
 
     pub fn apply_profile(&mut self, profile: EncodeProfile, virtual_screen: bool) {
         self.profile = profile;
@@ -435,12 +449,12 @@ pub fn encode_rgba_to_jpeg_simple(
     })
 }
 
-mod encode;
 mod compositor;
+mod encode;
 mod wire;
 
-pub use encode::*;
 pub use compositor::*;
+pub use encode::*;
 pub use wire::*;
 
 #[cfg(test)]

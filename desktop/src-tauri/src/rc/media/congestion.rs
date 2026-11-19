@@ -14,6 +14,9 @@ mod tests {
         assert!(!loss_pressure(Some(80), 60, 31));
         assert!(loss_pressure(Some(120), 60, 31));
         assert!(!loss_pressure(Some(120), 10, 31));
-        assert!(loss_pressure(None, 60, 31), "older peers must retain their loss protection");
+        assert!(
+            loss_pressure(None, 60, 31),
+            "older peers must retain their loss protection"
+        );
     }
 }

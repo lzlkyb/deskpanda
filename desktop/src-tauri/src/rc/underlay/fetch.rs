@@ -1,7 +1,10 @@
 //! Windows 备用组件按需获取：安装包不再携带 EasyTier 二进制，仓库只保留驱动代码。
 //! 原型开关启用且本地找不到组件时才联网取件；按 build.json 的 SHA256 校验后才执行。
-use std::{path::{Path, PathBuf}, time::Duration};
 use sha2::Digest;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 // 组件与 build.json 同源同版本；换组件必须随发版更新此 ref，否则校验必然不匹配。
 const COMPONENT_REF: &str = "v7.2.10";
@@ -11,7 +14,13 @@ const SOURCES: [&str; 2] = [
     "https://ghproxy.net/https://raw.githubusercontent.com/lzlkyb/pastepanda",
 ];
 const BINARIES: [&str; 2] = ["easytier-core.exe", "easytier-cli.exe"];
-const NOTICES: [&str; 5] = ["LICENSE", "COPYING-GPL-3.0.txt", "NOTICE.txt", "pnet-LICENSE-MIT.txt", "pnet-LICENSE-APACHE.txt"];
+const NOTICES: [&str; 5] = [
+    "LICENSE",
+    "COPYING-GPL-3.0.txt",
+    "NOTICE.txt",
+    "pnet-LICENSE-MIT.txt",
+    "pnet-LICENSE-APACHE.txt",
+];
 
 fn source_url(source: &str, rel: &str) -> String {
     format!("{source}/{COMPONENT_REF}/{RESOURCE_ROOT}/{rel}")
@@ -23,7 +32,9 @@ pub(super) async fn desktop_binary(name: &str) -> Result<PathBuf, String> {
         return Err(format!("未知的备用承载组件：{name}"));
     }
     if cfg!(debug_assertions) {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/easytier/windows-x86_64").join(name);
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/easytier/windows-x86_64")
+            .join(name);
         if source.is_file() {
             return Ok(source);
         }
@@ -41,14 +52,20 @@ pub(super) async fn desktop_binary(name: &str) -> Result<PathBuf, String> {
 }
 
 fn download_dir() -> Result<PathBuf, String> {
-    let dir = super::APP_DIR.get().ok_or("备用承载目录未初始化")?.join("easytier-prototype/bin");
+    let dir = super::APP_DIR
+        .get()
+        .ok_or("备用承载目录未初始化")?
+        .join("easytier-prototype/bin");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
 fn installed_binary(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let path = exe.parent()?.join("resources/easytier/windows-x86_64").join(name);
+    let path = exe
+        .parent()?
+        .join("resources/easytier/windows-x86_64")
+        .join(name);
     path.is_file().then_some(path)
 }
 
@@ -59,14 +76,23 @@ async fn fetch(name: &str, dir: &Path, target: &Path) -> Result<PathBuf, String>
         .build()
         .map_err(|e| e.to_string())?;
     let shas = manifest(&client).await?;
-    let expected = shas.get(name).and_then(|v| v.as_str()).ok_or("备用组件清单缺少校验值")?;
+    let expected = shas
+        .get(name)
+        .and_then(|v| v.as_str())
+        .ok_or("备用组件清单缺少校验值")?;
     for source in SOURCES {
         let url = source_url(source, &format!("windows-x86_64/{name}"));
         let downloaded: Result<Vec<u8>, String> = async {
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?
-                .error_for_status().map_err(|e| e.to_string())?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?;
             Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
-        }.await;
+        }
+        .await;
         let body = match downloaded {
             Ok(b) => b,
             Err(error) => {
@@ -88,7 +114,9 @@ async fn fetch(name: &str, dir: &Path, target: &Path) -> Result<PathBuf, String>
             options.custom_flags(0x8000_0000); // FILE_FLAG_WRITE_THROUGH
         }
         use std::io::Write as _;
-        let mut file = options.open(target).map_err(|e| format!("备用组件落盘失败：{e}"))?;
+        let mut file = options
+            .open(target)
+            .map_err(|e| format!("备用组件落盘失败：{e}"))?;
         file.write_all(&body).map_err(|e| e.to_string())?;
         file.flush().map_err(|e| e.to_string())?;
         drop(file);
@@ -99,18 +127,29 @@ async fn fetch(name: &str, dir: &Path, target: &Path) -> Result<PathBuf, String>
     Err("备用组件获取失败，所有来源均未通过校验".into())
 }
 
-async fn manifest(client: &reqwest::Client) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+async fn manifest(
+    client: &reqwest::Client,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     for source in SOURCES {
         let url = source_url(source, "windows-x86_64/build.json");
         let fetched: Result<serde_json::Value, String> = async {
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?
-                .error_for_status().map_err(|e| e.to_string())?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?;
             let body = response.bytes().await.map_err(|e| e.to_string())?;
             serde_json::from_slice(&body).map_err(|e| e.to_string())
-        }.await;
+        }
+        .await;
         match fetched {
             Ok(json) => {
-                return json.get("sha256").and_then(|v| v.as_object()).cloned()
+                return json
+                    .get("sha256")
+                    .and_then(|v| v.as_object())
+                    .cloned()
                     .ok_or_else(|| "备用组件清单格式错误".to_string());
             }
             Err(error) => log::warn!("[RC-UNDERLAY] 备用组件清单获取失败，换源：{error}"),
@@ -125,10 +164,16 @@ async fn fetch_notices(client: &reqwest::Client, dir: &Path) {
         for source in SOURCES {
             let url = source_url(source, notice);
             let fetched: Result<Vec<u8>, String> = async {
-                let response = client.get(&url).send().await.map_err(|e| e.to_string())?
-                    .error_for_status().map_err(|e| e.to_string())?;
+                let response = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .error_for_status()
+                    .map_err(|e| e.to_string())?;
                 Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
-            }.await;
+            }
+            .await;
             if let Ok(body) = fetched {
                 let _ = std::fs::write(dir.join(notice), &body);
                 break;
@@ -139,8 +184,13 @@ async fn fetch_notices(client: &reqwest::Client, dir: &Path) {
 
 fn sha_ok(bytes: &[u8], expected: &str) -> bool {
     let expected = expected.trim().to_ascii_lowercase();
-    expected.len() == 64 && expected.bytes().all(|b| b.is_ascii_hexdigit())
-        && sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect::<String>() == expected
+    expected.len() == 64
+        && expected.bytes().all(|b| b.is_ascii_hexdigit())
+        && sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            == expected
 }
 
 #[cfg(test)]
@@ -170,7 +220,12 @@ mod tests {
         let map = committed_manifest()["sha256"].as_object().unwrap().clone();
         for name in BINARIES {
             let sha = map.get(name).and_then(|v| v.as_str()).unwrap_or_default();
-            assert!(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()) && sha == sha.to_ascii_lowercase(), "{name}");
+            assert!(
+                sha.len() == 64
+                    && sha.bytes().all(|b| b.is_ascii_hexdigit())
+                    && sha == sha.to_ascii_lowercase(),
+                "{name}"
+            );
         }
     }
 
@@ -182,17 +237,24 @@ mod tests {
     #[ignore = "DeskPanda 不分发 easytier 组件；装好组件后 --ignored 手动跑"]
     #[test]
     fn committed_binaries_match_manifest_before_download_side_verification() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/easytier/windows-x86_64");
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/easytier/windows-x86_64");
         let map = committed_manifest()["sha256"].as_object().unwrap().clone();
         for name in BINARIES {
             let bytes = std::fs::read(dir.join(name)).unwrap();
-            assert!(sha_ok(&bytes, map[name].as_str().unwrap()), "{name} 已换版但 build.json 未同步");
+            assert!(
+                sha_ok(&bytes, map[name].as_str().unwrap()),
+                "{name} 已换版但 build.json 未同步"
+            );
         }
     }
 
     #[tokio::test]
     async fn unknown_component_never_reaches_filesystem_or_network() {
-        assert!(desktop_binary("cmd.exe").await.unwrap_err().contains("未知"));
+        assert!(desktop_binary("cmd.exe")
+            .await
+            .unwrap_err()
+            .contains("未知"));
     }
 
     #[test]

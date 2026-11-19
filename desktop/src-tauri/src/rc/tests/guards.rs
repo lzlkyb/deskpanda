@@ -9,9 +9,14 @@ use super::window;
 fn viewer_drain_serializes_queue_consumption_before_native_decode() {
     let src = include_str!("../service/frames_clip.rs");
     let start = src.find("pub fn drain_frames_for_viewer").unwrap();
-    let end = src[start..].find("pub(in crate::rc) fn clear_outbox").unwrap() + start;
+    let end = src[start..]
+        .find("pub(in crate::rc) fn clear_outbox")
+        .unwrap()
+        + start;
     let body = src[start..end].split_whitespace().collect::<String>();
-    let lock = body.find("self.viewer_drain.lock()").expect("queue drain and native decode must share one serial guard");
+    let lock = body
+        .find("self.viewer_drain.lock()")
+        .expect("queue drain and native decode must share one serial guard");
     assert!(lock < body.find("self.drain_frames()").unwrap());
     assert!(lock < body.find(".batch(session,frames)").unwrap());
 }
@@ -39,9 +44,7 @@ fn 守卫_批准循环_超时判定在decision之后() {
         .expect("批准等待循环不见了");
     let head = &loop_body[..loop_body.find("fn ").unwrap_or(loop_body.len())];
     let decision_pos = head.find("let decision").expect("decision 读取不见了");
-    let timeout_pos = head
-        .find("now_ms() > deadline")
-        .expect("超时判定不见了");
+    let timeout_pos = head.find("now_ms() > deadline").expect("超时判定不见了");
     assert!(
         timeout_pos > decision_pos,
         "超时判定在 decision 读取之前（P1-2 复发）——批准落在超时窗口里会造僵尸会话"
@@ -68,10 +71,11 @@ fn 守卫_send_input_只看可AudioOn_不得改画面范围() {
     let start = src
         .find("pub async fn send_input")
         .expect("找不到 send_input");
-    let body = &src[start..src[start..]
-        .find("clear_outbound_link")
-        .map(|i| start + i)
-        .unwrap_or(src.len())];
+    let body = &src[start
+        ..src[start..]
+            .find("clear_outbound_link")
+            .map(|i| start + i)
+            .unwrap_or(src.len())];
     assert!(
         body.contains("InputEvent::AudioOn"),
         "只看会话应能发送 AudioOn（收系统声音）"
@@ -123,10 +127,14 @@ fn 守卫_入站输入先校验会话peer() {
 #[test]
 fn 守卫_会话快照peer与能力同源() {
     let ses = include_str!("../session.rs");
-    let start = ses.find("pub fn snapshot").expect("找不到 Session::snapshot");
+    let start = ses
+        .find("pub fn snapshot")
+        .expect("找不到 Session::snapshot");
     let body = window(ses, start, 300);
     assert!(
-        body.contains("self.peer") && body.contains("self.phase") && body.contains("self.capability"),
+        body.contains("self.peer")
+            && body.contains("self.phase")
+            && body.contains("self.capability"),
         "snapshot 必须从同一条 Session 取 peer/phase/capability（同源）"
     );
     let svc = include_str!("../service/frames_clip.rs");
@@ -336,7 +344,9 @@ fn 守卫_COM释放先于Uninit() {
         ("encode_h264/mf.rs", include_str!("../encode_h264/mf.rs")),
         ("audio/encode.rs", include_str!("../audio/encode.rs")),
     ] {
-        let start = src.find("fn release_com").unwrap_or_else(|| panic!("{name} 缺 release_com"));
+        let start = src
+            .find("fn release_com")
+            .unwrap_or_else(|| panic!("{name} 缺 release_com"));
         // 取 release_com 到 impl Drop 之间的函数体
         let body = &src[start..];
         let end = body
@@ -381,13 +391,13 @@ fn 守卫_deny_file只关流不关连接() {
 fn 守卫_入站剪贴板走spawn_blocking() {
     let input = include_str!("../input.rs");
     assert!(
-        input.contains("fn set_clipboard_text_async")
-            && input.contains("spawn_blocking"),
+        input.contains("fn set_clipboard_text_async") && input.contains("spawn_blocking"),
         "必须提供 spawn_blocking 包装"
     );
     let inbound = include_str!("../inbound.rs");
     assert!(
-        inbound.contains("set_clipboard_text_async") && inbound.contains("get_clipboard_text_async"),
+        inbound.contains("set_clipboard_text_async")
+            && inbound.contains("get_clipboard_text_async"),
         "handle_inbound_input 必须调用 async 包装，而不是同步 sleep 版本"
     );
     // 同步版不得再被 async 路径直接调用
@@ -437,9 +447,7 @@ fn 守卫_收尾改名不覆盖() {
         src.contains("fn rename_no_overwrite") && src.contains("hard_link"),
         "收尾必须用 hard_link（目标存在则失败）而不是会覆盖的 rename"
     );
-    let recv = src
-        .find("async fn recv_bytes")
-        .expect("recv_bytes");
+    let recv = src.find("async fn recv_bytes").expect("recv_bytes");
     let body = window(src, recv, 2500);
     assert!(
         body.contains("metadata") && body.contains("plan.offset"),
@@ -456,7 +464,9 @@ fn 守卫_入站accept原子占位() {
         "handle_file_conn 必须 try_reserve_peer 占位"
     );
     let fs = include_str!("../file_state.rs");
-    let start = fs.find("pub(crate) fn try_reserve_peer").expect("try_reserve_peer");
+    let start = fs
+        .find("pub(crate) fn try_reserve_peer")
+        .expect("try_reserve_peer");
     let body = window(fs, start, 600);
     assert!(
         body.contains("peer_busy_inner") && body.contains("peers.insert"),
@@ -529,7 +539,11 @@ fn win11_判据看build不看productname() {
     // 空白 / 解不开 → 不带版本号，不编
     assert_eq!(os_label_from_build(""), "Windows");
     assert_eq!(os_label_from_build("abc"), "Windows");
-    assert_eq!(os_label_from_build("  22631  "), "Windows 11", "前后空白要容错");
+    assert_eq!(
+        os_label_from_build("  22631  "),
+        "Windows 11",
+        "前后空白要容错"
+    );
 
     // 源码守卫：判据读 build，不读 ProductName
     let module = include_str!("../mod.rs");
@@ -677,7 +691,8 @@ fn 守卫_画面暂停五处接线成对() {
     {
         let lib = include_str!("../../lib.rs");
         assert!(
-            lib.contains("commands::rc_video_pause_set,") || lib.contains("commands::rc_video_pause_set::"),
+            lib.contains("commands::rc_video_pause_set,")
+                || lib.contains("commands::rc_video_pause_set::"),
             "rc_video_pause_set 没进 invoke_handler —— 抽屉那颗按钮点了没反应"
         );
     }
@@ -777,7 +792,8 @@ fn guard_video_pipe_state_reporting_is_paired() {
 #[test]
 fn 守卫_暂停先废弃媒体再停止出帧() {
     let run = include_str!("../inbound/video_run.rs");
-    let reset = run.find("pipe.set_paused(self.svc.media_paused())")
+    let reset = run
+        .find("pipe.set_paused(self.svc.media_paused())")
         .expect("暂停只停止出帧，没有通知媒体 worker RESET 已排队的旧画面");
     assert!(reset < run.find("if bg_since > 0 {").unwrap());
     assert!(reset < run.find("if self.svc.should_pause_stream() {").unwrap());
@@ -800,18 +816,28 @@ fn 守卫_媒体闸不阻塞生产者也不饿死控制面() {
     let run = include_str!("../inbound/video_run.rs");
     let pipe = include_str!("../inbound/media_pipe.rs");
     assert!(
-        !pipe.contains("async fn wait_media_capacity") && !run.contains("wait_media_capacity().await"),
+        !pipe.contains("async fn wait_media_capacity")
+            && !run.contains("wait_media_capacity().await"),
         "媒体闸不许回到 await 阻塞式等待——生产者的节拍不能被发送侧预算停住"
     );
     // 取**最后一次**出现：第一次在 run() 开头（会话建立先报一次形状），
     // 循环体内那一次才是被测对象。
-    let cursor = run.rfind("self.maybe_send_cursor().await")
+    let cursor = run
+        .rfind("self.maybe_send_cursor().await")
         .expect("推流循环里没有光标遥测上报");
-    let gate = run.find("match self.media_gate()").expect("推流循环没有问媒体闸");
-    assert!(cursor < gate, "光标上报必须排在媒体闸之前，否则闸关闭期间远端指针冻结");
+    let gate = run
+        .find("match self.media_gate()")
+        .expect("推流循环没有问媒体闸");
+    assert!(
+        cursor < gate,
+        "光标上报必须排在媒体闸之前，否则闸关闭期间远端指针冻结"
+    );
     // Match the entire pause/continue statement before cursor reporting while
     // allowing rustfmt to wrap it; whitespace must not decide the wiring check.
-    let before_cursor: String = run[..cursor].chars().filter(|c| !c.is_whitespace()).collect();
+    let before_cursor: String = run[..cursor]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     assert!(
         before_cursor.contains("ifself.svc.media_paused(){continue;}"),
         "隐私暂停必须先于光标上报（暂停期连指针形状都不算可看）"
@@ -945,7 +971,10 @@ fn 守卫_会话防休眠六处接线成对() {
         .expect("防休眠必须走专用线程的 spawn 闭包");
     let first = ka.find("SetThreadExecutionState(").unwrap();
     let last = ka.rfind("SetThreadExecutionState(").unwrap();
-    assert_ne!(first, last, "只找到一处 SetThreadExecutionState —— 设置/探测/释放三处至少少了一处");
+    assert_ne!(
+        first, last,
+        "只找到一处 SetThreadExecutionState —— 设置/探测/释放三处至少少了一处"
+    );
     assert!(
         spawn_at < first && spawn_at < last,
         "有 SetThreadExecutionState 落在 spawn 之前/之外 —— 请求会绑在 tokio worker 上，会话结束没人清"
@@ -1109,9 +1138,7 @@ fn 守卫_管线标签必须说真话() {
         "兜底三档原因缺一条 —— 现场分不出是没配、熔断还是单帧失败"
     );
     // ③ 汇总行与收尾行都必须经 pipeline_label，且不得再直接从 h264 对象推断。
-    let extra = video
-        .find("fn perf_extra")
-        .expect("汇总行上下文入口被删");
+    let extra = video.find("fn perf_extra").expect("汇总行上下文入口被删");
     let extra_last = video
         .find("fn perf_extra_last")
         .expect("收尾行上下文入口被删");
@@ -1204,9 +1231,7 @@ fn 守卫_帧龄哨兵口径必须端到端收口() {
     let read = body
         .find("self.peer_queue_ms.load")
         .expect("EMA 不再读旧值");
-    let write = body
-        .find(".store(next")
-        .expect("EMA 不再写回平滑值");
+    let write = body.find(".store(next").expect("EMA 不再写回平滑值");
     assert!(read < write, "帧龄 EMA 先写后读 —— 同一个样本会被算两次");
     // ④ 播种看 `peer_queue_seen`，不看槽值（0 现在是合法值，用 `prev > 0` 判会把
     //    第一个真实样本 0 直接播成 0、随后再也区分不了「没见过」与「见过 0」）。
@@ -1259,9 +1284,7 @@ fn 守卫_帧龄哨兵口径必须端到端收口() {
     //    升档闸里的 `rtt_ms > 0` 从「有读数」变成了「必须比本场安静时刻更慢」，
     //    于是稳定链路上 12s 保持窗永远攒不满 ⇒ 自动挡永远不给最好画质。
     //    未采样这件事只许由 `rtt_measured` 表达。
-    let decide = auto
-        .find("fn auto_decide")
-        .expect("自动换档判据被删");
+    let decide = auto.find("fn auto_decide").expect("自动换档判据被删");
     let decide_end = auto[decide..]
         .find("pub(super) struct AutoTier")
         .expect("AutoTier 结构体不见了 —— 无法界定判据函数的范围");
@@ -1313,7 +1336,8 @@ fn 守卫_排队定罪必须与传输层口径同源() {
     let cfg = include_str!("../stream_cfg.rs");
     // ① 单一实现：只有 media_flow 里有一份阈值判据，别处不许抄。
     assert_eq!(
-        flow.matches("fn transport_clear(rtt_ms: i64, loss_pm: i64) -> bool").count(),
+        flow.matches("fn transport_clear(rtt_ms: i64, loss_pm: i64) -> bool")
+            .count(),
         1,
         "传输层清白判据的定义点不止一处"
     );
@@ -1325,9 +1349,7 @@ fn 守卫_排队定罪必须与传输层口径同源() {
     }
     // ② 自动挡两处（降档豁免 + 升档豁免）必须用同一个字段，且字段由调用点从
     //    控制器口径算出：判据搬走一处 = 只豁免了一半。
-    let decide = auto
-        .find("fn auto_decide")
-        .expect("自动换档判据被删");
+    let decide = auto.find("fn auto_decide").expect("自动换档判据被删");
     let decide_end = auto[decide..]
         .find("pub(super) struct AutoTier")
         .expect("AutoTier 结构体不见了 —— 无法界定判据函数的范围");
@@ -1371,7 +1393,9 @@ fn 守卫_排队定罪必须与传输层口径同源() {
         "绝对水位不再连续两拍才定罪 —— 一圈的采样毛刺就能砍一刀"
     );
     assert!(
-        flow.contains("let deep_now = !transport_clear && self.backlog_ms > self.backlog_down_ms();"),
+        flow.contains(
+            "let deep_now = !transport_clear && self.backlog_ms > self.backlog_down_ms();"
+        ),
         "水位定罪丢掉了传输层否决（或积压线被改回绝对常数——中继健康抖动会被连砍）"
     );
     // 🔴 2026-10-06 方案乙：降速/扩窗两条积压线必须走 ack_mean 归一的单一实现，
@@ -1380,7 +1404,10 @@ fn 守卫_排队定罪必须与传输层口径同源() {
         ("fn backlog_down_ms", "降速线"),
         ("fn backlog_probe_ms", "扩窗线"),
     ] {
-        assert!(flow.contains(line), "积压线 {why} 的归一实现不见了 —— 又写回绝对常数？");
+        assert!(
+            flow.contains(line),
+            "积压线 {why} 的归一实现不见了 —— 又写回绝对常数？"
+        );
     }
     assert!(
         flow.contains("BACKLOG_DOWN_MS.max((self.ack_mean_ms.unwrap_or(0) / 2) as i64)")
@@ -1392,9 +1419,7 @@ fn 守卫_排队定罪必须与传输层口径同源() {
             && flow.contains(">= BACKLOG_RISE_MS"),
         "rising 两线不许顺手归一 —— ack_mean/ack_variance 都会被积压自己污染（见方案乙注释）"
     );
-    let streak = flow
-        .find("let deep_now")
-        .expect("水位连拍的起算点不见了");
+    let streak = flow.find("let deep_now").expect("水位连拍的起算点不见了");
     let bump = flow
         .find("self.deep_streak = if deep_now")
         .expect("水位连拍的计数点不见了");
@@ -1411,7 +1436,8 @@ fn 守卫_排队定罪必须与传输层口径同源() {
     );
     // ④ G3：一刀之后留观察窗，且只挡「同一症状的重复定罪」，硬证据照样过。
     assert_eq!(
-        flow.matches("self.post_cut_wait = POST_CUT_WAIT_TICKS;").count(),
+        flow.matches("self.post_cut_wait = POST_CUT_WAIT_TICKS;")
+            .count(),
         3,
         "减档后的观察窗赋值点不是三处（探测臂/常规减档臂/RESET 各一次）—— 有一刀不记账"
     );
@@ -1433,7 +1459,9 @@ fn 守卫_排队定罪必须与传输层口径同源() {
         .expect("ack_deadline_ms 不见了 —— 无法界定 discard 的范围");
     let body = &flow[discard..discard + discard_end];
     assert!(
-        body.contains("self.backlog_ms > self.backlog_down_ms() && !transport_clear(rtt_ms, loss_pm)"),
+        body.contains(
+            "self.backlog_ms > self.backlog_down_ms() && !transport_clear(rtt_ms, loss_pm)"
+        ),
         "RESET 的第三条减档条件没有传输层否决 —— 旧链残留水位又能白砍 30%"
     );
     assert!(
@@ -1591,7 +1619,10 @@ fn guard_encode_degradation_ladder_has_one_owner() {
         !video.contains("enc_fail_streak"),
         "video.rs 又自己数连败 ⇒ 与 session 的阈值分叉（甲-1）"
     );
-    assert!(!video.contains(">= 60"), "60 帧门槛回归 = Issue #19 的一分钟白试");
+    assert!(
+        !video.contains(">= 60"),
+        "60 帧门槛回归 = Issue #19 的一分钟白试"
+    );
     assert_eq!(
         video.matches("note_encode_fail(").count(),
         1,
@@ -1605,11 +1636,16 @@ fn guard_encode_degradation_ladder_has_one_owner() {
     // ② 定罪必须活过熔断：`h264 = None` 之后重开的入口只有 `open_h264`，
     //    两处出口都得把会话旗标递进去，否则冷却期满又回到坏硬编（甲-4）。
     assert_eq!(
-        video.matches("opts.virtual_screen, self.enc_hw_broken").count(),
+        video
+            .matches("opts.virtual_screen, self.enc_hw_broken")
+            .count(),
         2,
         "重开编码器的两处出口没有都按会话定罪选型（甲-4）"
     );
-    assert!(video.contains("hw_broken: bool"), "open_h264 的定罪入参被删（甲-4）");
+    assert!(
+        video.contains("hw_broken: bool"),
+        "open_h264 的定罪入参被删（甲-4）"
+    );
     assert!(
         include_str!("../inbound.rs").contains("enc_hw_broken"),
         "InboundVideo 上的会话级定罪旗标没了 ⇒ 定罪活不过熔断（甲-4）"
@@ -1628,11 +1664,23 @@ fn guard_encode_degradation_ladder_has_one_owner() {
     );
     // ⑤ 丙：降级状态得能从日志里读出来——「换引擎」与「熔断」是两件事，
     //    混成一个词就等于现场看不出阶梯走到第几档。
-    assert!(video.contains("软编MFT"), "管线标签不再区分软编档 ⇒ 看不出换了引擎（丙）");
-    assert!(video.contains("编码已熔断"), "JPEG 兜底原因仍写「无硬编」⇒ 谎报（丙）");
-    assert!(video.contains("ENC_SW_FALLBACK"), "换引擎不再单独计数（丙）");
+    assert!(
+        video.contains("软编MFT"),
+        "管线标签不再区分软编档 ⇒ 看不出换了引擎（丙）"
+    );
+    assert!(
+        video.contains("编码已熔断"),
+        "JPEG 兜底原因仍写「无硬编」⇒ 谎报（丙）"
+    );
+    assert!(
+        video.contains("ENC_SW_FALLBACK"),
+        "换引擎不再单独计数（丙）"
+    );
     let perf = strip(include_str!("../perf.rs"));
-    assert!(perf.contains("软编换档"), "5s 汇总不带换引擎计数 ⇒ 中途看不见（丙）");
+    assert!(
+        perf.contains("软编换档"),
+        "5s 汇总不带换引擎计数 ⇒ 中途看不见（丙）"
+    );
 }
 
 /// 守卫：pmtud 大分片链路**六处接线成对**（P3，2026-10-15）。
@@ -1713,7 +1761,10 @@ fn 守卫_拉黑设备必须当场收会话_邀请作废前后端成对() {
     let start = cmd
         .find("pub async fn rc_set_device_allowed")
         .expect("rc_set_device_allowed 不见了——拉黑入口被改名/搬走，本守卫要跟着指新家");
-    let end = start + cmd[start..].find("#[tauri::command]").expect("命令后没有下一个命令边界");
+    let end = start
+        + cmd[start..]
+            .find("#[tauri::command]")
+            .expect("命令后没有下一个命令边界");
     let body = &cmd[start..end];
     assert!(
         body.contains("!allowed") && body.contains("force_end_if_session"),

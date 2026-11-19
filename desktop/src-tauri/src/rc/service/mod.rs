@@ -22,9 +22,9 @@ use super::stream_cfg::{
 };
 use super::uno;
 use super::unop;
-use crate::store::DataStore;
 use crate::net::identity::NodeIdentity;
 use crate::net::presence::{self, PresenceApp, PresenceTable, PORT as PRESENCE_BASE_PORT};
+use crate::store::DataStore;
 use iroh::{Endpoint, EndpointAddr};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -348,23 +348,23 @@ pub struct RcService {
     // ── G3 音频 ──
     /// 发起端：音频收流状态（cfg + 待取包）。accept_uni 的音频流写入，
     /// `rc_drain_audio` 命令取走。
-    #[cfg(any(target_os = "windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     audio_rx: Mutex<super::audio::AudioRx>,
     /// 被控端：对端申请了系统声音（Request.audio）。false = 旧对端 / 对端关声音。
-    #[cfg(any(target_os="windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     audio_peer_wants: std::sync::atomic::AtomicBool,
     /// 被控端：**对端**会话中开关的镜像（对端 AudioOn(false) 置位；worker 每轮读）。
     ///
     /// ❗ 名字叫 muted，语义其实是「对端此刻想不想要」——**不是**「本机给不给」。
     /// 本机自己的意愿在 [`audio_local_mute`](Self::audio_local_mute)：两者都与
     /// `audio_peer_wants` 相与（见 `audio_wanted`），任一为否即不出声。
-    #[cfg(any(target_os="windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     audio_muted: std::sync::atomic::AtomicBool,
     /// 被控端：**本机**静音（被控者自己在横幅上关的）。一票否决——对端开着也不出声。
     ///
     /// **跨会话保持**：这是隐私意愿，不做自动回退（关了就是关了，下次会话仍是关），
     /// 只有被控者自己再点开才恢复；不落盘，重启应用回到默认「可被听」。
-    #[cfg(any(target_os="windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     audio_local_mute: std::sync::atomic::AtomicBool,
     /// 发起端：从对端 `host_audio` 帧收到的**对方主机侧音频状态**（G3-B/C）。
     /// None = 还没收到（旧对端不发这条帧）。
@@ -666,13 +666,13 @@ impl RcService {
             media_state: Mutex::new(media_control::MediaState::default()),
             link: LinkState::new(),
             pressed: std::sync::Mutex::new(super::pressed::Pressed::new()),
-            #[cfg(any(target_os = "windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             audio_rx: Mutex::new(super::audio::AudioRx::default()),
-            #[cfg(any(target_os="windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             audio_peer_wants: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(any(target_os="windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             audio_muted: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(any(target_os="windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             audio_local_mute: std::sync::atomic::AtomicBool::new(false),
             peer_host_audio: Mutex::new(None),
             spk_mute_by_peer: std::sync::atomic::AtomicBool::new(false),
@@ -689,22 +689,21 @@ impl RcService {
             video_pipe: video_pipe::VideoPipeState::default(),
         }
     }
-
 }
 
 // —— impl RcService 按功能组平移到子模块（2026-09-22 体量合规）——
-mod streaming;
+mod frames_clip;
+mod inbound;
+mod inbound_accept;
+mod input_gate;
+mod key_mode;
+mod lifecycle;
 mod media_control;
 mod notify_audio;
-mod frames_clip;
-mod trust;
-mod lifecycle;
 mod outbound;
-mod inbound;
+mod streaming;
+mod trust;
 mod uno_pass;
-mod inbound_accept;
-mod key_mode;
-mod input_gate;
 // `pub(super)` 而非同批其余的私有 `mod`：推流主循环（`rc::inbound::video_run`）
 // 要读暂停轮询周期这一个常量，为它在 service 上再开一层转发方法不值。
 pub(super) mod video_pause;

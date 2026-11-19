@@ -32,8 +32,8 @@ impl AacEncoder {
     /// 调用方禁用音频——绝不能因此影响视频会话。
     pub fn open(sr: u32) -> Result<Self, String> {
         unsafe {
-            let com_owned = CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
-                .is_ok();
+            let com_owned =
+                CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).is_ok();
             crate::rc::encode_h264::ensure_mf_startup()?;
 
             let in_info = MFT_REGISTER_TYPE_INFO {
@@ -48,11 +48,21 @@ impl AacEncoder {
 
             // 输入：s16 PCM interleaved stereo
             let in_type = MFCreateMediaType().map_err(mf_err)?;
-            in_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).map_err(mf_err)?;
-            in_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM).map_err(mf_err)?;
-            in_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, sr).map_err(mf_err)?;
-            in_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, CHANNELS).map_err(mf_err)?;
-            in_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16).map_err(mf_err)?;
+            in_type
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+                .map_err(mf_err)?;
+            in_type
+                .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)
+                .map_err(mf_err)?;
+            in_type
+                .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, sr)
+                .map_err(mf_err)?;
+            in_type
+                .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, CHANNELS)
+                .map_err(mf_err)?;
+            in_type
+                .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)
+                .map_err(mf_err)?;
             in_type
                 .SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, CHANNELS * 2)
                 .map_err(mf_err)?;
@@ -68,10 +78,8 @@ impl AacEncoder {
                 let Ok(t) = transform.GetOutputAvailableType(0, idx) else {
                     break;
                 };
-                let ok_sr =
-                    t.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND).unwrap_or(0) == sr;
-                let ok_ch =
-                    t.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS).unwrap_or(0) == CHANNELS;
+                let ok_sr = t.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND).unwrap_or(0) == sr;
+                let ok_ch = t.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS).unwrap_or(0) == CHANNELS;
                 if ok_sr && ok_ch {
                     chosen = Some(t);
                     break;
@@ -153,7 +161,8 @@ impl AacEncoder {
                 let mut p: *mut u8 = std::ptr::null_mut();
                 let mut max = 0u32;
                 let mut cur = 0u32;
-                buf.Lock(&mut p, Some(&mut max), Some(&mut cur)).map_err(mf_err)?;
+                buf.Lock(&mut p, Some(&mut max), Some(&mut cur))
+                    .map_err(mf_err)?;
                 if !p.is_null() {
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
                 }
@@ -166,7 +175,9 @@ impl AacEncoder {
                 / self.sr.max(1) as i64;
             sample.SetSampleTime(t100).map_err(mf_err)?;
             sample
-                .SetSampleDuration(AAC_SAMPLES_PER_FRAME as i64 * 10_000_000 / self.sr.max(1) as i64)
+                .SetSampleDuration(
+                    AAC_SAMPLES_PER_FRAME as i64 * 10_000_000 / self.sr.max(1) as i64,
+                )
                 .map_err(mf_err)?;
             self.transform
                 .as_ref()
@@ -207,7 +218,10 @@ impl AacEncoder {
                 if let Ok(buf) = provided.ConvertToContiguousBuffer() {
                     if let Ok(bytes) = lock_buffer(&buf) {
                         if !bytes.is_empty() {
-                            out.push(AacPacket { pts_ms, data: bytes });
+                            out.push(AacPacket {
+                                pts_ms,
+                                data: bytes,
+                            });
                         }
                     }
                 }
@@ -244,7 +258,8 @@ unsafe fn lock_buffer(buf: &IMFMediaBuffer) -> Result<Vec<u8>, String> {
     let mut p: *mut u8 = std::ptr::null_mut();
     let mut max = 0u32;
     let mut cur = 0u32;
-    buf.Lock(&mut p, Some(&mut max), Some(&mut cur)).map_err(mf_err)?;
+    buf.Lock(&mut p, Some(&mut max), Some(&mut cur))
+        .map_err(mf_err)?;
     let n = if cur > 0 { cur as usize } else { max as usize };
     let mut out = vec![0u8; n];
     if !p.is_null() && n > 0 {

@@ -42,11 +42,10 @@ mod imp {
     };
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, DestroyWindow, GetMessageW,
-        GetWindowLongPtrW, PostQuitMessage, RegisterClassW,
-        SetWindowLongPtrW, TranslateMessage, GWLP_USERDATA, HCURSOR, HICON, MSG,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WM_WTSSESSION_CHANGE, WNDCLASSW,
-        WNDCLASS_STYLES,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+        GetWindowLongPtrW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW, TranslateMessage,
+        GWLP_USERDATA, HCURSOR, HICON, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY,
+        WM_WTSSESSION_CHANGE, WNDCLASSW, WNDCLASS_STYLES,
     };
 
     static CLASS_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -63,28 +62,30 @@ mod imp {
     /// 探测/建窗失败都只降级（本会话少一层感知），不上抛——S1 不能因为自己影响会话。
     pub(super) fn start(notify: Sender<bool>) -> u32 {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<u32>();
-        let spawned = std::thread::Builder::new().name("pastepanda-rc-wts".into()).spawn(move || {
-            // 初始探测：会话建立时可能已经锁着。宁可漏报不可谎报。
-            if let Some(locked) = crate::rc::wts_watch::classify_open(
-                crate::rc::wts_watch::open_input_desktop_name(),
-            ) {
-                if notify.send(locked).is_err() {
-                    ready_tx.send(0).ok();
-                    return;
+        let spawned = std::thread::Builder::new()
+            .name("pastepanda-rc-wts".into())
+            .spawn(move || {
+                // 初始探测：会话建立时可能已经锁着。宁可漏报不可谎报。
+                if let Some(locked) = crate::rc::wts_watch::classify_open(
+                    crate::rc::wts_watch::open_input_desktop_name(),
+                ) {
+                    if notify.send(locked).is_err() {
+                        ready_tx.send(0).ok();
+                        return;
+                    }
                 }
-            }
-            match setup(notify) {
-                Ok((hwnd, sink)) => {
-                    let tid = unsafe { GetCurrentThreadId() };
-                    ready_tx.send(tid).ok();
-                    pump(hwnd, sink);
+                match setup(notify) {
+                    Ok((hwnd, sink)) => {
+                        let tid = unsafe { GetCurrentThreadId() };
+                        ready_tx.send(tid).ok();
+                        pump(hwnd, sink);
+                    }
+                    Err(e) => {
+                        log::warn!("[RC] 锁屏感知窗口创建失败，本会话退化为只有初始探测：{e}");
+                        ready_tx.send(0).ok();
+                    }
                 }
-                Err(e) => {
-                    log::warn!("[RC] 锁屏感知窗口创建失败，本会话退化为只有初始探测：{e}");
-                    ready_tx.send(0).ok();
-                }
-            }
-        });
+            });
         match spawned {
             Ok(_) => ready_rx.recv().unwrap_or(0),
             Err(e) => {
@@ -154,7 +155,12 @@ mod imp {
         let _ = sink; // 内存已在上面归还；参数仅表达「泵与它是同一份」
     }
 
-    unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         unsafe {
             if msg == WM_WTSSESSION_CHANGE {
                 // SetWindowLongPtrW 之前的建窗期消息（WM_CREATE 等）拿不到 sink，空指针要挡。
@@ -187,7 +193,9 @@ pub struct WtsWatch {
 #[cfg(target_os = "windows")]
 impl WtsWatch {
     pub fn spawn(notify: std::sync::mpsc::Sender<bool>) -> WtsWatch {
-        WtsWatch { thread_id: imp::start(notify) }
+        WtsWatch {
+            thread_id: imp::start(notify),
+        }
     }
 }
 

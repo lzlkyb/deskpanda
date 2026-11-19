@@ -49,8 +49,14 @@ pub const LINK_STALE_KICK_MS: i64 = 15_000;
 /// 中继曾测到 8 秒级往返；15 秒仅够一两轮恢复，不能按快速直连判死。
 /// 保留有限上界，不以本地持续发送或画面静止为对端仍在线的证据。
 pub fn foreground_heartbeat_timeout_ms(relay: bool, rtt_ms: i64) -> i64 {
-    if !relay { return LINK_STALE_KICK_MS; }
-    rtt_ms.max(0).saturating_mul(4).saturating_add(5_000).clamp(30_000, 45_000)
+    if !relay {
+        return LINK_STALE_KICK_MS;
+    }
+    rtt_ms
+        .max(0)
+        .saturating_mul(4)
+        .saturating_add(5_000)
+        .clamp(30_000, 45_000)
 }
 
 #[cfg(test)]
@@ -61,14 +67,32 @@ mod relay_timeout_tests {
     fn slow_relay_recovers_before_a_bounded_disconnect() {
         let timeout = foreground_heartbeat_timeout_ms(true, 8_307);
         assert_eq!(timeout, 38_228);
-        assert_eq!(peer_bg_watchdog(0, 100_000, 100_000, 115_001, timeout), None);
-        assert_eq!(peer_bg_watchdog(0, 100_000, 100_000, 138_229, timeout), Some("对端失联（心跳超时）"));
-        assert_eq!(peer_bg_watchdog(0, 100_000, 138_000, 138_229, timeout), None);
+        assert_eq!(
+            peer_bg_watchdog(0, 100_000, 100_000, 115_001, timeout),
+            None
+        );
+        assert_eq!(
+            peer_bg_watchdog(0, 100_000, 100_000, 138_229, timeout),
+            Some("对端失联（心跳超时）")
+        );
+        assert_eq!(
+            peer_bg_watchdog(0, 100_000, 138_000, 138_229, timeout),
+            None
+        );
         assert_eq!(foreground_heartbeat_timeout_ms(true, 0), 30_000);
         assert_eq!(foreground_heartbeat_timeout_ms(true, i64::MAX), 45_000);
-        assert_eq!(foreground_heartbeat_timeout_ms(false, 8_307), LINK_STALE_KICK_MS);
-        assert_eq!(peer_bg_watchdog(0, 100_000, 100_000, 115_001, LINK_STALE_KICK_MS), Some("对端失联（心跳超时）"));
-        assert_eq!(peer_bg_watchdog(100_000, 100_000, 100_000, 400_000, timeout), Some("对端后台失联（心跳超时）"));
+        assert_eq!(
+            foreground_heartbeat_timeout_ms(false, 8_307),
+            LINK_STALE_KICK_MS
+        );
+        assert_eq!(
+            peer_bg_watchdog(0, 100_000, 100_000, 115_001, LINK_STALE_KICK_MS),
+            Some("对端失联（心跳超时）")
+        );
+        assert_eq!(
+            peer_bg_watchdog(100_000, 100_000, 100_000, 400_000, timeout),
+            Some("对端后台失联（心跳超时）")
+        );
     }
 }
 
@@ -82,7 +106,12 @@ mod relay_timeout_tests {
 /// - 两个都是 0（调用方连会话开始时间都没给）→ **不踢**。宁可漏踢一次
 ///   （还有 TTL 兜底），也不能因为拿不到数据就收掉别人正在用的会话。
 /// - 边界取严格 `>`：正好卡在阈值上不算失联（与 `should_pause` 同口径）。
-pub fn link_stale_kick(started_ms: i64, last_evidence_ms: i64, now_ms: i64, timeout_ms: i64) -> bool {
+pub fn link_stale_kick(
+    started_ms: i64,
+    last_evidence_ms: i64,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> bool {
     let base = started_ms.max(last_evidence_ms);
     base > 0 && now_ms - base > timeout_ms
 }
@@ -265,7 +294,12 @@ impl LinkState {
     /// session/path 由 reducer 递增；继续填 0 会让 attach 后的正常事件全部被拒。
     /// 本方法单独取锁，调用方必须在取得快照后再锁 sched 喂事件。
     fn sched_epoch(&self) -> super::link_sched::SchedEpoch {
-        let mut epoch = self.sched.lock().unwrap_or_else(|p| p.into_inner()).snapshot().epoch;
+        let mut epoch = self
+            .sched
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .snapshot()
+            .epoch;
         epoch.network = self.network_gen.load(Ordering::Relaxed);
         epoch
     }
@@ -284,16 +318,17 @@ impl LinkState {
         *self.last_pong_ms.lock().unwrap_or_else(|p| p.into_inner()) = 0;
         self.last_inbound_ms.store(0, Ordering::Relaxed);
         // 🔴 P1-5：连接真通的那一刻起表，看门狗拿它当「本会话最早的链路证据」
-        self.attached_ms.store(super::mono::mono_ms(), Ordering::Relaxed);
+        self.attached_ms
+            .store(super::mono::mono_ms(), Ordering::Relaxed);
         *self.reported.lock().unwrap_or_else(|p| p.into_inner()) = PathKind::None;
         *self.rtt.lock().unwrap_or_else(|p| p.into_inner()) = RttAcc::default();
         // 🔴 P1：调度状态机进新会话世代（旧会话的迟到事件从此被 fence）。
         // 单独取锁、不与上面任何一个锁嵌套——锁序纪律与 `sched_state_str` 同。
         let epoch = self.sched_epoch();
-        self.sched
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .reduce(super::link_sched::SchedEvent::Attached { epoch }, super::mono::mono_ms());
+        self.sched.lock().unwrap_or_else(|p| p.into_inner()).reduce(
+            super::link_sched::SchedEvent::Attached { epoch },
+            super::mono::mono_ms(),
+        );
     }
 
     /// 会话收尾：交回本次走的路与网速摘要（落库/历史用）并清空。
@@ -312,10 +347,10 @@ impl LinkState {
         *self.rtt.lock().unwrap_or_else(|p| p.into_inner()) = RttAcc::default();
         // 🔴 P1：调度相位回 Unbound（epoch 不匹配的迟到 detach 会被状态机拒）。
         let epoch = self.sched_epoch();
-        self.sched
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .reduce(super::link_sched::SchedEvent::Detached { epoch }, super::mono::mono_ms());
+        self.sched.lock().unwrap_or_else(|p| p.into_inner()).reduce(
+            super::link_sched::SchedEvent::Detached { epoch },
+            super::mono::mono_ms(),
+        );
         LinkEnd {
             path,
             rtt_min,
@@ -334,13 +369,10 @@ impl LinkState {
             .push(rtt_ms);
         // 🔴 P1：pong 是恢复证据——Degraded 中的一条 pong 把相位推进 Recovering。
         let epoch = self.sched_epoch();
-        self.sched
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .reduce(
-                super::link_sched::SchedEvent::PongObserved { epoch, rtt_ms },
-                super::mono::mono_ms(),
-            );
+        self.sched.lock().unwrap_or_else(|p| p.into_inner()).reduce(
+            super::link_sched::SchedEvent::PongObserved { epoch, rtt_ms },
+            super::mono::mono_ms(),
+        );
     }
 
     /// 最后一次 pong 的时刻（单调 ms，见字段注释）；0 = 本会话还没收到过。
@@ -421,13 +453,10 @@ impl LinkState {
         // 换路本身算新证据：Degraded 中观测到换路 → Recovering（path 世代 +1）。
         if let Some((from, to)) = change {
             let epoch = self.sched_epoch();
-            self.sched
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .reduce(
-                    super::link_sched::SchedEvent::PathChanged { epoch, from, to },
-                    super::mono::mono_ms(),
-                );
+            self.sched.lock().unwrap_or_else(|p| p.into_inner()).reduce(
+                super::link_sched::SchedEvent::PathChanged { epoch, from, to },
+                super::mono::mono_ms(),
+            );
         }
         change
     }
@@ -437,13 +466,10 @@ impl LinkState {
     /// 只在**真判了失联**时喂：`None`/`false` 不产生任何事件。
     pub fn note_evidence_lost(&self) {
         let epoch = self.sched_epoch();
-        self.sched
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .reduce(
-                super::link_sched::SchedEvent::EvidenceLost { epoch },
-                super::mono::mono_ms(),
-            );
+        self.sched.lock().unwrap_or_else(|p| p.into_inner()).reduce(
+            super::link_sched::SchedEvent::EvidenceLost { epoch },
+            super::mono::mono_ms(),
+        );
     }
 
     /// 调度相位快照（status 投影用）。**查询带一步 `poll`**：Recovering
@@ -455,7 +481,10 @@ impl LinkState {
             let mut sched = self.sched.lock().unwrap_or_else(|p| p.into_inner());
             sched.poll(now);
         }
-        self.sched.lock().unwrap_or_else(|p| p.into_inner()).snapshot()
+        self.sched
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .snapshot()
     }
 
     /// 调度相位的稳定字符串（`stable` / `degraded` / `recovering` / 空串）。
@@ -475,11 +504,20 @@ mod tests {
         let link = LinkState::new();
         // 只替代连接建立；后续走实际观测入口，防 reducer 单测全绿而接线失效。
         let epoch = link.sched_epoch();
-        link.sched.lock().unwrap().reduce(SchedEvent::Attached { epoch }, 100);
+        link.sched
+            .lock()
+            .unwrap()
+            .reduce(SchedEvent::Attached { epoch }, 100);
         link.note_evidence_lost();
-        assert!(matches!(link.sched_snapshot().phase, Phase::Degraded { .. }));
+        assert!(matches!(
+            link.sched_snapshot().phase,
+            Phase::Degraded { .. }
+        ));
         link.note_pong(20);
-        assert!(matches!(link.sched_snapshot().phase, Phase::Recovering { .. }));
+        assert!(matches!(
+            link.sched_snapshot().phase,
+            Phase::Recovering { .. }
+        ));
         assert_eq!(link.sched_snapshot().rejected, 0);
     }
 
@@ -488,7 +526,10 @@ mod tests {
         use super::super::link_sched::{Phase, SchedEvent};
         let link = LinkState::new();
         let epoch = link.sched_epoch();
-        link.sched.lock().unwrap().reduce(SchedEvent::Attached { epoch }, 100);
+        link.sched
+            .lock()
+            .unwrap()
+            .reduce(SchedEvent::Attached { epoch }, 100);
         link.detach();
         assert_eq!(link.sched_snapshot().phase, Phase::Unbound);
         assert_eq!(link.sched_snapshot().rejected, 0);
@@ -505,17 +546,32 @@ mod tests {
             Some("对端失联（心跳超时）")
         );
         // 前台 + 心跳正常 → 不收口
-        assert_eq!(peer_bg_watchdog(0, 100_000, 115_000, 115_001, LINK_STALE_KICK_MS), None);
+        assert_eq!(
+            peer_bg_watchdog(0, 100_000, 115_000, 115_001, LINK_STALE_KICK_MS),
+            None
+        );
         // 后台 4 分 59 秒：就算心跳全断（进程已冻结）也不许收口
         assert_eq!(
-            peer_bg_watchdog(100_000, 90_000, 100_000, 100_000 + PEER_BG_TTL_MS - 1, LINK_STALE_KICK_MS),
+            peer_bg_watchdog(
+                100_000,
+                90_000,
+                100_000,
+                100_000 + PEER_BG_TTL_MS - 1,
+                LINK_STALE_KICK_MS
+            ),
             None,
             "TTL 内的后台必须扛住失联判定，否则保活白做"
         );
         // 后台满 5 分钟：收口（进程冻结后对端连 BgResume 都发不出来，
         // 这个 TTL 是唯一的最后期限，绝不能放宽成「永不收口」）
         assert_eq!(
-            peer_bg_watchdog(100_000, 90_000, 100_000, 100_000 + PEER_BG_TTL_MS, LINK_STALE_KICK_MS),
+            peer_bg_watchdog(
+                100_000,
+                90_000,
+                100_000,
+                100_000 + PEER_BG_TTL_MS,
+                LINK_STALE_KICK_MS
+            ),
             Some("对端后台失联（心跳超时）")
         );
         // 健康后台超过 5 分钟仍保活；最后心跳丢失后才开始累计失联时间。
@@ -523,8 +579,26 @@ mod tests {
             peer_bg_watchdog(100_000, 90_000, 700_000, 700_001, LINK_STALE_KICK_MS),
             None
         );
-        assert_eq!(peer_bg_watchdog(100_000, 90_000, 700_000, 700_000 + PEER_BG_TTL_MS - 1, LINK_STALE_KICK_MS), None);
-        assert_eq!(peer_bg_watchdog(100_000, 90_000, 700_000, 700_000 + PEER_BG_TTL_MS, LINK_STALE_KICK_MS), Some("对端后台失联（心跳超时）"));
+        assert_eq!(
+            peer_bg_watchdog(
+                100_000,
+                90_000,
+                700_000,
+                700_000 + PEER_BG_TTL_MS - 1,
+                LINK_STALE_KICK_MS
+            ),
+            None
+        );
+        assert_eq!(
+            peer_bg_watchdog(
+                100_000,
+                90_000,
+                700_000,
+                700_000 + PEER_BG_TTL_MS,
+                LINK_STALE_KICK_MS
+            ),
+            Some("对端后台失联（心跳超时）")
+        );
         assert_eq!(peer_bg_watchdog(0, 0, 0, 700_000, LINK_STALE_KICK_MS), None);
     }
 
@@ -564,11 +638,18 @@ mod tests {
         l.note_pong(20);
         let now = crate::rc::mono::mono_ms();
         let age = l.pong_age_ms(now).expect("收到 pong 后应有 age");
-        assert!((0..5_000).contains(&age), "刚收到的 pong age 必须很小：{age}");
+        assert!(
+            (0..5_000).contains(&age),
+            "刚收到的 pong age 必须很小：{age}"
+        );
         // 假时钟外推：把「现在」拨后 10s，age 线性增长
         assert_eq!(l.pong_age_ms(now + 10_000), Some(age + 10_000));
         let _ = l.detach();
-        assert_eq!(l.pong_age_ms(crate::rc::mono::mono_ms()), None, "detach 后回 None");
+        assert_eq!(
+            l.pong_age_ms(crate::rc::mono::mono_ms()),
+            None,
+            "detach 后回 None"
+        );
     }
 
     #[test]
@@ -683,23 +764,48 @@ mod tests {
     #[test]
     fn test_有pong证据时按最后一次算() {
         // 会话 0s 开始，第 10s 收到 pong，此后 12s 无响应 ⇒ 距最后一次证据 12s < 15s
-        assert!(!link_stale_kick(T, T + 10_000, T + 22_000, LINK_STALE_KICK_MS));
+        assert!(!link_stale_kick(
+            T,
+            T + 10_000,
+            T + 22_000,
+            LINK_STALE_KICK_MS
+        ));
         // 再撑 3s，超过 15s ⇒ 踢
-        assert!(link_stale_kick(T, T + 10_000, T + 25_001, LINK_STALE_KICK_MS));
+        assert!(link_stale_kick(
+            T,
+            T + 10_000,
+            T + 25_001,
+            LINK_STALE_KICK_MS
+        ));
     }
 
     #[test]
     fn test_阈值边界正好卡住不算失联() {
         // 严格 `>`：正好 15s 还在容忍范围内（与 should_pause 同口径）
-        assert!(!link_stale_kick(T, T, T + LINK_STALE_KICK_MS, LINK_STALE_KICK_MS));
-        assert!(link_stale_kick(T, T, T + LINK_STALE_KICK_MS + 1, LINK_STALE_KICK_MS));
+        assert!(!link_stale_kick(
+            T,
+            T,
+            T + LINK_STALE_KICK_MS,
+            LINK_STALE_KICK_MS
+        ));
+        assert!(link_stale_kick(
+            T,
+            T,
+            T + LINK_STALE_KICK_MS + 1,
+            LINK_STALE_KICK_MS
+        ));
     }
 
     #[test]
     fn test_还没收到任何证据时从会话开始算宽限() {
         // evidence = 0（新会话一条心跳都没收到）⇒ 锚点回落 started_ms，不能立刻踢
         assert!(!link_stale_kick(T, 0, T + 5_000, LINK_STALE_KICK_MS));
-        assert!(link_stale_kick(T, 0, T + LINK_STALE_KICK_MS + 1, LINK_STALE_KICK_MS));
+        assert!(link_stale_kick(
+            T,
+            0,
+            T + LINK_STALE_KICK_MS + 1,
+            LINK_STALE_KICK_MS
+        ));
         // 两个都没有（拿不到数据）⇒ 宁可漏踢，交给 TTL 兜底
         assert!(!link_stale_kick(0, 0, T, LINK_STALE_KICK_MS));
     }
@@ -707,7 +813,12 @@ mod tests {
     #[test]
     fn test_证据早于会话开始时以会话为准_不被上一场的心跳续命() {
         // 极端但真实：link 上残留着旧会话的 pong，新会话刚开始
-        assert!(link_stale_kick(T, T - 60_000, T + LINK_STALE_KICK_MS + 1, LINK_STALE_KICK_MS));
+        assert!(link_stale_kick(
+            T,
+            T - 60_000,
+            T + LINK_STALE_KICK_MS + 1,
+            LINK_STALE_KICK_MS
+        ));
     }
 
     #[test]
@@ -717,14 +828,7 @@ mod tests {
         // 否则半开连接要挂两个小时才释放。
         // 两边都是常量 ⇒ 用 const 块让它在**编译期**就拦住，而不是跑测试才发现
         // （`clippy::assertions_on_constants` 也要求这个形态）。
-        const {
-            assert!(
-                LINK_STALE_KICK_MS > 3_500 * 3,
-                "得给心跳留足重传余量"
-            )
-        };
-        const {
-            assert!(LINK_STALE_KICK_MS < 60_000, "半开不该挂一分钟以上")
-        };
+        const { assert!(LINK_STALE_KICK_MS > 3_500 * 3, "得给心跳留足重传余量") };
+        const { assert!(LINK_STALE_KICK_MS < 60_000, "半开不该挂一分钟以上") };
     }
 }

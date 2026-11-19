@@ -204,7 +204,10 @@ impl FrameStats {
         if since.as_millis() < REPORT_INTERVAL_MS as u128 {
             return None;
         }
-        let elapsed_s = self.start.map(|s| now.duration_since(s).as_secs_f64()).unwrap_or(0.0);
+        let elapsed_s = self
+            .start
+            .map(|s| now.duration_since(s).as_secs_f64())
+            .unwrap_or(0.0);
         let interval_frames = self.frames.saturating_sub(self.last_frames);
         let interval_s = since.as_secs_f64().max(0.001);
         let fps = interval_frames as f64 / interval_s;
@@ -304,10 +307,7 @@ impl FrameStats {
         if !enabled() || self.frames + self.idle_frames == 0 {
             return None;
         }
-        let elapsed_s = self
-            .start
-            .map(|s| s.elapsed().as_secs_f64())
-            .unwrap_or(0.0);
+        let elapsed_s = self.start.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
         // ⚠️ 均帧率只在**跑了足够久**时才有意义：`elapsed_s` 趋近 0 时
         // `frames / elapsed_s` 会爆出一个荒谬数字（实测短会话打出
         // 「均 34823.0fps」）。低于 1s 的会话改用 `--` 表示「不可测」，

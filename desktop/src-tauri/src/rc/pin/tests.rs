@@ -262,7 +262,10 @@ fn 双确认错序时先点侧也能落库() {
         })
     );
     assert!(s_a.rc_device_get("bb").unwrap().is_some());
-    assert!(s_b.rc_device_get("aa").unwrap().is_some(), "先点侧也必须落库");
+    assert!(
+        s_b.rc_device_get("aa").unwrap().is_some(),
+        "先点侧也必须落库"
+    );
 }
 
 /// 超时的会话：确认落空、界面也不再显示。
@@ -521,10 +524,7 @@ fn 伪造pin_ok无证明或错证明不得落库() {
     };
     assert!(a.on_resp("bb", &pk_b, T0));
     // A 已点确认，在等对方 pin_ok——此刻伪造最容易得手
-    assert!(matches!(
-        a.confirm(T0 + 1).0,
-        Confirmed::Waiting { .. }
-    ));
+    assert!(matches!(a.confirm(T0 + 1).0, Confirmed::Waiting { .. }));
 
     // ① 无 proof：中间人偷换 kind 冒充 pin_ok 的典型形态
     assert_eq!(
@@ -569,14 +569,26 @@ fn pin_ok_proof_往返与分道() {
     let shared = [7u8; 32];
     let p = pin_ok_proof(&shared, "aa", "bb", T0);
     assert!(verify_pin_ok_proof(&shared, "aa", "bb", T0, &p));
-    assert!(!verify_pin_ok_proof(&shared, "aa", "bb", T0, ""), "空 proof 拒");
-    assert!(!verify_pin_ok_proof(&shared, "aa", "bb", T0, "00"), "错 proof 拒");
+    assert!(
+        !verify_pin_ok_proof(&shared, "aa", "bb", T0, ""),
+        "空 proof 拒"
+    );
+    assert!(
+        !verify_pin_ok_proof(&shared, "aa", "bb", T0, "00"),
+        "错 proof 拒"
+    );
     assert!(
         !verify_pin_ok_proof(&shared, "aa", "cc", T0, &p),
         "to_id 必须进绑定"
     );
-    assert!(!verify_pin_ok_proof(&shared, "bb", "bb", T0, &p), "node_id 必须进绑定");
-    assert!(!verify_pin_ok_proof(&shared, "aa", "bb", T0 + 1, &p), "ts 必须进绑定");
+    assert!(
+        !verify_pin_ok_proof(&shared, "bb", "bb", T0, &p),
+        "node_id 必须进绑定"
+    );
+    assert!(
+        !verify_pin_ok_proof(&shared, "aa", "bb", T0 + 1, &p),
+        "ts 必须进绑定"
+    );
     let other = [8u8; 32];
     assert!(
         !verify_pin_ok_proof(&other, "aa", "bb", T0, &p),

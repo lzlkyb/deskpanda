@@ -45,25 +45,40 @@ pub fn encode_jpeg(rgb: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>, S
     }
     #[cfg(target_os = "macos")]
     {
-        let pixels=u64::from(w)*u64::from(h);
-        if w==0 || h==0 || pixels>40_000_000 {return Err("JPEG 像素尺寸或缓冲无效".into());}
-        let required=pixels*3;
-        if required>rgb.len() as u64 {return Err("JPEG 像素尺寸或缓冲无效".into());}
-        if let Ok(output)=native_mac_jpeg(&rgb[..required as usize],w,h,quality.clamp(1,100)){return Ok(output);}
-        let mut output=Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output,quality.clamp(1,100))
-            .encode(&rgb[..required as usize],w,h,image::ExtendedColorType::Rgb8)
-            .map_err(|e|format!("Mac JPEG 编码失败：{e}"))?;
+        let pixels = u64::from(w) * u64::from(h);
+        if w == 0 || h == 0 || pixels > 40_000_000 {
+            return Err("JPEG 像素尺寸或缓冲无效".into());
+        }
+        let required = pixels * 3;
+        if required > rgb.len() as u64 {
+            return Err("JPEG 像素尺寸或缓冲无效".into());
+        }
+        if let Ok(output) = native_mac_jpeg(&rgb[..required as usize], w, h, quality.clamp(1, 100))
+        {
+            return Ok(output);
+        }
+        let mut output = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, quality.clamp(1, 100))
+            .encode(
+                &rgb[..required as usize],
+                w,
+                h,
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| format!("Mac JPEG 编码失败：{e}"))?;
         Ok(output)
     }
-    #[cfg(not(any(target_os = "windows",target_os = "macos")))]
-    {let _=(rgb,w,h,quality);Err("当前平台没有 JPEG 编码器".into())}
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (rgb, w, h, quality);
+        Err("当前平台没有 JPEG 编码器".into())
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod win {
     use windows::core::{GUID, HSTRING, PWSTR, VARIANT};
-    use windows::Win32::Foundation::{HGLOBAL, BOOL};
+    use windows::Win32::Foundation::{BOOL, HGLOBAL};
     use windows::Win32::Graphics::Imaging::*;
     // CreateStreamOnHGlobal 在 StructuredStorage 子模块，不在 Com 根上。
     use windows::Win32::System::Com::StructuredStorage::{
@@ -147,12 +162,7 @@ mod win {
         props.Write(1, &pb, &VARIANT::from(v))
     }
 
-    unsafe fn encode_bgr_inner(
-        bgr: &[u8],
-        w: u32,
-        h: u32,
-        quality: u8,
-    ) -> Result<Vec<u8>, String> {
+    unsafe fn encode_bgr_inner(bgr: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>, String> {
         let factory: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| format!("创建 WIC factory 失败：{e}"))?;
@@ -193,7 +203,9 @@ mod win {
         frame
             .Initialize(props.as_ref())
             .map_err(|e| format!("初始化编码帧失败：{e}"))?;
-        frame.SetSize(w, h).map_err(|e| format!("设置帧尺寸失败：{e}"))?;
+        frame
+            .SetSize(w, h)
+            .map_err(|e| format!("设置帧尺寸失败：{e}"))?;
 
         // SetPixelFormat 的 in/out 语义：回写的是**实际接受**的格式，数据必须按它组织。
         let mut fmt = GUID_WICPixelFormat24bppBGR;
@@ -210,7 +222,9 @@ mod win {
             .WritePixels(h, w * 3, bgr)
             .map_err(|e| format!("写像素失败：{e}"))?;
         frame.Commit().map_err(|e| format!("提交帧失败：{e}"))?;
-        encoder.Commit().map_err(|e| format!("提交编码器失败：{e}"))?;
+        encoder
+            .Commit()
+            .map_err(|e| format!("提交编码器失败：{e}"))?;
 
         let mut stat = STATSTG::default();
         stream
@@ -277,7 +291,11 @@ mod tests {
     fn 编码后红蓝不得颠倒() {
         let (w, h) = (96u32, 32u32);
         let jpg = encode_jpeg(&stripes_rgb(w, h), w, h, 90).expect("WIC 编码应成功");
-        assert!(jpg.len() > 100, "产物只有 {} 字节，不像有效 JPEG", jpg.len());
+        assert!(
+            jpg.len() > 100,
+            "产物只有 {} 字节，不像有效 JPEG",
+            jpg.len()
+        );
 
         let img = image::load_from_memory_with_format(&jpg, image::ImageFormat::Jpeg)
             .expect("产物应能被解码")
@@ -409,22 +427,76 @@ mod tests {
     }
 }
 
-#[cfg(all(test,target_os="macos"))]
-mod mac_tests{
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
     use super::*;
-    #[test]fn rgb_channels_and_bounds(){
-        let mut pixels=Vec::new();for _ in 0..32 {for x in 0..96 {pixels.extend_from_slice(if x<32 {&[255,0,0]}else if x<64{&[0,255,0]}else{&[0,0,255]});}}
-        let jpeg=encode_jpeg(&pixels,96,32,95).unwrap();let image=image::load_from_memory(&jpeg).unwrap().to_rgb8();
-        for (x,channel) in [(16,0),(48,1),(80,2)] {let p=image.get_pixel(x,16);assert!(p[channel]>220);for i in 0..3 {if i!=channel {assert!(p[i]<30);}}}
-        assert!(encode_jpeg(&[],96,32,95).is_err());assert!(encode_jpeg(&[],u32::MAX,u32::MAX,95).is_err());
+    #[test]
+    fn rgb_channels_and_bounds() {
+        let mut pixels = Vec::new();
+        for _ in 0..32 {
+            for x in 0..96 {
+                pixels.extend_from_slice(if x < 32 {
+                    &[255, 0, 0]
+                } else if x < 64 {
+                    &[0, 255, 0]
+                } else {
+                    &[0, 0, 255]
+                });
+            }
+        }
+        let jpeg = encode_jpeg(&pixels, 96, 32, 95).unwrap();
+        let image = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        for (x, channel) in [(16, 0), (48, 1), (80, 2)] {
+            let p = image.get_pixel(x, 16);
+            assert!(p[channel] > 220);
+            for i in 0..3 {
+                if i != channel {
+                    assert!(p[i] < 30);
+                }
+            }
+        }
+        assert!(encode_jpeg(&[], 96, 32, 95).is_err());
+        assert!(encode_jpeg(&[], u32::MAX, u32::MAX, 95).is_err());
     }
 }
 
-#[cfg(target_os="macos")]
-fn native_mac_jpeg(rgb:&[u8],w:u32,h:u32,quality:u8)->Result<Vec<u8>,String>{
-    extern "C" {fn pp_rc_jpeg(rgb:*const u8,len:usize,w:u32,h:u32,quality:u8,output:*mut *mut u8,bytes:*mut usize)->i32;fn pp_mac_free(memory:*mut std::ffi::c_void);}
-    let (mut memory,mut length)=(std::ptr::null_mut(),0);let code=unsafe{pp_rc_jpeg(rgb.as_ptr(),rgb.len(),w,h,quality,&mut memory,&mut length)};
-    struct Owned(*mut u8);impl Drop for Owned{fn drop(&mut self){if !self.0.is_null(){unsafe{pp_mac_free(self.0.cast())}}}}
-    let owned=Owned(memory);if code!=0 || owned.0.is_null() || length==0 || length>64*1024*1024{return Err("Mac 原生 JPEG 编码失败".into());}
-    Ok(unsafe{std::slice::from_raw_parts(owned.0,length)}.to_vec())
+#[cfg(target_os = "macos")]
+fn native_mac_jpeg(rgb: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>, String> {
+    extern "C" {
+        fn pp_rc_jpeg(
+            rgb: *const u8,
+            len: usize,
+            w: u32,
+            h: u32,
+            quality: u8,
+            output: *mut *mut u8,
+            bytes: *mut usize,
+        ) -> i32;
+        fn pp_mac_free(memory: *mut std::ffi::c_void);
+    }
+    let (mut memory, mut length) = (std::ptr::null_mut(), 0);
+    let code = unsafe {
+        pp_rc_jpeg(
+            rgb.as_ptr(),
+            rgb.len(),
+            w,
+            h,
+            quality,
+            &mut memory,
+            &mut length,
+        )
+    };
+    struct Owned(*mut u8);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { pp_mac_free(self.0.cast()) }
+            }
+        }
+    }
+    let owned = Owned(memory);
+    if code != 0 || owned.0.is_null() || length == 0 || length > 64 * 1024 * 1024 {
+        return Err("Mac 原生 JPEG 编码失败".into());
+    }
+    Ok(unsafe { std::slice::from_raw_parts(owned.0, length) }.to_vec())
 }

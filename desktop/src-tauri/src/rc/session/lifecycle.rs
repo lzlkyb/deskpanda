@@ -9,13 +9,13 @@
 //! 2026-09-22：impl 块从 `session.rs` 平移到本子文件（体量合规），字段可见性
 //! `pub(in crate::rc)` 语义不变。
 
-use crate::rc::protocol::{Capability, RcFrame, SessionPhase};
-use crate::rc::service::{AutoReconnect, RcService};
 use super::{
-    is_active, Session, RECONNECT_BASE_DELAY_MS, RECONNECT_MAX_ATTEMPTS,
-    RECONNECT_SETTLE_POLLS, RECONNECT_SETTLE_POLL_MS,
+    is_active, Session, RECONNECT_BASE_DELAY_MS, RECONNECT_MAX_ATTEMPTS, RECONNECT_SETTLE_POLLS,
+    RECONNECT_SETTLE_POLL_MS,
 };
 use crate::rc::history::{append_history, HistoryFacts};
+use crate::rc::protocol::{Capability, RcFrame, SessionPhase};
+use crate::rc::service::{AutoReconnect, RcService};
 use std::sync::Arc;
 
 impl RcService {
@@ -201,7 +201,7 @@ impl RcService {
             // 换个对端申请音频也听不到，无报错无横幅。接线补在这里，与
             // `reset_stream_after_session` 同层（inner 锁已放出）。
             // 音频状态是 Windows 宿主专属字段，mobile 下无可清，整条跳过。
-            #[cfg(any(target_os = "windows",target_os="macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             self.audio_reset();
             // 乙-③：输入权同样随会话收口作废——收回位留着＝下一场会话没人点按钮
             // 却把对端键鼠全拦下；授权位留着＝把「本次」偷偷变成「长期」。
@@ -218,7 +218,10 @@ impl RcService {
             // Q6：收口顺手清自动重连状态。异常断流路径的顺序是 force_end（清）→
             // begin（重建），这里清掉不碍触发；它兜的是「用户主动结束」要清掉
             // 残留的「重连中/重连失败」横幅——用户已经自己做了决定。
-            *self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            *self
+                .auto_reconnect
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = None;
         }
         // 收口时清空注入错误（已被前端看到或已无意义）
         self.notify.take_inject_err();
@@ -348,7 +351,8 @@ impl RcService {
     /// 两端使用同一恢复预算，慢中继与快速直连不能共用固定 15 秒判据。
     pub(in crate::rc) fn heartbeat_timeout_ms(&self) -> i64 {
         crate::rc::link::foreground_heartbeat_timeout_ms(
-            self.link.path_kind_str() == "relay", self.video_rtt_ms(),
+            self.link.path_kind_str() == "relay",
+            self.video_rtt_ms(),
         )
     }
 
@@ -360,7 +364,11 @@ impl RcService {
     pub fn note_peer_background(&self, paused: bool) {
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(s) = inner.session.as_mut() {
-            s.bg_since_mono = if paused { crate::rc::mono::mono_ms() } else { 0 };
+            s.bg_since_mono = if paused {
+                crate::rc::mono::mono_ms()
+            } else {
+                0
+            };
         }
     }
 
@@ -368,11 +376,7 @@ impl RcService {
     /// （看门狗遇 0 按前台判，保守）。
     pub fn peer_background_since(&self) -> i64 {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        inner
-            .session
-            .as_ref()
-            .map(|s| s.bg_since_mono)
-            .unwrap_or(0)
+        inner.session.as_ref().map(|s| s.bg_since_mono).unwrap_or(0)
     }
 
     /// 🔴 P1-5：发起端 — 被控端是否已经失联（同一判据的镜像侧）。
@@ -433,7 +437,10 @@ impl RcService {
     /// Q6：用户手动发起时清自动重连 episode（含 gave_up 残留横幅）。
     /// `pub`：commands::rc_request_session（rc 模块外）在用户动作入口调用。
     pub fn clear_auto_reconnect(&self) {
-        *self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .auto_reconnect
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
     }
 
     /// 🔴 D12（2026-09-22 审计）：等这一轮重连**落地**，返回是否成功。
@@ -493,14 +500,13 @@ impl RcService {
 
     /// 收口前取一场会话的（能力、设备名），供自动重连发起点用。
     /// 只认 session id（与 `session_id_is` 同一纪律：不按 peer 认领）。
-    pub(in crate::rc) fn session_brief_if(
-        &self,
-        session_id: &str,
-    ) -> Option<(Capability, String)> {
+    pub(in crate::rc) fn session_brief_if(&self, session_id: &str) -> Option<(Capability, String)> {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        inner.session.as_ref().filter(|s| s.id == session_id).map(|s| {
-            (s.capability, s.peer_name.clone())
-        })
+        inner
+            .session
+            .as_ref()
+            .filter(|s| s.id == session_id)
+            .map(|s| (s.capability, s.peer_name.clone()))
     }
 
     /// Q6：免确认设备异常断流后自动重连（发起端）。
@@ -520,7 +526,10 @@ impl RcService {
             .reconnect_epoch
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
-            let mut st = self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner());
+            let mut st = self
+                .auto_reconnect
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             if let Some(s) = st.as_ref() {
                 if s.peer == peer && !s.gave_up {
                     // episode 已在跑（任务自己在循环重试），不叠加第二个

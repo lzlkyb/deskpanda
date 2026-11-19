@@ -102,7 +102,10 @@ pub enum InputEvent {
         media: Option<super::media_flow::MediaFeedback>,
     },
     /// 本地上屏打点，由 send_input 消费，不发给旧版本对端。
-    FramePresented { session_id: String, at_ms: i64 },
+    FramePresented {
+        session_id: String,
+        at_ms: i64,
+    },
     /// 发起端设置「码率倍率」（Q5，50–200，100 = 跟随链路）。与 RTT/丢包的
     /// 自动缩放**相乘**合成——用户调高也不会越过弱网保护，只是抬天花板。
     /// 不注入本机、不要求 Control（只看会话也该能调自己看到的画质）。
@@ -368,9 +371,18 @@ impl ScreenRegion {
                 h: vh.max(1),
             }
         }
-        #[cfg(target_os="macos")]
-        {crate::rc::mac_input::region().map(|(r,_)|r).unwrap_or(Self{x:0,y:0,w:1,h:1})}
-        #[cfg(not(any(target_os = "windows",target_os="macos")))]
+        #[cfg(target_os = "macos")]
+        {
+            crate::rc::mac_input::region()
+                .map(|(r, _)| r)
+                .unwrap_or(Self {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                })
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             Self {
                 x: 0,
@@ -391,10 +403,18 @@ impl ScreenRegion {
 /// 而这种错在真机上要逐像素比对才看得出来。所以判定只此一份。
 pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
     if opts.monitor >= 0 {
-        #[cfg(target_os="macos")]
+        #[cfg(target_os = "macos")]
         {
-            return crate::macos::screen::monitors().ok().and_then(|list|list.into_iter().find(|m|m.index==opts.monitor))
-                .map(|m|ScreenRegion{x:m.x,y:m.y,w:m.w,h:m.h}).unwrap_or_else(ScreenRegion::virtual_screen);
+            return crate::macos::screen::monitors()
+                .ok()
+                .and_then(|list| list.into_iter().find(|m| m.index == opts.monitor))
+                .map(|m| ScreenRegion {
+                    x: m.x,
+                    y: m.y,
+                    w: m.w,
+                    h: m.h,
+                })
+                .unwrap_or_else(ScreenRegion::virtual_screen);
         }
         // 指定屏几何是 Windows 宿主能力（mobile 无多屏采集）
         #[cfg(target_os = "windows")]
@@ -404,22 +424,30 @@ pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
                 Err(_) => ScreenRegion::virtual_screen(),
             }
         }
-        #[cfg(not(any(target_os = "windows",target_os="macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             ScreenRegion::virtual_screen()
         }
     } else if opts.virtual_screen {
         ScreenRegion::virtual_screen()
     } else {
-        #[cfg(target_os="macos")]
-        { return crate::macos::screen::primary().map(|m|ScreenRegion{x:m.x,y:m.y,w:m.w,h:m.h}).unwrap_or_else(|_|ScreenRegion::virtual_screen()); }
+        #[cfg(target_os = "macos")]
+        {
+            return crate::macos::screen::primary()
+                .map(|m| ScreenRegion {
+                    x: m.x,
+                    y: m.y,
+                    w: m.w,
+                    h: m.h,
+                })
+                .unwrap_or_else(|_| ScreenRegion::virtual_screen());
+        }
         #[cfg(target_os = "windows")]
         {
             use windows::Win32::UI::WindowsAndMessaging::{
                 GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
             };
-            let (w, h) =
-                unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+            let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
             ScreenRegion {
                 x: 0,
                 y: 0,
@@ -427,7 +455,7 @@ pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
                 h: h.max(1),
             }
         }
-        #[cfg(not(any(target_os = "windows",target_os="macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             ScreenRegion::virtual_screen()
         }
@@ -523,7 +551,9 @@ pub fn cursor_telemetry(region: &ScreenRegion) -> RemoteCursor {
     }
     let pt = ci.ptScreenPos;
     RemoteCursor {
-        shape: shape_from_hcursor(ci.hCursor.0 as isize).as_str().to_string(),
+        shape: shape_from_hcursor(ci.hCursor.0 as isize)
+            .as_str()
+            .to_string(),
         x: Some(pixel_to_region_norm(pt.x, region.x, region.w)),
         y: Some(pixel_to_region_norm(pt.y, region.y, region.h)),
     }
@@ -656,11 +686,18 @@ pub(crate) fn is_extended_vk(vk: u16) -> bool {
 /// 传进来（`RcService::key_mode`），不在本模块藏全局：按下与补发的 up 必须用
 /// 同一个口径，而 `Pressed::release_all` 是在会话收口处直接调注入的。
 pub fn inject(ev: &InputEvent, region: &ScreenRegion, mode: KeyMode) -> InjectResult {
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     {
-        let _=mode;match crate::rc::mac_input::inject(ev,region){Ok(())=>InjectResult{ok:true,error:String::new()},Err(error)=>InjectResult{ok:false,error}}
+        let _ = mode;
+        match crate::rc::mac_input::inject(ev, region) {
+            Ok(()) => InjectResult {
+                ok: true,
+                error: String::new(),
+            },
+            Err(error) => InjectResult { ok: false, error },
+        }
     }
-    #[cfg(not(any(target_os = "windows",target_os="macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = (ev, region, mode);
         InjectResult {
@@ -891,7 +928,9 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
     let mut last = String::new();
     for i in 0..6 {
         if i > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(clipboard_retry_delay_ms(i)));
+            std::thread::sleep(std::time::Duration::from_millis(clipboard_retry_delay_ms(
+                i,
+            )));
         }
         match Clipboard::new() {
             Ok(mut cb) => match cb.set_text(text) {
@@ -911,7 +950,9 @@ pub fn get_clipboard_text() -> Result<String, String> {
     let mut last = String::new();
     for i in 0..6 {
         if i > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(clipboard_retry_delay_ms(i)));
+            std::thread::sleep(std::time::Duration::from_millis(clipboard_retry_delay_ms(
+                i,
+            )));
         }
         match Clipboard::new() {
             Ok(mut cb) => match cb.get_text() {
@@ -1022,7 +1063,11 @@ mod tests {
     fn 光标位置移动受节流约束() {
         let prev = cur("arrow", Some(1000), Some(2000));
         let now = cur("arrow", Some(4000), Some(2000));
-        assert!(!cursor_should_send(Some(&prev), &now, CURSOR_MIN_SEND_MS - 1));
+        assert!(!cursor_should_send(
+            Some(&prev),
+            &now,
+            CURSOR_MIN_SEND_MS - 1
+        ));
         assert!(cursor_should_send(Some(&prev), &now, CURSOR_MIN_SEND_MS));
     }
 
@@ -1152,7 +1197,11 @@ mod tests {
             None,
             "0x1_0000 截断成 0 正是缺陷本体，必须拒"
         );
-        assert_eq!(converge_key_vk(0x1_0041), None, "0x1_0041 截断成 0x41（A）会卡键");
+        assert_eq!(
+            converge_key_vk(0x1_0041),
+            None,
+            "0x1_0041 截断成 0x41（A）会卡键"
+        );
         assert_eq!(converge_key_vk(u32::MAX), None);
     }
 
@@ -1165,7 +1214,11 @@ mod tests {
         let desk = ScreenRegion::virtual_screen();
         let (ax0, ay0) = abs_to_virtual_desk(0, 0, &desk, &desk);
         let (ax1, ay1) = abs_to_virtual_desk(65535, 65535, &desk, &desk);
-        assert_eq!((ax0, ay0), (0, 0), "左上角必须精确为 0（负原点偏移要被剥掉）");
+        assert_eq!(
+            (ax0, ay0),
+            (0, 0),
+            "左上角必须精确为 0（负原点偏移要被剥掉）"
+        );
         assert_eq!((ax1, ay1), (65535, 65535), "右下角必须精确为 65535");
         // 单屏子区域：换算仍落在 0..=65535，回代像素与 map_abs 目标一致
         let region = ScreenRegion {
@@ -1258,7 +1311,11 @@ mod tests {
     fn 乙1_键盘模式未知值回落打字档() {
         assert_eq!(KeyMode::from_wire("direct"), KeyMode::ScanCode);
         for s in ["type", "", "Direct", "scancode", "自动"] {
-            assert_eq!(KeyMode::from_wire(s), KeyMode::VirtualKey, "{s} 必须是打字档");
+            assert_eq!(
+                KeyMode::from_wire(s),
+                KeyMode::VirtualKey,
+                "{s} 必须是打字档"
+            );
         }
         assert_eq!(KeyMode::default(), KeyMode::VirtualKey);
         // wire 是 from_wire 的逆（两档都能 round-trip，否则控端收了读不回来）
@@ -1275,12 +1332,20 @@ mod tests {
         assert_eq!(unicode_input_units("中"), Ok(zh));
         // 代理对：一个 emoji = 两个码元（各发一对 down/up，见函数注释）
         assert_eq!(unicode_input_units("🐼").unwrap().len(), 2);
-        assert!(unicode_input_units("").is_err(), "空串必须拒，不能让注入静默成功");
+        assert!(
+            unicode_input_units("").is_err(),
+            "空串必须拒，不能让注入静默成功"
+        );
         let big = "啊".repeat(TEXT_MAX_UTF16_UNITS + 1);
         let err = unicode_input_units(&big).unwrap_err();
-        assert!(err.contains("512"), "错误里要带上限，用户才知道怎么绕：{err}");
+        assert!(
+            err.contains("512"),
+            "错误里要带上限，用户才知道怎么绕：{err}"
+        );
         assert_eq!(
-            unicode_input_units(&"啊".repeat(TEXT_MAX_UTF16_UNITS)).unwrap().len(),
+            unicode_input_units(&"啊".repeat(TEXT_MAX_UTF16_UNITS))
+                .unwrap()
+                .len(),
             TEXT_MAX_UTF16_UNITS,
             "恰好到上限必须放行"
         );

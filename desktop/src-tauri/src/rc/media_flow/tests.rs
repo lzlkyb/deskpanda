@@ -11,7 +11,15 @@
 
 use super::*;
 fn feedback(at: i64, bytes: u64, age: i64) -> MediaFeedback {
-    MediaFeedback { received_at_ms: at, received_bytes: bytes, sample_ms: 200, age_ms: age, presented_at_ms: 0, display_delay_ms: None, receive_queue_ms: None }
+    MediaFeedback {
+        received_at_ms: at,
+        received_bytes: bytes,
+        sample_ms: 200,
+        age_ms: age,
+        presented_at_ms: 0,
+        display_delay_ms: None,
+        receive_queue_ms: None,
+    }
 }
 
 /// 新口径下拥塞证据只有一个来源：本端 send→ack 的超额延迟。这组 helper 用真实时序把它
@@ -28,17 +36,34 @@ struct WireOpts {
 }
 
 fn wire(flow: &mut Flow, now: u64, backlog: i64, bytes: u64) {
-    wire_opts(flow, now, backlog, bytes, &WireOpts { ceiling: 8_000, ..Default::default() });
+    wire_opts(
+        flow,
+        now,
+        backlog,
+        bytes,
+        &WireOpts {
+            ceiling: 8_000,
+            ..Default::default()
+        },
+    );
 }
 
 fn wire_opts(flow: &mut Flow, now: u64, backlog: i64, bytes: u64, o: &WireOpts) {
     const BASE_MS: u64 = 500;
-    let delay = BASE_MS + if flow.baseline_ack_ms == u64::MAX { 0 }
-        else { FEEDBACK_MS + backlog.max(0) as u64 };
+    let delay = BASE_MS
+        + if flow.baseline_ack_ms == u64::MAX {
+            0
+        } else {
+            FEEDBACK_MS + backlog.max(0) as u64
+        };
     let at = now as i64;
     flow.sent(now - delay, 0, at, bytes as usize);
     let mut f = feedback(at, bytes, 0);
-    f.sample_ms = if o.sample_ms == 0 { FEEDBACK_MS } else { o.sample_ms };
+    f.sample_ms = if o.sample_ms == 0 {
+        FEEDBACK_MS
+    } else {
+        o.sample_ms
+    };
     f.receive_queue_ms = o.peer_ms;
     flow.feedback(now, &f, o.ceiling, 0, o.rtt_ms);
 }
@@ -63,8 +88,11 @@ fn capture_work_consumes_the_pacing_interval() {
     // 5KB / 400kbps = 100ms；其中采集、编码及入队已花掉 60ms。
     flow.sent(60, 0, 1, 5_000);
     assert_eq!(flow.admission(99, 20), Admission::Wait);
-    assert_eq!(flow.admission(100, 20), Admission::Ready,
-        "不能在 60ms 工作之后再等待完整 100ms，拖低到约 6fps");
+    assert_eq!(
+        flow.admission(100, 20),
+        Admission::Ready,
+        "不能在 60ms 工作之后再等待完整 100ms，拖低到约 6fps"
+    );
 }
 
 #[test]
@@ -100,7 +128,9 @@ fn extra_queue_reduces_budget_but_propagation_does_not() {
 fn idle_desktop_is_not_measured_as_a_bandwidth_ceiling() {
     let mut flow = Flow::default();
     flow.budget(true, 8_000);
-    for n in 1..20 { flow.feedback(n * 1_000, &feedback(n as i64, 100, 50), 8_000, 0, 0); }
+    for n in 1..20 {
+        flow.feedback(n * 1_000, &feedback(n as i64, 100, 50), 8_000, 0, 0);
+    }
     assert_eq!(flow.kbps, 2_000);
 }
 
@@ -120,7 +150,9 @@ fn active_direct_stream_recovers_budget_with_moderate_wire_backlog() {
     assert!(flow.kbps < before, "本端口径的真实积压超过降速线仍必须减速");
     let mut idle = Flow::default();
     idle.budget(false, 8_000);
-    for n in 1..20u64 { wire(&mut idle, n * 1_000, 80, 100); }
+    for n in 1..20u64 {
+        wire(&mut idle, n * 1_000, 80, 100);
+    }
     assert_eq!(idle.kbps, 4_000, "静止画面的低流量不能触发盲目扩预算");
 }
 
@@ -159,10 +191,16 @@ fn ack_deadline_includes_complete_frame_serialization_on_a_slow_path() {
     flow.kbps = 400;
     flow.feedback(1, &feedback(1, 100, 800), 8_000, 0, 0);
     flow.sent(100, 100, 2, 100_000); // 400kbps 下仅序列化该帧就需 2 秒。
-    assert_ne!(flow.admission(2_500, 1_600), Admission::Reset,
-        "不能用小 ping 的 RTT 在完整恢复帧正常交付前 RESET");
-    assert_eq!(flow.admission(4_201, 1_600), Admission::Reset,
-        "恢复等待仍然有界，不能无限容忍无反馈");
+    assert_ne!(
+        flow.admission(2_500, 1_600),
+        Admission::Reset,
+        "不能用小 ping 的 RTT 在完整恢复帧正常交付前 RESET"
+    );
+    assert_eq!(
+        flow.admission(4_201, 1_600),
+        Admission::Reset,
+        "恢复等待仍然有界，不能无限容忍无反馈"
+    );
 }
 
 #[test]
@@ -174,8 +212,11 @@ fn discarded_stream_feedback_cannot_shorten_recovery_startup() {
     flow.discard(1_000, 0, 0);
     flow.feedback(1_050, &feedback(20, 100, 900), 8_000, 0, 0); // RESET 前的迟到反馈。
     flow.sent(1_100, 1_100, 30, 100);
-    assert_ne!(flow.admission(2_300, 500), Admission::Reset,
-        "新的参考链需要重新起播，不能继承旧流的反馈状态");
+    assert_ne!(
+        flow.admission(2_300, 500),
+        Admission::Reset,
+        "新的参考链需要重新起播，不能继承旧流的反馈状态"
+    );
     assert_eq!(flow.admission(3_700, 500), Admission::Reset);
 }
 
@@ -194,10 +235,16 @@ fn progressing_media_ack_is_not_timed_out_using_a_smaller_ping_rtt() {
     flow.sent(0, 0, 1, 5_000);
     flow.sent(100, 100, 2, 5_000);
     flow.feedback(1_350, &feedback(1, 5_000, 900), 8_000, 0, 0);
-    assert_ne!(flow.admission(1_370, 500), Admission::Reset,
-        "刚确认媒体交付，不能以更短的小 ping RTT 废弃正在推进的链");
-    assert_eq!(flow.admission(3_201, 500), Admission::Reset,
-        "媒体反馈停止后仍须有界恢复");
+    assert_ne!(
+        flow.admission(1_370, 500),
+        Admission::Reset,
+        "刚确认媒体交付，不能以更短的小 ping RTT 废弃正在推进的链"
+    );
+    assert_eq!(
+        flow.admission(3_201, 500),
+        Admission::Reset,
+        "媒体反馈停止后仍须有界恢复"
+    );
 }
 
 #[test]
@@ -210,13 +257,19 @@ fn recent_media_progress_with_moderate_jitter_does_not_restart_a_healthy_direct_
     flow.sent(0, 0, 1, 5_000);
     flow.sent(100, 100, 2, 5_000);
     flow.feedback(700, &feedback(1, 5_000, 200), 8_000, 0, 0);
-    assert_ne!(flow.admission(770, 50), Admission::Reset,
-        "ACK 70ms 前确认了新画面，中等抖动不该不断重开参考链");
+    assert_ne!(
+        flow.admission(770, 50),
+        Admission::Reset,
+        "ACK 70ms 前确认了新画面，中等抖动不该不断重开参考链"
+    );
     // 本端口径没有超额积压（这一拍只交付了一帧、基线就是它自己），放宽的是实测 ACK
     // 抖动预算；反馈真的停更后仍要在一个有界期限内回收。
     assert_ne!(flow.admission(2_500, 50), Admission::Reset);
-    assert_eq!(flow.admission(2_601, 50), Admission::Reset,
-        "ACK 停止后仍须及时回收，不能无限等待");
+    assert_eq!(
+        flow.admission(2_601, 50),
+        Admission::Reset,
+        "ACK 停止后仍须及时回收，不能无限等待"
+    );
 }
 
 #[test]
@@ -234,8 +287,11 @@ fn measured_wire_backlog_cannot_hide_behind_a_fresh_ack() {
     flow.sent(700, 700, 3, 5_000);
     flow.feedback(2_300, &feedback(2, 5_000, 0), 8_000, 0, 0);
     assert_eq!(flow.backlog_ms, 1_000);
-    assert_eq!(flow.admission(2_300, 50), Admission::Reset,
-        "本端已测到一秒线上积压，即使刚收到 ACK 也必须废弃旧画面");
+    assert_eq!(
+        flow.admission(2_300, 50),
+        Admission::Reset,
+        "本端已测到一秒线上积压，即使刚收到 ACK 也必须废弃旧画面"
+    );
 }
 
 #[test]
@@ -245,8 +301,11 @@ fn media_ack_allowance_cannot_follow_an_unbounded_queue() {
     flow.sent(0, 0, 1, 5_000);
     flow.feedback(20_000, &feedback(1, 5_000, 20_000), 8_000, 0, 0);
     flow.sent(20_000, 20_000, 2, 5_000);
-    assert_eq!(flow.admission(23_101, 500), Admission::Reset,
-        "一次极慢反馈不能把后续超时放宽到几十秒");
+    assert_eq!(
+        flow.admission(23_101, 500),
+        Admission::Reset,
+        "一次极慢反馈不能把后续超时放宽到几十秒"
+    );
 }
 
 #[test]
@@ -264,8 +323,11 @@ fn healthy_relay_ack_jitter_does_not_discard_a_live_reference_chain() {
     f.received_at_ms = 2;
     flow.feedback(2_000, &f, 8_000, 0, 0);
     flow.sent(2_010, 2_010, 3, 5_000);
-    assert_eq!(flow.admission(5_300, 548), Admission::Reset,
-        "抖动预算不能让停止反馈的链无限存活");
+    assert_eq!(
+        flow.admission(5_300, 548),
+        Admission::Reset,
+        "抖动预算不能让停止反馈的链无限存活"
+    );
 }
 
 #[test]
@@ -283,12 +345,18 @@ fn relay_ack_jitter_allowance_does_not_override_real_queue_or_byte_limits() {
     flow.feedback(1_950, &f, 8_000, 0, 0);
     // 方案乙（2026-10-06）：backlog ~260ms 在 ack_mean ~773ms 的中继上是抖动带内的
     // 正常值——旧口径在这里 RESET，真机 10 秒 4 次、每次弃 7..10 帧（一次可见卡顿）。
-    assert_eq!(flow.admission(1_951, 548), Admission::Ready,
-        "抖动带内的 backlog 不再触发 RESET（乙）");
+    assert_eq!(
+        flow.admission(1_951, 548),
+        Admission::Ready,
+        "抖动带内的 backlog 不再触发 RESET（乙）"
+    );
     // 「真队列」仍旧抓得住：过期链按 base 收紧的 deadline 照旧废弃。
     flow.sent(2_000, 2_000, 4, 5_000);
-    assert_eq!(flow.admission(5_001, 548), Admission::Reset,
-        "ACK 停更后链龄超 deadline，抖动豁免不许让它无限存活");
+    assert_eq!(
+        flow.admission(5_001, 548),
+        Admission::Reset,
+        "ACK 停更后链龄超 deadline，抖动豁免不许让它无限存活"
+    );
     flow.discard(5_001, 0, 0);
     flow.sent(5_002, 5_002, 5, MAX_PENDING + 1);
     assert_eq!(flow.admission(6_101, 548), Admission::Reset, "字节上限照旧");
@@ -304,8 +372,11 @@ fn growing_real_queue_still_discards_old_frames_with_fresh_feedback() {
     flow.sent(700, 700, 3, 5_000);
     flow.feedback(2_000, &feedback(2, 5_000, 1_400), 8_000, 0, 0);
     assert_eq!(flow.queue_ms, 700); // 排除至多 200ms 的反馈采样相位差。
-    assert_eq!(flow.admission(2_001, 500), Admission::Reset,
-        "真实积压增大时，刚到的慢 ACK 也不能推迟过期链恢复");
+    assert_eq!(
+        flow.admission(2_001, 500),
+        Admission::Reset,
+        "真实积压增大时，刚到的慢 ACK 也不能推迟过期链恢复"
+    );
 }
 
 #[test]
@@ -337,11 +408,20 @@ fn feedback_sampling_phase_is_not_congestion() {
 fn receiver_queue_ignores_clock_calibration_but_detects_real_delay() {
     let mut receiver = Receiver::default();
     receiver.receive(1_000, 10_000, 100, 0);
-    assert_eq!(receiver.take_feedback(1_200).unwrap().receive_queue_ms, Some(0));
+    assert_eq!(
+        receiver.take_feedback(1_200).unwrap().receive_queue_ms,
+        Some(0)
+    );
     receiver.receive(2_000, 11_000, 100, 1_300); // 仅校准值改变。
-    assert_eq!(receiver.take_feedback(2_200).unwrap().receive_queue_ms, Some(0));
+    assert_eq!(
+        receiver.take_feedback(2_200).unwrap().receive_queue_ms,
+        Some(0)
+    );
     receiver.receive(3_500, 12_000, 100, 1_800); // 真实到达慢了 500ms。
-    assert_eq!(receiver.take_feedback(3_700).unwrap().receive_queue_ms, Some(500));
+    assert_eq!(
+        receiver.take_feedback(3_700).unwrap().receive_queue_ms,
+        Some(500)
+    );
 }
 
 #[test]
@@ -351,10 +431,16 @@ fn receiver_reanchors_propagation_only_when_the_path_changes() {
     receiver.receive(1_000, 10_000, 100, 20);
     receiver.set_path(true);
     receiver.receive(2_600, 11_000, 100, 620);
-    assert_eq!(receiver.take_feedback(2_800).unwrap().receive_queue_ms, Some(0));
+    assert_eq!(
+        receiver.take_feedback(2_800).unwrap().receive_queue_ms,
+        Some(0)
+    );
     receiver.set_path(true);
     receiver.receive(3_800, 12_000, 100, 820);
-    assert_eq!(receiver.take_feedback(4_000).unwrap().receive_queue_ms, Some(200));
+    assert_eq!(
+        receiver.take_feedback(4_000).unwrap().receive_queue_ms,
+        Some(200)
+    );
 }
 
 #[test]
@@ -363,8 +449,11 @@ fn lan_window_keeps_sending_until_the_first_periodic_ack() {
     flow.budget(false, 8_000);
     for n in 0..6 {
         let now = n * 33;
-        assert_eq!(flow.admission(now, 20), Admission::Ready,
-            "200ms 反馈周期前不能因窗口小于采样周期而断粮");
+        assert_eq!(
+            flow.admission(now, 20),
+            Admission::Ready,
+            "200ms 反馈周期前不能因窗口小于采样周期而断粮"
+        );
         flow.sent(now, now, now as i64 + 1, 16_500);
     }
 }
@@ -374,9 +463,15 @@ fn stale_display_delay_is_not_reused_by_later_feedback() {
     let mut receiver = Receiver::default();
     receiver.receive(0, 1, 100, 20);
     receiver.presented(1, 1_000);
-    assert_eq!(receiver.take_feedback(1_000).unwrap().display_delay_ms, Some(1_000));
+    assert_eq!(
+        receiver.take_feedback(1_000).unwrap().display_delay_ms,
+        Some(1_000)
+    );
     receiver.receive(1_100, 2, 100, 20);
-    assert_eq!(receiver.take_feedback(1_200).unwrap().display_delay_ms, None);
+    assert_eq!(
+        receiver.take_feedback(1_200).unwrap().display_delay_ms,
+        None
+    );
 }
 
 #[test]
@@ -399,7 +494,13 @@ fn relay_capacity_can_grow_and_direct_upgrade_reprobes() {
     let mut flow = Flow::default();
     for n in 1..30 {
         let budget = flow.budget(true, 8_000);
-        flow.feedback(n * 1_000, &feedback(n as i64, budget as u64 * 25, 70), 8_000, 0, 0);
+        flow.feedback(
+            n * 1_000,
+            &feedback(n as i64, budget as u64 * 25, 70),
+            8_000,
+            0,
+            0,
+        );
     }
     assert!(flow.kbps > 4_000);
     assert_eq!(flow.budget(false, 8_000), 4_000);
@@ -481,18 +582,28 @@ fn fast_direct_path_preserves_explicit_high_fps_profiles() {
 
 #[test]
 fn lan_upgrades_to_60fps_without_bitrate_evidence() {
-    let lan = PathInfo { relay: false, lan: true };
+    let lan = PathInfo {
+        relay: false,
+        lan: true,
+    };
     let mut flow = Flow::default();
     flow.budget(false, 40_000);
     flow.fps = 30;
     flow.kbps = 4_000;
     assert_eq!(flow.fps_limit(lan, 0), 30, "升档仍要先过时间门槛");
-    assert_eq!(flow.fps_limit(lan, 7_000), 165, "LAN 升 60fps 不该要 9Mbps 的码率证据");
+    assert_eq!(
+        flow.fps_limit(lan, 7_000),
+        165,
+        "LAN 升 60fps 不该要 9Mbps 的码率证据"
+    );
 }
 
 #[test]
 fn lan_keeps_60fps_while_transport_is_clean() {
-    let lan = PathInfo { relay: false, lan: true };
+    let lan = PathInfo {
+        relay: false,
+        lan: true,
+    };
     let mut flow = Flow::default();
     flow.budget(false, 40_000);
     flow.fps = 60;
@@ -506,8 +617,15 @@ fn lan_keeps_60fps_while_transport_is_clean() {
 fn lan_still_drops_to_30fps_on_real_congestion() {
     // 反例（守卫必须会红的那一半）：把 LAN 写成「无条件豁免」必须被这条打死——
     // 同网段的 Wi-Fi 一样会真拥塞，积压逐拍上涨时 60fps 只会把卡顿换成排队。
-    let lan = PathInfo { relay: false, lan: true };
-    let o = WireOpts { ceiling: 40_000, rtt_ms: 3, ..Default::default() };
+    let lan = PathInfo {
+        relay: false,
+        lan: true,
+    };
+    let o = WireOpts {
+        ceiling: 40_000,
+        rtt_ms: 3,
+        ..Default::default()
+    };
     let mut flow = Flow::default();
     flow.budget(false, 40_000);
     flow.fps = 60;
@@ -515,7 +633,11 @@ fn lan_still_drops_to_30fps_on_real_congestion() {
     for (n, backlog) in [0i64, 130, 170, 210].iter().enumerate() {
         wire_opts(&mut flow, (n as u64 + 1) * 1_000, *backlog, 4_000 * 25, &o);
     }
-    assert!(flow.kbps < 7_000, "上涨的积压应已缩预算，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps < 7_000,
+        "上涨的积压应已缩预算，实际 {}kbps",
+        flow.kbps
+    );
     assert_eq!(flow.fps_limit(lan, 9_000), 30, "LAN 真拥塞仍要掉到 30fps");
 }
 
@@ -523,12 +645,19 @@ fn lan_still_drops_to_30fps_on_real_congestion() {
 fn direct_path_still_needs_bitrate_evidence_for_60fps() {
     // 反例：豁免只给 LAN。公网直连（v6 那档）维持原口径，否则这道门在一次改动里
     // 就被顺手拆掉，而它拦的是真会窄的公网路径。
-    let direct = PathInfo { relay: false, lan: false };
+    let direct = PathInfo {
+        relay: false,
+        lan: false,
+    };
     let mut flow = Flow::default();
     flow.fps = 30;
     flow.kbps = 8_900;
     assert_eq!(flow.fps_limit(direct, 0), 30, "8.9Mbps 不够");
-    assert_eq!(flow.fps_limit(direct, 7_000), 30, "差 100kbps 就是不够，计时也不该走表");
+    assert_eq!(
+        flow.fps_limit(direct, 7_000),
+        30,
+        "差 100kbps 就是不够，计时也不该走表"
+    );
     flow.kbps = 9_000;
     assert_eq!(flow.fps_limit(direct, 14_000), 30, "证据到位，先起时间门槛");
     assert_eq!(flow.fps_limit(direct, 21_000), 165, "满 7s 才升");
@@ -542,7 +671,11 @@ fn budget_never_downscales_resolution_text_priority() {
     // 文字优先（2026-10-06 复测 B 拍板）：预算再低也不降采样，省码率走 fps 阶梯。
     let mut flow = Flow::default();
     flow.kbps = 400;
-    assert_eq!(flow.resolution_limit(), 0, "低预算不许降采样，否则文字看不清");
+    assert_eq!(
+        flow.resolution_limit(),
+        0,
+        "低预算不许降采样，否则文字看不清"
+    );
     flow.kbps = 100;
     assert_eq!(flow.resolution_limit(), 0);
 }
@@ -575,7 +708,11 @@ fn bandwidth_step_bounds_backlog_and_resumes_after_recovery() {
     let mut resets = 0;
     let mut recovered = 0;
     for now in (0u64..20_000).step_by(5) {
-        let capacity = if (5_000..12_000).contains(&now) { 800 } else { 8_000 };
+        let capacity = if (5_000..12_000).contains(&now) {
+            800
+        } else {
+            8_000
+        };
         while packets.front().is_some_and(|(due, _, _)| *due <= now) {
             let (_, at, bytes) = packets.pop_front().unwrap();
             receiver.receive(now, at, bytes, now as i64 - at + 1);
@@ -584,17 +721,29 @@ fn bandwidth_step_bounds_backlog_and_resumes_after_recovery() {
                 weak_max_display_age = weak_max_display_age.max(now as i64 - at + 6);
             }
         }
-        if let Some(f) = receiver.take_feedback(now) { feedbacks.push_back((now + 40, f)); }
+        if let Some(f) = receiver.take_feedback(now) {
+            feedbacks.push_back((now + 40, f));
+        }
         while feedbacks.front().is_some_and(|(due, _)| *due <= now) {
             let (_, f) = feedbacks.pop_front().unwrap();
             flow.feedback(now, &f, 8_000, 0, 0);
         }
-        if now < capture_due { continue; }
+        if now < capture_due {
+            continue;
+        }
         match flow.admission(now, 80) {
-            Admission::Reset => { flow.discard(now, 0, 0); packets.clear(); wire_end = now; resets += 1; }
+            Admission::Reset => {
+                flow.discard(now, 0, 0);
+                packets.clear();
+                wire_end = now;
+                resets += 1;
+            }
             // P0 口径：拿不到额度就丢帧并记账，**不阻塞生产者**。旧写法只 `continue`，
             // 于是这份仿真对 `note_drop` 那半判据天然瞎（丢帧证据从没被喂进去过）。
-            Admission::Wait => { flow.note_drop(); continue; }
+            Admission::Wait => {
+                flow.note_drop();
+                continue;
+            }
             Admission::Ready => {
                 let interval = 1_000u64 / flow.fps_limit(false, now) as u64;
                 let bytes = (flow.kbps as u64 * interval / 8) as usize;
@@ -602,15 +751,22 @@ fn bandwidth_step_bounds_backlog_and_resumes_after_recovery() {
                 packets.push_back((wire_end + 40, now as i64 + 1, bytes));
                 flow.sent(now, now, now as i64 + 1, bytes);
                 capture_due = now + interval;
-                if (9_000..12_000).contains(&now) { settled_max_queue = settled_max_queue.max(wire_end - now); }
-                if (12_000..15_000).contains(&now) { recovered += 1; }
+                if (9_000..12_000).contains(&now) {
+                    settled_max_queue = settled_max_queue.max(wire_end - now);
+                }
+                if (12_000..15_000).contains(&now) {
+                    recovered += 1;
+                }
             }
         }
     }
     // 骤降瞬间，旧预算下已交给网络的字节不可凭空撤回；RESET 的目的正是
     // 让这些过期帧不再显示。验收到达画面与收敛后的队列，不把废弃帧算成交付。
     assert!(resets > 0, "带宽骤降后必须废弃过期参考链");
-    assert!(weak_max_display_age <= 1_000, "弱网仍显示了 {weak_max_display_age}ms 旧帧");
+    assert!(
+        weak_max_display_age <= 1_000,
+        "弱网仍显示了 {weak_max_display_age}ms 旧帧"
+    );
     // 收敛后线上仍留着的队列，峰值实测 415ms（旧口径 ≤150ms 是拿接收端上报定罪的）。
     // 证据换成**本端 send→ack 超额**后，它按设计减掉一整个反馈采样窗与会话内最快一次
     // 交付时延，在这个「RTT 不随排队上涨」的模型里就晚约 250ms 才定罪。仍然有界、仍在
@@ -618,7 +774,10 @@ fn bandwidth_step_bounds_backlog_and_resumes_after_recovery() {
     // `docs/链路切换画质回升-业界源码对照-2026-10-06.md` §1（v6 直连 52/52 拍传输层反对定罪、
     // 预算不再被钉在 400kbps 地板）。要把这份盲区收回来，正解是把证据换成「最老未确认帧
     // 的等待时长」，那是另一次口径手术，不在本次范围。
-    assert!(settled_max_queue <= 450, "收敛后仍累积了 {settled_max_queue}ms");
+    assert!(
+        settled_max_queue <= 450,
+        "收敛后仍累积了 {settled_max_queue}ms"
+    );
     assert!(recovered >= 20, "恢复后的 3 秒仅发出 {recovered} 帧");
     assert!(flow.pending_bytes <= MAX_PENDING);
 }
@@ -638,12 +797,19 @@ fn healthy_delivery_with_loss_jitter_recovers_budget() {
         let loss = if n % 3 == 0 { 60 } else { 10 };
         flow.feedback(n * 1_000, &f, 8_000, loss, 0);
     }
-    assert!(flow.kbps >= 2_800, "healthy lossy delivery remained at {}kbps", flow.kbps);
+    assert!(
+        flow.kbps >= 2_800,
+        "healthy lossy delivery remained at {}kbps",
+        flow.kbps
+    );
     let before = flow.kbps;
     let mut congested = feedback(66, before as u64 * 25, 100);
     congested.receive_queue_ms = Some(120);
     flow.feedback(66_000, &congested, 8_000, 60, 0);
-    assert!(flow.kbps < before, "loss with growing queue must still reduce the budget");
+    assert!(
+        flow.kbps < before,
+        "loss with growing queue must still reduce the budget"
+    );
 }
 /// Ratchet guard (2026-10-05 relay session): RESET at 0‰ loss and a 20ms queue
 /// pinned the budget at MIN_KBPS. Discarding stale frames is still correct;
@@ -656,7 +822,10 @@ fn discard_only_decays_the_budget_with_congestion_evidence() {
     flow.last_feedback_ms = Some(90);
     flow.backlog_ms = 20;
     flow.discard(100, 0, 0);
-    assert_eq!(flow.kbps, 2_000, "ACK progressing, no loss, shallow backlog must not shrink the budget");
+    assert_eq!(
+        flow.kbps, 2_000,
+        "ACK progressing, no loss, shallow backlog must not shrink the budget"
+    );
 
     flow.last_feedback_ms = Some(90);
     flow.discard(100, 60, 0);
@@ -689,9 +858,16 @@ fn render_delay_is_neither_congestion_nor_a_probe_blocker() {
         f.display_delay_ms = Some(140);
         flow.feedback(n * 1_000, &f, 8_000, 0, 0);
     }
-    assert_eq!(flow.queue_ms, 140, "绘制延迟仍要在合并口径里可见（对端提示/诊断用）");
+    assert_eq!(
+        flow.queue_ms, 140,
+        "绘制延迟仍要在合并口径里可见（对端提示/诊断用）"
+    );
     assert_eq!(flow.backlog_ms, 0, "线上积压口径必须把它摘出去");
-    assert!(flow.kbps > before, "稳态绘制延迟不许降速，也不许挡住扩窗探测，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps > before,
+        "稳态绘制延迟不许降速，也不许挡住扩窗探测，实际 {}kbps",
+        flow.kbps
+    );
 
     // 更慢的渲染客户端：绘制 400ms、线上零积压——旧口径在这里连缩四次预算。
     let mut slow = Flow::default();
@@ -704,7 +880,11 @@ fn render_delay_is_neither_congestion_nor_a_probe_blocker() {
         f.display_delay_ms = Some(400);
         slow.feedback(n * 1_000, &f, 8_000, 0, 0);
     }
-    assert!(slow.kbps >= 2_000, "线上不排队就不该因为对面渲染慢而缩预算，实际 {}kbps", slow.kbps);
+    assert!(
+        slow.kbps >= 2_000,
+        "线上不排队就不该因为对面渲染慢而缩预算，实际 {}kbps",
+        slow.kbps
+    );
 }
 
 /// §23/§24 的真机中继形态：渲染管线固有 160ms、线上一条队列都没有。这份深度不能去
@@ -722,8 +902,11 @@ fn render_depth_does_not_forfeit_the_ack_jitter_allowance() {
     assert_eq!(flow.queue_ms, 160, "合并口径仍要对渲染深度可见");
     assert_eq!(flow.backlog_ms, 0);
     flow.sent(1_500, 1_500, 1_201, 200_000);
-    assert_ne!(flow.admission(4_100, 100), Admission::Reset,
-        "上一帧 1400ms 正常交付过，2600ms 帧龄不该被渲染缓冲判成断链");
+    assert_ne!(
+        flow.admission(4_100, 100),
+        Admission::Reset,
+        "上一帧 1400ms 正常交付过，2600ms 帧龄不该被渲染缓冲判成断链"
+    );
 }
 
 /// 同一口径的另一半：反馈照常推进时，400ms 的渲染缓冲不能把「ACK 在走」判成停滞，
@@ -740,8 +923,11 @@ fn render_depth_does_not_certify_a_stalled_ack() {
     flow.feedback(2_500, &f, 8_000, 0, 0);
     assert_eq!(flow.queue_ms, 400);
     assert_eq!(flow.backlog_ms, 0);
-    assert_ne!(flow.admission(2_500, 500), Admission::Reset,
-        "反馈 0ms 前刚到、线上零积压，仅帧龄超期不该重开参考链");
+    assert_ne!(
+        flow.admission(2_500, 500),
+        Admission::Reset,
+        "反馈 0ms 前刚到、线上零积压，仅帧龄超期不该重开参考链"
+    );
 }
 
 /// 同一份渲染深度还不能进对端提示：`peer_queue` 喂的是自动档与倍率判据，
@@ -770,7 +956,11 @@ fn steady_relay_queue_is_not_a_bandwidth_ceiling() {
         f.receive_queue_ms = Some(140);
         flow.feedback(n * 1_000, &f, 8_000, 0, 0);
     }
-    assert!(flow.kbps > 800, "贴着预算的实测交付必须能重新扩窗，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps > 800,
+        "贴着预算的实测交付必须能重新扩窗，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// 扩窗的门槛之一是「链路确实承得住这份预算」：交付包络只有预算五成时不能继续加，
@@ -785,7 +975,11 @@ fn under_delivered_budget_is_not_headroom_for_a_probe() {
         f.receive_queue_ms = Some(0);
         flow.feedback(n * 1_000, &f, 8_000, 0, 0);
     }
-    assert_eq!(flow.kbps, 2_000, "交付包络只有预算五成时不许扩窗，实际 {}kbps", flow.kbps);
+    assert_eq!(
+        flow.kbps, 2_000,
+        "交付包络只有预算五成时不许扩窗，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// 真机中继复测抓到的失效形态：交付跟不上预算时，比值仍能常年停在 1.4 倍以上
@@ -810,7 +1004,11 @@ fn the_ramp_never_drifts_past_a_quarter_above_delivered_capacity() {
             flow.kbps
         );
     }
-    assert_eq!(flow.kbps, (delivered * 5 / 4) as u32, "交付不动时预算应站定在 1.25 倍线上");
+    assert_eq!(
+        flow.kbps,
+        (delivered * 5 / 4) as u32,
+        "交付不动时预算应站定在 1.25 倍线上"
+    );
 
     // 反方向红线：交付随预算涨（真管子更宽）时不许被这条封顶冻住。
     let mut growing = Flow::default();
@@ -821,7 +1019,11 @@ fn the_ramp_never_drifts_past_a_quarter_above_delivered_capacity() {
         f.receive_queue_ms = Some(0);
         growing.feedback(n * 1_000, &f, 8_000, 0, 0);
     }
-    assert!(growing.kbps > 1_000, "交付跟得上预算时必须继续扩窗，实际 {}kbps", growing.kbps);
+    assert!(
+        growing.kbps > 1_000,
+        "交付跟得上预算时必须继续扩窗，实际 {}kbps",
+        growing.kbps
+    );
 }
 
 /// 反方向红线：涨起来的真积压仍须在 2–3 秒内缩预算，不能因为「不看绝对值」
@@ -835,7 +1037,11 @@ fn growing_queue_shrinks_the_budget_within_seconds() {
     for (n, queue) in [0i64, 130, 170, 210].iter().enumerate() {
         wire(&mut flow, (n as u64 + 1) * 1_000, *queue, 4_000 * 25);
     }
-    assert!(flow.kbps < 4_000, "队列连续上涨必须缩预算，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps < 4_000,
+        "队列连续上涨必须缩预算，实际 {}kbps",
+        flow.kbps
+    );
 
     // 趋势单独成立的一拍：150ms 降速线还没破，但 200ms 内涨了 32ms。
     let mut trend = Flow::default();
@@ -844,7 +1050,11 @@ fn growing_queue_shrinks_the_budget_within_seconds() {
     for (n, queue) in [0i64, 118, 150].iter().enumerate() {
         wire(&mut trend, (n as u64 + 1) * 1_000, *queue, 2_000 * 25);
     }
-    assert!(trend.kbps < 2_000, "积压正在上涨本身即证据，实际 {}kbps", trend.kbps);
+    assert!(
+        trend.kbps < 2_000,
+        "积压正在上涨本身即证据，实际 {}kbps",
+        trend.kbps
+    );
 }
 
 /// `delivered` 只有在窗口正常、且队列深到能证明瓶颈在线路上时才可当上限：
@@ -855,10 +1065,17 @@ fn starved_sample_window_is_not_measured_as_capacity() {
     flow.budget(true, 8_000);
     flow.kbps = 4_000;
     // 深积压由本端测出（超额 400ms），同时发送端断粮 2 秒、交付只有 8kbps。
-    let starved = WireOpts { ceiling: 8_000, sample_ms: 2_000, ..Default::default() };
+    let starved = WireOpts {
+        ceiling: 8_000,
+        sample_ms: 2_000,
+        ..Default::default()
+    };
     wire_opts(&mut flow, 1_000, 0, 2_000, &starved);
     wire_opts(&mut flow, 2_000, 400, 2_000, &starved);
-    assert_eq!(flow.kbps, 3_200, "深队列仍要降，但不许被断粮窗口的低交付封顶");
+    assert_eq!(
+        flow.kbps, 3_200,
+        "深队列仍要降，但不许被断粮窗口的低交付封顶"
+    );
 }
 
 /// 证据锚点必须跨 RESET 存活。上一版在 `discard` 里把 last_feedback_ms 抹成
@@ -877,7 +1094,10 @@ fn reset_storm_with_flowing_ack_is_not_congestion_evidence() {
         flow.sent(n * 200, n * 200, n as i64 + 10, 5_000);
         flow.discard(n * 200 + 300, 0, 0);
     }
-    assert_eq!(flow.kbps, 2_000, "零丢包、浅队列、ACK 五个采样周期内刚到过的连续 RESET 不该缩预算");
+    assert_eq!(
+        flow.kbps, 2_000,
+        "零丢包、浅队列、ACK 五个采样周期内刚到过的连续 RESET 不该缩预算"
+    );
 }
 
 /// 本次事故的正主：v6 直连段对端上报冲到 240..626ms 且逐拍大幅摆动，而同一时刻传输层
@@ -888,14 +1108,32 @@ fn peer_report_is_corroboration_only_and_never_convicts() {
     let mut flow = Flow::default();
     flow.budget(false, 8_000);
     flow.kbps = 4_000;
-    for (n, peer) in [240i64, 380, 300, 626, 250, 620].iter().cycle().take(12).enumerate() {
-        let o = WireOpts { ceiling: 8_000, peer_ms: Some(*peer), rtt_ms: 29, ..Default::default() };
+    for (n, peer) in [240i64, 380, 300, 626, 250, 620]
+        .iter()
+        .cycle()
+        .take(12)
+        .enumerate()
+    {
+        let o = WireOpts {
+            ceiling: 8_000,
+            peer_ms: Some(*peer),
+            rtt_ms: 29,
+            ..Default::default()
+        };
         wire_opts(&mut flow, (n as u64 + 1) * 1_000, 0, 4_000 * 25, &o);
     }
     assert_eq!(flow.backlog_ms, 0, "本端口径没有超额积压");
     assert_eq!(flow.peer_queue_ms, 620, "对端的数仍要留着示警，只是不定罪");
-    assert!(flow.kbps >= 4_000, "脏数逐拍涨 300ms 也不许砍预算，实际 {}kbps", flow.kbps);
-    assert_eq!(flow.feedback_queue(), Some(0), "给对端的提示要说本端测到的线上积压");
+    assert!(
+        flow.kbps >= 4_000,
+        "脏数逐拍涨 300ms 也不许砍预算，实际 {}kbps",
+        flow.kbps
+    );
+    assert_eq!(
+        flow.feedback_queue(),
+        Some(0),
+        "给对端的提示要说本端测到的线上积压"
+    );
 }
 
 /// app-limited 窗（交付明显低于预算）测的是画面不是管子：包络必须冻结而不是每秒 ×7/8 衰减。
@@ -910,13 +1148,29 @@ fn app_limited_windows_freeze_the_capacity_envelope() {
     assert!(!flow.app_limited, "满流窗不是 app-limited");
     assert_eq!(flow.capacity_kbps, 4_000);
     // 之后画面静止：每拍只交付 80kbps，连续 10 拍。
-    for n in 2..12u64 { wire(&mut flow, n * 1_000, 0, 2_000); }
+    for n in 2..12u64 {
+        wire(&mut flow, n * 1_000, 0, 2_000);
+    }
     assert!(flow.app_limited, "低交付窗必须标成 app-limited");
-    assert_eq!(flow.capacity_kbps, 4_000, "包络必须冻结在已证明的管宽，实际 {}kbps", flow.capacity_kbps);
-    assert_eq!(flow.kbps, 5_000, "饿死期预算该爬到包络的 1.25 倍（逃生门），而不是被抽干的包络帽死");
+    assert_eq!(
+        flow.capacity_kbps, 4_000,
+        "包络必须冻结在已证明的管宽，实际 {}kbps",
+        flow.capacity_kbps
+    );
+    assert_eq!(
+        flow.kbps, 5_000,
+        "饿死期预算该爬到包络的 1.25 倍（逃生门），而不是被抽干的包络帽死"
+    );
     // 画面重新动起来，扩窗仍要继续。
-    for n in 12..18u64 { let bytes = flow.kbps as u64 * 25; wire(&mut flow, n * 1_000, 0, bytes); }
-    assert!(flow.kbps > 5_000, "恢复活动后必须还能继续扩窗，实际 {}kbps", flow.kbps);
+    for n in 12..18u64 {
+        let bytes = flow.kbps as u64 * 25;
+        wire(&mut flow, n * 1_000, 0, bytes);
+    }
+    assert!(
+        flow.kbps > 5_000,
+        "恢复活动后必须还能继续扩窗，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// 甲的定罪式：传输层否认「网络在排队」（有 RTT 样本、低于降速线、零丢包）时，绝对深度
@@ -924,16 +1178,30 @@ fn app_limited_windows_freeze_the_capacity_envelope() {
 /// 因为相邻两拍同为满帧时，上涨只剩排队（见 docs §5甲）。
 #[test]
 fn clean_transport_vetoes_absolute_depth_but_not_a_rising_trend() {
-    let o = WireOpts { ceiling: 8_000, rtt_ms: 29, ..Default::default() };
+    let o = WireOpts {
+        ceiling: 8_000,
+        rtt_ms: 29,
+        ..Default::default()
+    };
 
     // 上涨的一半：同为满帧的两拍之间又多排了 40ms，即使 rtt=29ms、零丢包也要缩预算。
     let mut rising = Flow::default();
     rising.budget(true, 8_000);
     rising.kbps = 4_000;
     for (n, backlog) in [0i64, 130, 170, 210].iter().enumerate() {
-        wire_opts(&mut rising, (n as u64 + 1) * 1_000, *backlog, 4_000 * 25, &o);
+        wire_opts(
+            &mut rising,
+            (n as u64 + 1) * 1_000,
+            *backlog,
+            4_000 * 25,
+            &o,
+        );
     }
-    assert!(rising.kbps < 4_000, "积压逐拍上涨仍是证据，实际 {}kbps", rising.kbps);
+    assert!(
+        rising.kbps < 4_000,
+        "积压逐拍上涨仍是证据，实际 {}kbps",
+        rising.kbps
+    );
 
     // 深度的一半：抬到 400ms 的那一拍本身就是上涨，允许它定罪；之后积压不再动、传输层
     // 清白，就不许再拿绝对值连砍（真机 v6 直连 52/52 拍正是这个形状）。
@@ -945,8 +1213,15 @@ fn clean_transport_vetoes_absolute_depth_but_not_a_rising_trend() {
     deep.discard(2_500, 0, 0);
     let after_ramp = deep.kbps;
     assert!(deep.backlog_ms > BACKLOG_DOWN_MS);
-    for n in 3..11u64 { wire_opts(&mut deep, n * 1_000, 400, 4_000 * 25, &o); }
-    assert!(deep.kbps >= after_ramp, "稳定深积压 + 传输层清白不该继续砍码率，实际 {} < {}", deep.kbps, after_ramp);
+    for n in 3..11u64 {
+        wire_opts(&mut deep, n * 1_000, 400, 4_000 * 25, &o);
+    }
+    assert!(
+        deep.kbps >= after_ramp,
+        "稳定深积压 + 传输层清白不该继续砍码率，实际 {} < {}",
+        deep.kbps,
+        after_ramp
+    );
 }
 
 // ── P0–P4（2026-10-06 手术）───────────────────────────────────────────────
@@ -963,10 +1238,23 @@ fn a_stretched_quiet_window_is_still_app_limited_and_still_freezes_the_envelope(
     flow.kbps = 4_000;
     wire(&mut flow, 1_000, 0, 4_000 * 25);
     assert_eq!(flow.capacity_kbps, 4_000, "满流窗先把管宽证明出来");
-    let long = WireOpts { ceiling: 8_000, sample_ms: 2_000, ..Default::default() };
-    for n in 2..6u64 { wire_opts(&mut flow, n * 3_000, 0, 2_000, &long); }
-    assert!(flow.app_limited, "窗口 2 秒 + 交付 8kbps：测的是画面不是管子");
-    assert_eq!(flow.capacity_kbps, 4_000, "P2：包络没有每拍衰减这回事，实际 {}kbps", flow.capacity_kbps);
+    let long = WireOpts {
+        ceiling: 8_000,
+        sample_ms: 2_000,
+        ..Default::default()
+    };
+    for n in 2..6u64 {
+        wire_opts(&mut flow, n * 3_000, 0, 2_000, &long);
+    }
+    assert!(
+        flow.app_limited,
+        "窗口 2 秒 + 交付 8kbps：测的是画面不是管子"
+    );
+    assert_eq!(
+        flow.capacity_kbps, 4_000,
+        "P2：包络没有每拍衰减这回事，实际 {}kbps",
+        flow.capacity_kbps
+    );
 }
 
 /// P0 换回来的那条证据必须有用：本窗被预算挡下过帧 ⇒ 需求确凿，不是 app-limited，
@@ -979,7 +1267,10 @@ fn a_budget_dropped_frame_is_demand_not_app_limiting() {
     flow.note_drop();
     wire(&mut flow, 1_000, 0, 2_000);
     assert!(flow.demand_limited, "丢帧证据要留在诊断里可见");
-    assert!(!flow.app_limited, "被预算挡过帧的低交付窗不是 app-limited（需求没饱和）");
+    assert!(
+        !flow.app_limited,
+        "被预算挡过帧的低交付窗不是 app-limited（需求没饱和）"
+    );
 
     // 反例（同一拍、同样的低交付，只是没丢帧）必须判反：否则这条证据等于没接上。
     let mut quiet = Flow::default();
@@ -996,16 +1287,28 @@ fn demand_with_clean_transport_probes_the_budget_up_double() {
     let mut flow = Flow::default();
     flow.budget(true, 8_000);
     flow.kbps = 1_000;
-    let o = WireOpts { ceiling: 8_000, rtt_ms: 29, ..Default::default() };
+    let o = WireOpts {
+        ceiling: 8_000,
+        rtt_ms: 29,
+        ..Default::default()
+    };
     flow.note_drop();
     wire_opts(&mut flow, 1_000, 0, 1_000 * 25, &o);
-    assert_eq!(flow.kbps, 2_000, "探测该翻倍而不是每秒 +25%，实际 {}kbps", flow.kbps);
+    assert_eq!(
+        flow.kbps, 2_000,
+        "探测该翻倍而不是每秒 +25%，实际 {}kbps",
+        flow.kbps
+    );
 
     // 冷却期内不许连续撞墙：同样的证据再来一拍，预算仍按探测走，但起点已经换过。
     let before = flow.kbps;
     flow.note_drop();
     wire_opts(&mut flow, 2_000, 0, before as u64 * 25, &o);
-    assert_eq!(flow.kbps, before, "5 秒冷却内不重复探测，实际 {}kbps", flow.kbps);
+    assert_eq!(
+        flow.kbps, before,
+        "5 秒冷却内不重复探测，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// 反方向红线（`tcp_bbr.c:788-799` 的 app-limited 语义）：静止画面 + 清白传输**不许**
@@ -1015,9 +1318,17 @@ fn a_quiet_screen_never_buys_a_probe() {
     let mut flow = Flow::default();
     flow.budget(true, 8_000);
     flow.kbps = 1_000;
-    let o = WireOpts { ceiling: 8_000, rtt_ms: 29, ..Default::default() };
+    let o = WireOpts {
+        ceiling: 8_000,
+        rtt_ms: 29,
+        ..Default::default()
+    };
     wire_opts(&mut flow, 1_000, 0, 1_000 * 25, &o);
-    assert!(flow.kbps < 2_000, "没丢帧时最多走 +25% 常规步进，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps < 2_000,
+        "没丢帧时最多走 +25% 常规步进，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// 探测失败只许挨一刀：保护窗内出现拥塞证据 ⇒ 回到探测起点。旧口径对膨胀后的值再乘
@@ -1027,7 +1338,11 @@ fn a_failed_probe_falls_back_to_its_starting_point() {
     let mut flow = Flow::default();
     flow.budget(true, 8_000);
     flow.kbps = 1_000;
-    let clean = WireOpts { ceiling: 8_000, rtt_ms: 29, ..Default::default() };
+    let clean = WireOpts {
+        ceiling: 8_000,
+        rtt_ms: 29,
+        ..Default::default()
+    };
     flow.note_drop();
     wire_opts(&mut flow, 1_000, 0, 1_000 * 25, &clean);
     assert_eq!(flow.kbps, 2_000, "先探上去");
@@ -1050,8 +1365,16 @@ fn one_congested_beat_does_not_crush_the_capacity_envelope() {
     // 拥塞定罪（rtt 盲区 + 积压 400ms）的同时交付只有 0kbps：预算照常砍，包络只挪 5%。
     // 两侧都要钉：只写下界的话，「拥塞也算 app-limited ⇒ 包络冻结」这种变异照样过关。
     wire(&mut flow, 2_000, 400, 0);
-    assert_eq!(flow.capacity_kbps, 3_800, "包络单拍恰好挪 α=0.05（4000−200），实际 {}kbps", flow.capacity_kbps);
-    assert!(flow.kbps < 4_000, "预算该降还是得降，实际 {}kbps", flow.kbps);
+    assert_eq!(
+        flow.capacity_kbps, 3_800,
+        "包络单拍恰好挪 α=0.05（4000−200），实际 {}kbps",
+        flow.capacity_kbps
+    );
+    assert!(
+        flow.kbps < 4_000,
+        "预算该降还是得降，实际 {}kbps",
+        flow.kbps
+    );
 }
 
 /// P2 的**残余地带**（P1 抓不到的那一半）：交付停在预算的六五到八成八之间时，这一窗
@@ -1062,12 +1385,24 @@ fn a_seventy_percent_window_does_not_dry_up_the_envelope() {
     let mut flow = Flow::default();
     flow.budget(true, 4_000);
     flow.kbps = 4_000;
-    let o = WireOpts { ceiling: 4_000, ..Default::default() };
+    let o = WireOpts {
+        ceiling: 4_000,
+        ..Default::default()
+    };
     wire_opts(&mut flow, 1_000, 0, 4_000 * 25, &o);
     assert_eq!(flow.capacity_kbps, 4_000, "满流窗先把管宽证明出来");
-    for n in 2..6u64 { wire_opts(&mut flow, n * 1_000, 0, 2_800 * 25, &o); }
-    assert!(!flow.app_limited, "交付是预算的 70%：这条走的是衰减分支，不是冻结分支");
-    assert_eq!(flow.capacity_kbps, 4_000, "包络没有「每拍衰减」这回事，实际 {}kbps", flow.capacity_kbps);
+    for n in 2..6u64 {
+        wire_opts(&mut flow, n * 1_000, 0, 2_800 * 25, &o);
+    }
+    assert!(
+        !flow.app_limited,
+        "交付是预算的 70%：这条走的是衰减分支，不是冻结分支"
+    );
+    assert_eq!(
+        flow.capacity_kbps, 4_000,
+        "包络没有「每拍衰减」这回事，实际 {}kbps",
+        flow.capacity_kbps
+    );
     assert_eq!(flow.kbps, 4_000, "上限已经压住预算，本测只验包络");
 }
 
@@ -1075,7 +1410,10 @@ fn a_seventy_percent_window_does_not_dry_up_the_envelope() {
 /// `transport_clear`。写第二遍的代价就是本轮那条自锁链——两处「链路干净」口径不一致。
 #[test]
 fn the_shared_transport_clear_predicate_is_the_only_door() {
-    assert!(!transport_clear(0, 0), "没有 RTT 样本时传输层不背书（rtt=0 是哨兵值不是 0ms）");
+    assert!(
+        !transport_clear(0, 0),
+        "没有 RTT 样本时传输层不背书（rtt=0 是哨兵值不是 0ms）"
+    );
     assert!(transport_clear(29, 0), "有样本、低于降速线、零丢包");
     assert!(!transport_clear(150, 0), "贴着降速线就不算清白");
     assert!(!transport_clear(29, 1), "一个千分点的丢包就不清白");
@@ -1108,15 +1446,30 @@ fn the_field_shape_that_stayed_at_2800kbps_for_seven_minutes_now_recovers() {
     assert_eq!(flow.capacity_kbps, 2_800);
 
     // 阶段一「安静型」：0.8fps 的反馈窗天然 1200ms，只交付 300kbps，传输层清白。
-    let quiet = WireOpts { ceiling: 8_000, sample_ms: 1_200, rtt_ms: 29, ..Default::default() };
+    let quiet = WireOpts {
+        ceiling: 8_000,
+        sample_ms: 1_200,
+        rtt_ms: 29,
+        ..Default::default()
+    };
     let quiet_bytes = 300u64 * 1_200 / 8;
     for n in 2..8u64 {
         wire_opts(&mut flow, n * 1_000, 0, quiet_bytes, &quiet);
     }
-    assert!(flow.app_limited, "长窗低交付必须判成 app-limited（P1 的正题）");
-    assert_eq!(flow.capacity_kbps, 2_800, "包络不许被安静期抽干（P2 的正题）");
+    assert!(
+        flow.app_limited,
+        "长窗低交付必须判成 app-limited（P1 的正题）"
+    );
+    assert_eq!(
+        flow.capacity_kbps, 2_800,
+        "包络不许被安静期抽干（P2 的正题）"
+    );
     assert!(flow.kbps > 2_800, "扩窗门要开着，实际 {}kbps", flow.kbps);
-    assert!(flow.kbps <= 3_500, "仍受漂移帽 1.25×包络约束，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps <= 3_500,
+        "仍受漂移帽 1.25×包络约束，实际 {}kbps",
+        flow.kbps
+    );
 
     // 阶段二「有需求型」：同样的低交付窗，但每窗都被预算挡下过一帧（P0 换回来的证据）
     // ⇒ 这不是画面少，是我们自己发不出去 ⇒ 探测翻倍（P3）。真机那七分钟里鼠标一直在动，
@@ -1126,10 +1479,13 @@ fn the_field_shape_that_stayed_at_2800kbps_for_seven_minutes_now_recovers() {
         wire_opts(&mut flow, n * 1_000, 0, quiet_bytes, &quiet);
         assert!(!flow.app_limited, "有丢帧证据时不许再算 app-limited");
     }
-    assert!(flow.kbps >= 5_000, "两次冷却到期的探测应把预算翻倍抬起来，实际 {}kbps", flow.kbps);
+    assert!(
+        flow.kbps >= 5_000,
+        "两次冷却到期的探测应把预算翻倍抬起来，实际 {}kbps",
+        flow.kbps
+    );
     assert!(flow.demand_limited, "需求证据要留在诊断里");
 }
-
 
 #[test]
 fn full_hd_budget_floor_feeds_text_but_yields_to_measured_capacity() {
@@ -1156,9 +1512,19 @@ fn healthy_relay_steady_state_backlog_inside_jitter_band_never_cuts() {
     let mut flow = Flow::default();
     flow.budget(true, 8_000);
     flow.kbps = 2_000;
-    let o = WireOpts { ceiling: 8_000, rtt_ms: 600, ..Default::default() };
+    let o = WireOpts {
+        ceiling: 8_000,
+        rtt_ms: 600,
+        ..Default::default()
+    };
     // wire 首拍基线为 0，s2 的 0→400 上升沿会被 rising 合法定罪一刀；此后稳态
     // 不许再砍，站住平台还要能扩窗。净效果：25 拍后不许低于起点。
-    for n in 1..26u64 { wire_opts(&mut flow, n * 1_000, 400, 2_000 * 25, &o); }
-    assert!(flow.kbps >= 2_000, "抖动带内的稳态积压不许被连砍，实际 {}kbps", flow.kbps);
+    for n in 1..26u64 {
+        wire_opts(&mut flow, n * 1_000, 400, 2_000 * 25, &o);
+    }
+    assert!(
+        flow.kbps >= 2_000,
+        "抖动带内的稳态积压不许被连砍，实际 {}kbps",
+        flow.kbps
+    );
 }

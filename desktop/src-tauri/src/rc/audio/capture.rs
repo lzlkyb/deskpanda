@@ -78,7 +78,14 @@ impl LoopbackCapture {
                 .map_err(mf_err)?;
             let capture: IAudioCaptureClient = client.GetService().map_err(mf_err)?;
             client.Start().map_err(mf_err)?;
-            Ok(Self { client, capture, sr, ch, fmt, device_id: dev_id })
+            Ok(Self {
+                client,
+                capture,
+                sr,
+                ch,
+                fmt,
+                device_id: dev_id,
+            })
         }
     }
 
@@ -123,14 +130,18 @@ impl LoopbackCapture {
                     let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
                     let stereo: Vec<f32> = match (self.fmt, silent) {
                         (SampleFmt::F32, false) => {
-                            let f: &[f32] =
-                                std::slice::from_raw_parts(p as *const f32, frames as usize * self.ch);
+                            let f: &[f32] = std::slice::from_raw_parts(
+                                p as *const f32,
+                                frames as usize * self.ch,
+                            );
                             downmix_to_stereo_f32(f, self.ch)
                         }
                         (SampleFmt::F32, true) => vec![0.0; frames as usize * 2],
                         (SampleFmt::S16, false) => {
-                            let s: &[i16] =
-                                std::slice::from_raw_parts(p as *const i16, frames as usize * self.ch);
+                            let s: &[i16] = std::slice::from_raw_parts(
+                                p as *const i16,
+                                frames as usize * self.ch,
+                            );
                             let f: Vec<f32> = s.iter().map(|v| *v as f32 / 32768.0).collect();
                             downmix_to_stereo_f32(&f, self.ch)
                         }
@@ -200,7 +211,13 @@ impl MicCapture {
                 .map_err(mf_err)?;
             let capture: IAudioCaptureClient = client.GetService().map_err(mf_err)?;
             client.Start().map_err(mf_err)?;
-            Ok(Self { client, capture, sr, ch, fmt })
+            Ok(Self {
+                client,
+                capture,
+                sr,
+                ch,
+                fmt,
+            })
         }
     }
 
@@ -237,14 +254,18 @@ impl MicCapture {
                     let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
                     let stereo: Vec<f32> = match (self.fmt, silent) {
                         (SampleFmt::F32, false) => {
-                            let f: &[f32] =
-                                std::slice::from_raw_parts(p as *const f32, frames as usize * self.ch);
+                            let f: &[f32] = std::slice::from_raw_parts(
+                                p as *const f32,
+                                frames as usize * self.ch,
+                            );
                             downmix_to_stereo_f32(f, self.ch)
                         }
                         (SampleFmt::F32, true) => vec![0.0; frames as usize * 2],
                         (SampleFmt::S16, false) => {
-                            let s: &[i16] =
-                                std::slice::from_raw_parts(p as *const i16, frames as usize * self.ch);
+                            let s: &[i16] = std::slice::from_raw_parts(
+                                p as *const i16,
+                                frames as usize * self.ch,
+                            );
                             let f: Vec<f32> = s.iter().map(|v| *v as f32 / 32768.0).collect();
                             downmix_to_stereo_f32(&f, self.ch)
                         }
@@ -350,7 +371,10 @@ impl AudioWorker {
                 //「通道已关」同样立即返回——两条路都不挂等待方。
                 let _ = ack_tx.send(());
             });
-        Self { stop, exited: ack_rx }
+        Self {
+            stop,
+            exited: ack_rx,
+        }
     }
 
     pub fn stop(&self) {
@@ -365,11 +389,8 @@ impl AudioWorker {
     /// 就开泵，就是双采集的来源。调用点是 async 任务，await 不占线程。
     pub async fn stop_confirmed(&mut self) {
         self.stop();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(350),
-            self.exited.recv(),
-        )
-        .await;
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(350), self.exited.recv()).await;
     }
 }
 
@@ -482,7 +503,10 @@ fn audio_thread(stop: Arc<AtomicBool>, wanted: WantedFlag, tx: AudioTx) {
                 }
             }
             Err(err) => {
-                log::warn!("[RC] AAC 编码失败，重开编码器（pts 基点接续在 {} 帧）：{err}", samples_total);
+                log::warn!(
+                    "[RC] AAC 编码失败，重开编码器（pts 基点接续在 {} 帧）：{err}",
+                    samples_total
+                );
                 // 编码器换了但设备没换：只重开编码器，pts 基点用累计帧数接续（P2-6）。
                 match AacEncoder::open(c.sample_rate()) {
                     Ok(mut e2) => {
@@ -513,8 +537,11 @@ struct ComGuard {
 impl ComGuard {
     fn new() -> Self {
         let owned = unsafe {
-            windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
-                .is_ok()
+            windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_MULTITHREADED,
+            )
+            .is_ok()
         };
         Self { owned }
     }

@@ -56,7 +56,11 @@ fn 非法字符被替换成下划线() {
 fn windows保留名被前缀化() {
     assert_eq!(safe_file_name("CON").unwrap(), "_CON");
     assert_eq!(safe_file_name("nul").unwrap(), "_nul");
-    assert_eq!(safe_file_name("NUL.txt").unwrap(), "_NUL.txt", "带扩展名同样是保留名");
+    assert_eq!(
+        safe_file_name("NUL.txt").unwrap(),
+        "_NUL.txt",
+        "带扩展名同样是保留名"
+    );
     assert_eq!(safe_file_name("com1.log").unwrap(), "_com1.log");
     assert_eq!(safe_file_name("LPT9").unwrap(), "_LPT9");
     assert_eq!(safe_file_name("COM0").unwrap(), "_COM0");
@@ -68,8 +72,16 @@ fn windows保留名被前缀化() {
     assert_eq!(safe_file_name("CONSOLE.txt").unwrap(), "CONSOLE.txt");
     assert_eq!(safe_file_name("com10.txt").unwrap(), "com10.txt");
     assert_eq!(safe_file_name("MYCON.txt").unwrap(), "MYCON.txt");
-    assert_eq!(safe_file_name("a.com1.txt").unwrap(), "a.com1.txt", "主干是 a 不是 com1");
-    assert_eq!(safe_file_name("CONIN2.txt").unwrap(), "CONIN2.txt", "CONIN2 不是设备名");
+    assert_eq!(
+        safe_file_name("a.com1.txt").unwrap(),
+        "a.com1.txt",
+        "主干是 a 不是 com1"
+    );
+    assert_eq!(
+        safe_file_name("CONIN2.txt").unwrap(),
+        "CONIN2.txt",
+        "CONIN2 不是设备名"
+    );
 }
 
 #[test]
@@ -119,12 +131,12 @@ fn 重名递增不覆盖() {
     // 无冲突时原样返回
     assert_eq!(unique_name("新.zip", |_| false).unwrap(), "新.zip");
     // 没有扩展名
-    assert_eq!(unique_name("README", |n| n == "README").unwrap(), "README (1)");
-    // 隐藏文件（点开头）不会被拆成空主干
     assert_eq!(
-        unique_name(".env", |n| n == ".env").unwrap(),
-        ".env (1)"
+        unique_name("README", |n| n == "README").unwrap(),
+        "README (1)"
     );
+    // 隐藏文件（点开头）不会被拆成空主干
+    assert_eq!(unique_name(".env", |n| n == ".env").unwrap(), ".env (1)");
 }
 
 /// P1-4：同名 `.pppart` 存在时必须换名——只查最终名会撞上正在写的 part。
@@ -170,7 +182,11 @@ fn 重名递增不会撑爆长度() {
     let long = format!("{}.zip", "字".repeat(250));
     // 只占原名，让 (1) 候选可用
     let out = unique_name(&long, |n| n == long).unwrap();
-    assert!(out.chars().count() <= MAX_COMPONENT, "{}", out.chars().count());
+    assert!(
+        out.chars().count() <= MAX_COMPONENT,
+        "{}",
+        out.chars().count()
+    );
     // 🔴 后缀必须还在：曾经的实现是「先拼后缀再截断」，于是把 `(1)` 截掉了，
     //    候选等于原名 ⇒ 永远冲突 ⇒ 空转到上限报错（下面这条断言就是那个 bug 的守卫）。
     assert!(out.contains("(1)"), "递增后缀被截掉了：{}", out);
@@ -191,7 +207,9 @@ fn 头帧往返() {
     };
     let b = encode_head(&h).unwrap();
     assert_eq!(decode_head(&b).unwrap(), h);
-    assert!(String::from_utf8(b.clone()).unwrap().contains("\"t\":\"push\""));
+    assert!(String::from_utf8(b.clone())
+        .unwrap()
+        .contains("\"t\":\"push\""));
 
     let p = FileHead::PullReq {
         v: VERSION,
@@ -241,7 +259,12 @@ fn 头帧拒绝版本不符与超限() {
 
     // 空 / 超长 / 垃圾
     assert_eq!(decode_head(b"").unwrap_err().code, code::BAD_HEAD);
-    assert_eq!(decode_head(&vec![b'x'; MAX_HEAD_JSON + 1]).unwrap_err().code, code::BAD_HEAD);
+    assert_eq!(
+        decode_head(&vec![b'x'; MAX_HEAD_JSON + 1])
+            .unwrap_err()
+            .code,
+        code::BAD_HEAD
+    );
     assert_eq!(decode_head(b"not json").unwrap_err().code, code::BAD_HEAD);
 }
 
@@ -293,21 +316,38 @@ fn 续传提示按编码后总长裁剪_长中文名极端用例_b7() {
         })
         .collect();
     let raw_len = serde_json::to_vec(&hints).unwrap().len();
-    assert!(raw_len > MAX_HEAD_JSON, "前置：用例本身必须超预算（{raw_len}）");
+    assert!(
+        raw_len > MAX_HEAD_JSON,
+        "前置：用例本身必须超预算（{raw_len}）"
+    );
 
     let kept = clamp_resume_hints(hints);
-    assert!(kept.len() < MAX_RESUME_HINTS, "超预算必须逐条丢弃，实际保留 {}", kept.len());
-    assert!(!kept.is_empty(), "单条提示必然塞得下（名字 ≤ 1024 字节），不许裁到空");
+    assert!(
+        kept.len() < MAX_RESUME_HINTS,
+        "超预算必须逐条丢弃，实际保留 {}",
+        kept.len()
+    );
+    assert!(
+        !kept.is_empty(),
+        "单条提示必然塞得下（名字 ≤ 1024 字节），不许裁到空"
+    );
     // 发出去的这条头，接收侧必须能原样收下——「发得出、收不进」不再成立
     let bytes = encode_head(&FileHead::PullReq {
         v: VERSION,
         resume: kept.clone(),
     })
     .unwrap();
-    assert!(bytes.len() <= MAX_HEAD_JSON, "编码后 {} 字节仍超限", bytes.len());
+    assert!(
+        bytes.len() <= MAX_HEAD_JSON,
+        "编码后 {} 字节仍超限",
+        bytes.len()
+    );
     assert_eq!(
         decode_head(&bytes).unwrap(),
-        FileHead::PullReq { v: VERSION, resume: kept },
+        FileHead::PullReq {
+            v: VERSION,
+            resume: kept
+        },
         "接收侧解码必须成功"
     );
 
@@ -390,11 +430,21 @@ fn part文件命名往返() {
 #[test]
 fn rtl混淆字符被替换() {
     let cleaned = safe_file_name("报价\u{202E}gpj.exe").expect("净化不该失败");
-    assert!(!cleaned.contains('\u{202E}'), "U+202E 穿透了净化：{cleaned}");
-    assert!(cleaned.ends_with(".exe"), "净化后真实扩展名必须还在：{cleaned}");
+    assert!(
+        !cleaned.contains('\u{202E}'),
+        "U+202E 穿透了净化：{cleaned}"
+    );
+    assert!(
+        cleaned.ends_with(".exe"),
+        "净化后真实扩展名必须还在：{cleaned}"
+    );
     // 其它 Cf 类一并拦
-    assert!(!safe_file_name("a\u{200B}b.txt").unwrap().contains('\u{200B}'));
-    assert!(!safe_file_name("a\u{2066}b.txt").unwrap().contains('\u{2066}'));
+    assert!(!safe_file_name("a\u{200B}b.txt")
+        .unwrap()
+        .contains('\u{200B}'));
+    assert!(!safe_file_name("a\u{2066}b.txt")
+        .unwrap()
+        .contains('\u{2066}'));
     // 正常名不受影响
     assert_eq!(safe_file_name("报价.txt").unwrap(), "报价.txt");
 }

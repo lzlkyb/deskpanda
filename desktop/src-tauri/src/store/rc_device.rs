@@ -108,11 +108,10 @@ pub fn normalize_tags(tags: Vec<DeviceTag>) -> Vec<DeviceTag> {
 
 fn row_to(r: &rusqlite::Row) -> rusqlite::Result<RcDevice> {
     let tags_raw: String = r.get(10)?;
-    let tags: Vec<DeviceTag> =
-        serde_json::from_str(&tags_raw).unwrap_or_else(|e| {
-            log::warn!("[DataStore] rc_devices.tags 解析失败，按空处理: {e}");
-            Vec::new()
-        });
+    let tags: Vec<DeviceTag> = serde_json::from_str(&tags_raw).unwrap_or_else(|e| {
+        log::warn!("[DataStore] rc_devices.tags 解析失败，按空处理: {e}");
+        Vec::new()
+    });
     Ok(RcDevice {
         node_id: r.get(0)?,
         name: r.get(1)?,
@@ -132,16 +131,24 @@ fn row_to(r: &rusqlite::Row) -> rusqlite::Result<RcDevice> {
 impl DataStore {
     /// Authenticated peer metadata updates existing trust only, never creates it.
     /// User notes and permission switches remain local and are not overwritten.
-    pub fn rc_device_note_identity(&self, node_id: &str, name: &str, os: &str) -> Result<bool, String> {
+    pub fn rc_device_note_identity(
+        &self,
+        node_id: &str,
+        name: &str,
+        os: &str,
+    ) -> Result<bool, String> {
         let name: String = name.trim().chars().take(60).collect();
         let os: String = os.trim().chars().take(60).collect();
-        self.lock_conn().execute(
-            "UPDATE rc_devices SET
+        self.lock_conn()
+            .execute(
+                "UPDATE rc_devices SET
                 name = CASE WHEN ?2 <> '' THEN ?2 ELSE name END,
                 os = CASE WHEN ?3 <> '' THEN ?3 ELSE os END
              WHERE node_id = ?1 AND ((?2 <> '' AND name <> ?2) OR (?3 <> '' AND os <> ?3))",
-            rusqlite::params![node_id, name, os],
-        ).map(|count| count > 0).map_err(|e| e.to_string())
+                rusqlite::params![node_id, name, os],
+            )
+            .map(|count| count > 0)
+            .map_err(|e| e.to_string())
     }
 
     /// 配对（或更新名字）。与同步的 `device_pair` 互不影响。
@@ -302,7 +309,9 @@ impl DataStore {
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
-            return Err("这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），设置未保存".into());
+            return Err(
+                "这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），设置未保存".into(),
+            );
         }
         Ok(())
     }
@@ -322,7 +331,9 @@ impl DataStore {
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
-            return Err("这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），备注未保存".into());
+            return Err(
+                "这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），备注未保存".into(),
+            );
         }
         Ok(())
     }
@@ -342,7 +353,9 @@ impl DataStore {
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
-            return Err("这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），标签未保存".into());
+            return Err(
+                "这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），标签未保存".into(),
+            );
         }
         Ok(())
     }
@@ -360,7 +373,9 @@ impl DataStore {
             )
             .map_err(|e| e.to_string())?;
         if changed == 0 {
-            return Err("这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），描述未保存".into());
+            return Err(
+                "这台设备不在远程配对列表里（可能只做了同步配对，或已被忘记），描述未保存".into(),
+            );
         }
         Ok(())
     }
@@ -377,17 +392,23 @@ mod tests {
     #[test]
     fn identity_refresh_repairs_generic_name_without_replacing_alias_or_creating_trust() {
         let s = store();
-        assert!(!s.rc_device_note_identity("unknown", "Pixel 9", "Android").unwrap());
+        assert!(!s
+            .rc_device_note_identity("unknown", "Pixel 9", "Android")
+            .unwrap());
         assert!(s.rc_device_get("unknown").unwrap().is_none());
         s.rc_device_pair("phone", "新设备").unwrap();
         s.rc_device_note_set("phone", "我的手机").unwrap();
-        assert!(s.rc_device_note_identity("phone", " Google Pixel 9 ", " Android ").unwrap());
+        assert!(s
+            .rc_device_note_identity("phone", " Google Pixel 9 ", " Android ")
+            .unwrap());
         let d = s.rc_device_get("phone").unwrap().unwrap();
         assert_eq!(d.name, "Google Pixel 9");
         assert_eq!(d.os, "Android");
         assert_eq!(d.note, "我的手机");
         assert!(!s.rc_device_note_identity("phone", "", "").unwrap());
-        assert!(!s.rc_device_note_identity("phone", "Google Pixel 9", "Android").unwrap());
+        assert!(!s
+            .rc_device_note_identity("phone", "Google Pixel 9", "Android")
+            .unwrap());
         assert_eq!(s.rc_device_get("phone").unwrap().unwrap(), d);
     }
 
@@ -484,12 +505,18 @@ mod tests {
         s.rc_device_pair("peer-a", "A").unwrap();
         s.rc_device_auto_accept_set("peer-a", true).unwrap();
         let d = s.rc_device_get("peer-a").unwrap().unwrap();
-        assert!(d.auto_accept && !d.trusted, "只开自动收文件，不该顺带免确认接管");
+        assert!(
+            d.auto_accept && !d.trusted,
+            "只开自动收文件，不该顺带免确认接管"
+        );
 
         s.rc_device_trust_set("peer-a", true).unwrap();
         s.rc_device_auto_accept_set("peer-a", false).unwrap();
         let d = s.rc_device_get("peer-a").unwrap().unwrap();
-        assert!(d.trusted && !d.auto_accept, "关掉自动收文件，不该顺带关掉免确认");
+        assert!(
+            d.trusted && !d.auto_accept,
+            "关掉自动收文件，不该顺带关掉免确认"
+        );
     }
 
     /// 决策 10：`COLS` 必须带上 `auto_accept`——列表查询漏列会让 UI 永远显示「未开」，
@@ -501,10 +528,7 @@ mod tests {
         s.rc_device_auto_accept_set("peer-a", true).unwrap();
         let list = s.rc_device_list().unwrap();
         assert_eq!(list.len(), 1);
-        assert!(
-            list[0].auto_accept,
-            "列表查询的 COLS 必须带上 auto_accept"
-        );
+        assert!(list[0].auto_accept, "列表查询的 COLS 必须带上 auto_accept");
     }
 
     /// 🔴 影响 0 行必须报错（照 `note_set` 的判据）：否则 UI 开关显示「已开」，
@@ -633,7 +657,10 @@ mod tests {
     }
 
     fn tag(name: &str, color: &str) -> DeviceTag {
-        DeviceTag { name: name.into(), color: color.into() }
+        DeviceTag {
+            name: name.into(),
+            color: color.into(),
+        }
     }
 
     /// 标签：默认空、写入往返、可清空；列表查询必须带上（COLS 漏列是最难查的静默失效）。
@@ -642,7 +669,8 @@ mod tests {
         let s = store();
         s.rc_device_pair("peer-a", "A").unwrap();
         assert!(s.rc_device_get("peer-a").unwrap().unwrap().tags.is_empty());
-        s.rc_device_tags_set("peer-a", vec![tag("家用", "blue"), tag("装机", "amber")]).unwrap();
+        s.rc_device_tags_set("peer-a", vec![tag("家用", "blue"), tag("装机", "amber")])
+            .unwrap();
         let d = s.rc_device_get("peer-a").unwrap().unwrap();
         assert_eq!(d.tags, vec![tag("家用", "blue"), tag("装机", "amber")]);
         let list = s.rc_device_list().unwrap();
@@ -664,10 +692,24 @@ mod tests {
         s.rc_device_tags_set("peer-a", many).unwrap();
         let d = s.rc_device_get("peer-a").unwrap().unwrap();
         assert_eq!(d.tags.len(), 6, "上限 6 个");
-        assert!(d.tags.iter().all(|t| t.color == "blue"), "色板外必须回落 blue");
-        assert_eq!(d.tags.iter().filter(|t| t.name == "标签0").count(), 1, "重名去重");
-        s.rc_device_tags_set("peer-a", vec![tag(&"超".to_string().repeat(30), "red")]).unwrap();
-        assert_eq!(s.rc_device_get("peer-a").unwrap().unwrap().tags[0].name.chars().count(), 12);
+        assert!(
+            d.tags.iter().all(|t| t.color == "blue"),
+            "色板外必须回落 blue"
+        );
+        assert_eq!(
+            d.tags.iter().filter(|t| t.name == "标签0").count(),
+            1,
+            "重名去重"
+        );
+        s.rc_device_tags_set("peer-a", vec![tag(&"超".to_string().repeat(30), "red")])
+            .unwrap();
+        assert_eq!(
+            s.rc_device_get("peer-a").unwrap().unwrap().tags[0]
+                .name
+                .chars()
+                .count(),
+            12
+        );
     }
 
     #[test]
@@ -686,15 +728,30 @@ mod tests {
         let s = store();
         s.rc_device_pair("peer-a", "DESKTOP-A").unwrap();
         assert_eq!(s.rc_device_get("peer-a").unwrap().unwrap().remark, "");
-        s.rc_device_remark_set("peer-a", "  双 4K，走中继较卡  ").unwrap();
-        assert_eq!(s.rc_device_get("peer-a").unwrap().unwrap().remark, "双 4K，走中继较卡");
+        s.rc_device_remark_set("peer-a", "  双 4K，走中继较卡  ")
+            .unwrap();
+        assert_eq!(
+            s.rc_device_get("peer-a").unwrap().unwrap().remark,
+            "双 4K，走中继较卡"
+        );
         s.rc_device_remark_set("peer-a", &"长".repeat(300)).unwrap();
-        assert_eq!(s.rc_device_get("peer-a").unwrap().unwrap().remark.chars().count(), 200);
+        assert_eq!(
+            s.rc_device_get("peer-a")
+                .unwrap()
+                .unwrap()
+                .remark
+                .chars()
+                .count(),
+            200
+        );
         s.rc_device_remark_set("peer-a", "").unwrap();
         let d = s.rc_device_get("peer-a").unwrap().unwrap();
         assert_eq!(d.remark, "");
         assert_eq!(d.name, "DESKTOP-A", "写 remark 不该碰 name");
         assert_eq!(d.note, "", "写 remark 不该碰改名别名 note");
-        assert!(s.rc_device_remark_set("peer-only-sync", "x").is_err(), "影响 0 行必须报错");
+        assert!(
+            s.rc_device_remark_set("peer-only-sync", "x").is_err(),
+            "影响 0 行必须报错"
+        );
     }
 }

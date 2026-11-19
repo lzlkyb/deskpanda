@@ -89,11 +89,7 @@ pub(crate) fn next_period_ms(active: bool, interval_ms: u64, pace_scale: u32) ->
 /// ❗ `virtual_screen` / `gpu_disabled` 要一起传进来：D6b 在无零拷贝路径时
 /// 把 fps120 档的节拍从 8ms 降回 16ms（见 [`effective_interval_ms`]），
 /// 若只按档位原始间隔算，编码器会按 120fps 出时间戳而实际只跑 60fps。
-pub(crate) fn want_fps_for(
-    profile_interval: u64,
-    virtual_screen: bool,
-    gpu_disabled: bool,
-) -> u32 {
+pub(crate) fn want_fps_for(profile_interval: u64, virtual_screen: bool, gpu_disabled: bool) -> u32 {
     let effective = boost_gap_ms(effective_interval_ms(
         profile_interval,
         virtual_screen,

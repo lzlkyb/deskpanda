@@ -215,7 +215,7 @@ impl RcService {
     /// 与「对端发 `SetHostMute`」的区别：**这是本机自己的操作**，所以顺手清掉
     /// 「对端静音的」标记（横幅提示与恢复按钮随之收起），并推一次状态帧——
     /// 否则对端那个按钮会停在一个已经不成立的状态上。返回读回的真实值。
-    #[cfg(any(target_os="windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub async fn host_mute_local(&self, on: bool) -> Result<bool, String> {
         let actual = crate::rc::audio::spk_mute_set(on)?;
         self.set_spk_muted_by_peer(false);

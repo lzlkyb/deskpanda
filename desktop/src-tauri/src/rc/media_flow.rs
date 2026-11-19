@@ -86,7 +86,6 @@ impl Flow {
     }
 }
 
-
 /// 「传输层否认网络在排队」的唯一判据：RTT 已有样本、低于降速线、且零丢包。
 /// 🔴 单一数据源（AGENTS 规则 11.1）：控制器定罪（`feedback`）与采集圈的自适应降频
 /// 复位（P4，`inbound::video_run`）必须看同一个数，判据写两遍必漏一处。
@@ -161,7 +160,11 @@ struct Pending {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Admission { Ready, Wait, Reset }
+pub(super) enum Admission {
+    Ready,
+    Wait,
+    Reset,
+}
 
 pub(super) struct Flow {
     pub kbps: u32,
@@ -229,15 +232,42 @@ pub(super) struct Flow {
 
 impl Default for Flow {
     fn default() -> Self {
-        Self { kbps: 2_000, delivered_kbps: 0, capacity_kbps: 0, queue_ms: 0, backlog_ms: 0,
-            app_limited: false, demand_limited: false, congested: false, peer_queue_ms: 0, tx_work_ms: 0,
+        Self {
+            kbps: 2_000,
+            delivered_kbps: 0,
+            capacity_kbps: 0,
+            queue_ms: 0,
+            backlog_ms: 0,
+            app_limited: false,
+            demand_limited: false,
+            congested: false,
+            peer_queue_ms: 0,
+            tx_work_ms: 0,
             pending: VecDeque::new(),
-            pending_bytes: 0, next_ms: 0, ack_at_ms: 0, presented_at_ms: 0, last_adjust_ms: 0,
-            prev_backlog_ms: None, plateau: None, drops_in_window: 0, probe_floor: 0,
-            deep_streak: 0, post_cut_wait: 0,
-            probe_at_ms: None, last_reset_ms: None, last_feedback_ms: None, baseline_age_ms: i64::MAX,
-            baseline_ack_ms: u64::MAX, ack_delay_ms: None, ack_mean_ms: None,
-            ack_variance_ms: 0, relay: None, fps: 15, min_kbps: MIN_KBPS, fps_up_since: None }
+            pending_bytes: 0,
+            next_ms: 0,
+            ack_at_ms: 0,
+            presented_at_ms: 0,
+            last_adjust_ms: 0,
+            prev_backlog_ms: None,
+            plateau: None,
+            drops_in_window: 0,
+            probe_floor: 0,
+            deep_streak: 0,
+            post_cut_wait: 0,
+            probe_at_ms: None,
+            last_reset_ms: None,
+            last_feedback_ms: None,
+            baseline_age_ms: i64::MAX,
+            baseline_ack_ms: u64::MAX,
+            ack_delay_ms: None,
+            ack_mean_ms: None,
+            ack_variance_ms: 0,
+            relay: None,
+            fps: 15,
+            min_kbps: MIN_KBPS,
+            fps_up_since: None,
+        }
     }
 }
 
@@ -271,30 +301,47 @@ impl Flow {
     /// 每圈编码时由调用点喂实际编码宽：宽 ≥[`FULLHD_MIN_WIDTH`] ⇒ 地板抬到
     /// [`FULLHD_FLOOR_KBPS`]（1080p 喂不饱就是色块+积压 RESET，见常量注释）。
     pub fn note_encode_width(&mut self, w: u32) {
-        self.min_kbps = if w >= FULLHD_MIN_WIDTH { FULLHD_FLOOR_KBPS } else { MIN_KBPS };
+        self.min_kbps = if w >= FULLHD_MIN_WIDTH {
+            FULLHD_FLOOR_KBPS
+        } else {
+            MIN_KBPS
+        };
     }
 
     /// 预算下限。1080p 档抬到 [`FULLHD_FLOOR_KBPS`]，再被实测容量包络钳到九成：
     /// 链路真窄时地板跟着包络降（不下探过 [`MIN_KBPS`]）；无容量证据时信档位地板。
     fn floor_kbps(&self) -> u32 {
-        if self.min_kbps <= MIN_KBPS { return MIN_KBPS; }
+        if self.min_kbps <= MIN_KBPS {
+            return MIN_KBPS;
+        }
         if self.capacity_kbps > 0 {
             MIN_KBPS.max(self.min_kbps.min(self.capacity_kbps * 9 / 10))
-        } else { self.min_kbps }
+        } else {
+            self.min_kbps
+        }
     }
 
     pub fn sent(&mut self, now: u64, started_ms: u64, at_ms: i64, bytes: usize) {
         // 采集/编码启动到真正上线的耗时：对端那个「队列」里属于我们自己的那一半。
-        self.tx_work_ms = self.tx_work_ms.saturating_mul(3).saturating_add(
-            now.saturating_sub(started_ms.min(now))) / 4;
+        self.tx_work_ms = self
+            .tx_work_ms
+            .saturating_mul(3)
+            .saturating_add(now.saturating_sub(started_ms.min(now)))
+            / 4;
         // 反馈可能比 write future 的完成更早，不把已交付帧重新记作积压。
         if at_ms > self.ack_at_ms {
-            self.pending.push_back(Pending { at_ms, sent_ms: now, bytes });
+            self.pending.push_back(Pending {
+                at_ms,
+                sent_ms: now,
+                bytes,
+            });
             self.pending_bytes = self.pending_bytes.saturating_add(bytes);
         }
         // 采集/编码和入队已经占用了本帧节拍，不能在工作结束后再等完整间隔。
         // 异步写入及同圈多个编码包仍累加字节债务；空闲不积攒突发发送额度。
-        self.next_ms = self.next_ms.max(started_ms.min(now))
+        self.next_ms = self
+            .next_ms
+            .max(started_ms.min(now))
             .saturating_add((bytes as u64 * 8).div_ceil(self.kbps as u64));
     }
 
@@ -314,13 +361,26 @@ impl Flow {
 
     /// `rtt_ms` 是传输层当前 RTT（`video_rtt_ms()`，0 = 尚无样本）：它是「网络自己承认在
     /// 排队吗」的独立仪表，用来豁免两个队列口径共同的污染源（见下方 `transport_clear`）。
-    pub fn feedback(&mut self, now: u64, f: &MediaFeedback, ceiling: u32, loss_pm: i64, rtt_ms: i64) {
-        if f.received_at_ms <= self.ack_at_ms { return; }
+    pub fn feedback(
+        &mut self,
+        now: u64,
+        f: &MediaFeedback,
+        ceiling: u32,
+        loss_pm: i64,
+        rtt_ms: i64,
+    ) {
+        if f.received_at_ms <= self.ack_at_ms {
+            return;
+        }
         self.ack_at_ms = f.received_at_ms;
         self.last_feedback_ms = Some(now);
         let mut first_delay = None;
         let mut latest_delay = None;
-        while self.pending.front().is_some_and(|p| p.at_ms <= self.ack_at_ms) {
+        while self
+            .pending
+            .front()
+            .is_some_and(|p| p.at_ms <= self.ack_at_ms)
+        {
             let p = self.pending.pop_front().unwrap();
             let delay = now.saturating_sub(p.sent_ms);
             first_delay.get_or_insert(delay);
@@ -330,12 +390,16 @@ impl Flow {
         if let Some(delay) = first_delay {
             // 媒体 ACK 包含整帧交付、200ms 采样和回程，小 ping RTT 会显著低估它。
             // 保留近期上界并逐样本衰减；异常样本不能突破 admission 的硬上界。
-            self.ack_delay_ms = Some(delay.max(self.ack_delay_ms.unwrap_or(0).saturating_mul(7) / 8));
+            self.ack_delay_ms =
+                Some(delay.max(self.ack_delay_ms.unwrap_or(0).saturating_mul(7) / 8));
             // ACK 回程抖动不会出现在接收端队列中。只用上次耗时 + 固定余量
             // 会在健康但抖动的中继上反复 RESET；以平滑耗时和偏差估计恢复预算。
             if let Some(mean) = self.ack_mean_ms {
-                self.ack_variance_ms = (self.ack_variance_ms.saturating_mul(3)
-                    .saturating_add(delay.abs_diff(mean))) / 4;
+                self.ack_variance_ms = (self
+                    .ack_variance_ms
+                    .saturating_mul(3)
+                    .saturating_add(delay.abs_diff(mean)))
+                    / 4;
                 self.ack_mean_ms = Some(mean.saturating_mul(7).saturating_add(delay) / 8);
             } else {
                 self.ack_mean_ms = Some(delay);
@@ -347,14 +411,18 @@ impl Flow {
             // 用批内最新 ACK，避免把 200ms 反馈采样跨度当成新增队列。
             self.baseline_ack_ms = self.baseline_ack_ms.min(delay);
             // 采样相位本身可在 0..200ms 变化，并不是网络或解码队列增长。
-            self.queue_ms = delay.saturating_sub(self.baseline_ack_ms).saturating_sub(FEEDBACK_MS)
+            self.queue_ms = delay
+                .saturating_sub(self.baseline_ack_ms)
+                .saturating_sub(FEEDBACK_MS)
                 .min(i64::MAX as u64) as i64;
         } else {
             // ACK 先于 write future 返回时尚无发送记录，保留已有帧龄口径兜底。
             self.baseline_age_ms = self.baseline_age_ms.min(f.age_ms.max(0));
             self.queue_ms = f.age_ms.saturating_sub(self.baseline_age_ms).max(0);
         }
-        if let Some(queue) = f.receive_queue_ms { self.peer_queue_ms = queue.max(0); }
+        if let Some(queue) = f.receive_queue_ms {
+            self.peer_queue_ms = queue.max(0);
+        }
         // 拥塞判据的证据锚：本端 send→ack 超额。**对端上报的 `receive_queue_ms` 不再
         // 覆盖它**——那个数从采集时刻起算（`at_ms` 是采集时间），把发送端采集+编码+序列化
         // 与接收端回调前的排队全算进「线上积压」。实测：v6 直连段 rtt=29ms/loss=0，
@@ -368,12 +436,15 @@ impl Flow {
                 self.queue_ms = self.queue_ms.max(delay.min(10_000) as i64);
             }
         }
-        let delivered = (f.received_bytes.saturating_mul(8) / f.sample_ms.max(1))
-            .min(u32::MAX as u64) as u32;
+        let delivered =
+            (f.received_bytes.saturating_mul(8) / f.sample_ms.max(1)).min(u32::MAX as u64) as u32;
         self.delivered_kbps = delivered;
         let loss_pressure = super::media::loss_pressure(
-            f.receive_queue_ms.or_else(|| f.display_delay_ms.map(|ms| ms.min(10_000) as i64)),
-            loss_pm.max(0) as u64, 31);
+            f.receive_queue_ms
+                .or_else(|| f.display_delay_ms.map(|ms| ms.min(10_000) as i64)),
+            loss_pm.max(0) as u64,
+            31,
+        );
         // 传输层否认「网络在排队」：RTT 已有样本、低于降速线、且零丢包。此时两个队列口径
         // 说的高积压都只剩本机开销或对端渲染管线——降码率治不了它，只会把画面做糊。
         // （实测：v6 直连 52 拍 backlog>150ms，其中传输层 rtt≥150ms 的有 **0** 拍；
@@ -385,13 +456,17 @@ impl Flow {
         // **增长趋势不受 `transport_clear` 豁免**：RTT 是低频采样、可能正处在盲区，而「比上一
         // 拍又涨了 30ms」是本端单调时钟的差值，不受采样相位影响。只豁免绝对水位（`deep`），
         // 因为水位高但传输层否认、又不涨，剩下的只有本机开销/对端渲染深度。
-        let rising = self.prev_backlog_ms
-            .is_some_and(|prev| self.backlog_ms > BACKLOG_RISE_MIN_MS
-                && self.backlog_ms.saturating_sub(prev) >= BACKLOG_RISE_MS);
+        let rising = self.prev_backlog_ms.is_some_and(|prev| {
+            self.backlog_ms > BACKLOG_RISE_MIN_MS
+                && self.backlog_ms.saturating_sub(prev) >= BACKLOG_RISE_MS
+        });
         self.prev_backlog_ms = Some(self.backlog_ms);
         // 探测带（扩窗线..降速线）内的水位站定 3 秒才算平台；一路上涨的真积压站不住。
         if self.backlog_ms > self.backlog_probe_ms() && self.backlog_ms <= self.backlog_down_ms() {
-            if self.plateau.is_none_or(|(base, _)| base.abs_diff(self.backlog_ms) > BACKLOG_STABLE_MS) {
+            if self
+                .plateau
+                .is_none_or(|(base, _)| base.abs_diff(self.backlog_ms) > BACKLOG_STABLE_MS)
+            {
                 self.plateau = Some((self.backlog_ms, now));
             }
         } else {
@@ -419,7 +494,8 @@ impl Flow {
         // app-limited（P1）三个条件缺一不可：没被预算挡过帧（否则需求确凿）、没有拥塞证据
         // （否则这份低交付是线路给的）、速率明显低于预算（否则算打满）。**窗口长短不参与**
         // （旧的第二半 `sample_ms ≤ 400` 在低帧率形态上恰好反噬成 false，见 `APP_LIMITED_PCT`）。
-        self.app_limited = !had_drops && !congested
+        self.app_limited = !had_drops
+            && !congested
             && (delivered as u64).saturating_mul(100) < (self.kbps as u64) * APP_LIMITED_PCT;
         let honest = f.sample_ms <= REPRESENTATIVE_SAMPLE_MS;
         // 容量包络（P2）：**只在证据下移动，没有每拍 ×7/8 衰减**。三家源码同一条口径——
@@ -435,15 +511,24 @@ impl Flow {
             // 就是旧口径的自锁现场；那种被拉长的窗口本来就 `!honest`，不参与）。
             let cur = self.capacity_kbps as u64;
             self.capacity_kbps = (cur - cur.saturating_mul(CAPACITY_OVERUSE_ALPHA) / 1_000
-                + (delivered as u64).saturating_mul(CAPACITY_OVERUSE_ALPHA) / 1_000) as u32;
+                + (delivered as u64).saturating_mul(CAPACITY_OVERUSE_ALPHA) / 1_000)
+                as u32;
         } else {
             // 上界取 max：包络是「已证明的管宽」，不因安静期遗忘（`budget()` 换路时才清零）。
             self.capacity_kbps = self.capacity_kbps.max(delivered);
         }
-        if now.saturating_sub(self.last_adjust_ms) < 1_000 { return; }
-        let plateaued = self.plateau.is_some_and(|(_, since)| now.saturating_sub(since) >= 3_000);
-        let probe_active = self.probe_at_ms.is_some_and(|t| now.saturating_sub(t) < PROBE_HOLD_MS);
-        let probe_cooled = self.probe_at_ms.is_none_or(|t| now.saturating_sub(t) >= PROBE_COOLDOWN_MS);
+        if now.saturating_sub(self.last_adjust_ms) < 1_000 {
+            return;
+        }
+        let plateaued = self
+            .plateau
+            .is_some_and(|(_, since)| now.saturating_sub(since) >= 3_000);
+        let probe_active = self
+            .probe_at_ms
+            .is_some_and(|t| now.saturating_sub(t) < PROBE_HOLD_MS);
+        let probe_cooled = self
+            .probe_at_ms
+            .is_none_or(|t| now.saturating_sub(t) >= PROBE_COOLDOWN_MS);
         if congested {
             if self.post_cut_wait > 0 && !(rising || loss_pressure) {
                 // G3：上一刀（或 RESET）之后还没等到足够新证据，这一拍只观察不连砍。
@@ -462,26 +547,33 @@ impl Flow {
                 // 拿它封顶就是自锁（旧口径 min(4000×0.8, 835×0.9)→751 再没涨回去）。
                 let cap = if honest && delivered > 0 && (delivered as u64) < self.kbps as u64 {
                     (delivered as u64) * 9 / 10
-                } else { u64::MAX };
+                } else {
+                    u64::MAX
+                };
                 self.kbps = ((self.kbps as u64 * 8 / 10).min(cap) as u32).max(self.floor_kbps());
                 self.post_cut_wait = POST_CUT_WAIT_TICKS;
             }
             self.plateau = None;
-        } else if had_drops && transport_clear && probe_cooled
-            && self.kbps < ceiling.max(self.floor_kbps()) {
+        } else if had_drops
+            && transport_clear
+            && probe_cooled
+            && self.kbps < ceiling.max(self.floor_kbps())
+        {
             // P3 主动探测（口径见 `PROBE_COOLDOWN_MS`）：本窗确有需求（被预算挡下过帧）、
             // 传输层又否认排队 ⇒ 挡住我们的很可能是**自家预算**而不是线路，一次翻倍去问。
             // 静止画面（`!had_drops`）绝不探：`tcp_bbr.c:788-799` 那条「app-limited 期间
             // 维持已知的最好速率、不拿它当管子还能装」就是这条线的出处。
             self.probe_floor = self.kbps;
             self.kbps = ((self.kbps as u64 * 2)
-                .min(ceiling.max(MIN_KBPS) as u64).max(self.floor_kbps() as u64))
-                .min(u32::MAX as u64) as u32;
+                .min(ceiling.max(MIN_KBPS) as u64)
+                .max(self.floor_kbps() as u64))
+            .min(u32::MAX as u64) as u32;
             self.probe_at_ms = Some(now);
             self.plateau = None;
         } else if (self.backlog_ms < self.backlog_probe_ms() || plateaued || transport_clear)
             && !probe_active
-            && (self.capacity_kbps as u64) * 10 >= (self.kbps as u64) * 8 {
+            && (self.capacity_kbps as u64) * 10 >= (self.kbps as u64) * 8
+        {
             // 包络门同时是**漂移封顶**：`capacity ≥ 0.8×kbps` ⇒ 预算最高停在已证明交付
             // 能力的 1.25 倍（BBR 的探测增益 5/4 在 `tcp_bbr.c:164` 的 `bbr_pacing_gain[]`
             // 与 `:180` 的 `bbr_full_bw_thresh`——旧注释误引 :799，:788-799 讲的是 app-limited
@@ -493,8 +585,11 @@ impl Flow {
             // （塌到地板后若不许再探，队列口径的任何残留就永久锁死档位）。包络明显高出
             // 预算=确凿余量，大步快探（旧口径每秒 +10%，中继从 400kbps 爬回可用带宽要 20
             // 多秒）。探一次后回到观察期。
-            let step = if (self.capacity_kbps as u64) * 5 >= (self.kbps as u64) * 6 { self.kbps / 4 }
-                else { (self.kbps / 10).max(100) };
+            let step = if (self.capacity_kbps as u64) * 5 >= (self.kbps as u64) * 6 {
+                self.kbps / 4
+            } else {
+                (self.kbps / 10).max(100)
+            };
             // 门在步进**前**判，比值就会按步长过冲一格；这里把封顶做成硬上限，
             // 「不高于已证明交付能力的 1.25 倍」才是真话而不是倾向。
             let drift_cap = ((self.capacity_kbps as u64) * 5 / 4).max(MIN_KBPS as u64) as u32;
@@ -502,7 +597,11 @@ impl Flow {
             // 所以进入本分支后 `min(drift_cap)` 永不可能低于现有预算——升档分支天然只升不降，
             // 不需要额外的 `max(kbps)` 兜探测试值。（探测把 kbps 抬到包络之上也一样：能进
             // 这门就必有 drift_cap ≥ kbps。）
-            self.kbps = self.kbps.saturating_add(step).min(drift_cap).min(ceiling.max(MIN_KBPS));
+            self.kbps = self
+                .kbps
+                .saturating_add(step)
+                .min(drift_cap)
+                .min(ceiling.max(MIN_KBPS));
             self.plateau = None;
         } else {
             return;
@@ -511,23 +610,39 @@ impl Flow {
     }
 
     pub fn admission(&self, now: u64, rtt_ms: i64) -> Admission {
-        let rtt = if rtt_ms <= 0 { 500 } else { rtt_ms.clamp(20, 5_000) as u64 };
+        let rtt = if rtt_ms <= 0 {
+            500
+        } else {
+            rtt_ms.clamp(20, 5_000) as u64
+        };
         let deadline = self.ack_deadline_ms(rtt, now);
-        let stale = self.pending.front().is_some_and(|p| now.saturating_sub(p.sent_ms) > deadline);
+        let stale = self
+            .pending
+            .front()
+            .is_some_and(|p| now.saturating_sub(p.sent_ms) > deadline);
         // 小 ping 不能给周期媒体反馈定死期限。ACK 仍在推进且额外队列不足
         // 300ms 时，允许反馈周期内的抖动；无反馈/严重积压仍按原期限 RESET。
-        let progressing = self.backlog_ms < 300 && self.last_feedback_ms.is_some_and(|at|
-            now.saturating_sub(at) <= FEEDBACK_MS * 3 + rtt);
-        let reset_cooled = self.last_reset_ms.is_none_or(|t| now.saturating_sub(t) > rtt + 500);
-        if ((stale && !progressing) || self.pending_bytes > MAX_PENDING || self.pending.len() > 240) && reset_cooled {
+        let progressing = self.backlog_ms < 300
+            && self
+                .last_feedback_ms
+                .is_some_and(|at| now.saturating_sub(at) <= FEEDBACK_MS * 3 + rtt);
+        let reset_cooled = self
+            .last_reset_ms
+            .is_none_or(|t| now.saturating_sub(t) > rtt + 500);
+        if ((stale && !progressing) || self.pending_bytes > MAX_PENDING || self.pending.len() > 240)
+            && reset_cooled
+        {
             return Admission::Reset;
         }
         // BDP 包含 ACK 的 200ms 采样周期，另给 150ms 余量；否则低 RTT
         // 的局域网也会在第一份反馈回来前耗尽窗口，出现周期性断粮。
-        let window = (self.kbps as u64 * (rtt + FEEDBACK_MS + 150) / 8).clamp(8 * 1024, MAX_PENDING as u64);
+        let window =
+            (self.kbps as u64 * (rtt + FEEDBACK_MS + 150) / 8).clamp(8 * 1024, MAX_PENDING as u64);
         if now < self.next_ms || self.pending_bytes as u64 >= window {
             Admission::Wait
-        } else { Admission::Ready }
+        } else {
+            Admission::Ready
+        }
     }
 
     /// RESET（弃掉未交付的积压）后的预算处置。`rtt_ms` 只用于 G3 之外的**传输层否决**：
@@ -535,7 +650,9 @@ impl Flow {
     /// 调用方拿不到 RTT 样本时传 0 = 不豁免（保守，等同旧行为）。
     pub fn discard(&mut self, now: u64, loss_pm: i64, rtt_ms: i64) {
         // 已废弃帧的迟到 ACK 不属于新的参考链，不能缩短新流的起播宽限。
-        if let Some(last) = self.pending.back() { self.ack_at_ms = self.ack_at_ms.max(last.at_ms); }
+        if let Some(last) = self.pending.back() {
+            self.ack_at_ms = self.ack_at_ms.max(last.at_ms);
+        }
         // 🔴 反棘轮 v2（2026-10-06 复测）：证据锚点必须跨 RESET 存活。上一版在这里
         // 把 last_feedback_ms 抹成 None，而 `is_none_or(盲区)` 对 None 恒真——于是
         // 「刚清完队列、新流还没收到第一份反馈」每次都自动算作拥塞证据，实测 66%
@@ -571,31 +688,53 @@ impl Flow {
         // 完整 IDR 的交付还要串行化全部字节，小 ping 的 RTT 不包含这段耗时。
         // 只给最老帧计算余量，最多给既有写入预算 2 秒；不能随整个积压队列
         // 增长把 RESET 无限推迟。原字节窗/帧数水位照常先行保护。
-        let serial = self.pending.front().map_or(0, |p|
-            (p.bytes as u64 * 8).div_ceil(self.kbps.max(MIN_KBPS) as u64)
-                .min(super::media::WRITE_BUDGET.as_millis() as u64));
+        let serial = self.pending.front().map_or(0, |p| {
+            (p.bytes as u64 * 8)
+                .div_ceil(self.kbps.max(MIN_KBPS) as u64)
+                .min(super::media::WRITE_BUDGET.as_millis() as u64)
+        });
         let base = rtt + 500 + serial;
         // 实测积压已经增长时不能用慢 ACK 反过来放宽超时，否则控制器会
         // 随拥塞一起扩窗，继续显示旧画面。正常传播/采样耗时才有这份余量。
-        let deadline = if self.backlog_ms > self.backlog_down_ms() { base } else {
-            let jitter_budget = self.ack_mean_ms.unwrap_or(0)
+        let deadline = if self.backlog_ms > self.backlog_down_ms() {
+            base
+        } else {
+            let jitter_budget = self
+                .ack_mean_ms
+                .unwrap_or(0)
                 .saturating_add(self.ack_variance_ms.saturating_mul(4))
                 .saturating_add(FEEDBACK_MS);
-            let measured = self.ack_delay_ms.unwrap_or(0).saturating_add(500).max(jitter_budget);
+            let measured = self
+                .ack_delay_ms
+                .unwrap_or(0)
+                .saturating_add(500)
+                .max(jitter_budget);
             base.max(measured.min(base + 2_000))
         };
         // 起播宽限挂在「最后一次反馈」与「最后一次 RESET」里较晚的那个时刻上：
         // 新参考链在拿到第一份反馈前不该按旧口径判死，而证据已经停更 5 个采样
         // 周期的链也仍要有界恢复。健康链路（反馈照常到）拿不到这份余量。
-        let startup = [self.last_feedback_ms, self.last_reset_ms].into_iter().flatten().max();
+        let startup = [self.last_feedback_ms, self.last_reset_ms]
+            .into_iter()
+            .flatten()
+            .max();
         if startup.is_none_or(|t| now.saturating_sub(t) > FEEDBACK_MS * 5) {
             deadline.max(2_500)
-        } else { deadline }
+        } else {
+            deadline
+        }
     }
 
     pub fn reset_diagnostics(&self, now: u64, rtt_ms: i64) -> String {
-        let rtt = if rtt_ms <= 0 { 500 } else { rtt_ms.clamp(20, 5_000) as u64 };
-        let age = self.pending.front().map_or(0, |p| now.saturating_sub(p.sent_ms));
+        let rtt = if rtt_ms <= 0 {
+            500
+        } else {
+            rtt_ms.clamp(20, 5_000) as u64
+        };
+        let age = self
+            .pending
+            .front()
+            .map_or(0, |p| now.saturating_sub(p.sent_ms));
         format!("pending={} bytes={} oldest={}ms deadline={}ms rtt={}ms budget={}kbps delivered={}kbps ack={} feedback_age={:?} media_ack={:?}ms queue={}ms backlog={}ms peer_queue={}ms capacity={}kbps app_limited={} demand_limited={} probe={:?} tx_work={}ms",
             self.pending.len(), self.pending_bytes, age, self.ack_deadline_ms(rtt, now), rtt, self.kbps,
             self.delivered_kbps,
@@ -606,7 +745,10 @@ impl Flow {
     /// 只用在**升**档上；降档永远即时（重放口径同源，见 `UPGRADE_HOLD_MS`）。
     fn upgrade_held(since: &mut Option<u64>, now: u64) -> bool {
         match *since {
-            None => { *since = Some(now); false }
+            None => {
+                *since = Some(now);
+                false
+            }
             Some(t) => now.saturating_sub(t) >= UPGRADE_HOLD_MS,
         }
     }
@@ -653,7 +795,11 @@ impl Flow {
         }
         // 快速直连上的用户高帧率档仍由既有采集/编码门控决定，不能把
         // fps120/144/165 静默裁成 60；常规档位会再与自身上限取 min。
-        if self.fps == 60 { 165 } else { self.fps }
+        if self.fps == 60 {
+            165
+        } else {
+            self.fps
+        }
     }
 
     pub fn feedback_queue(&self) -> Option<i64> {
@@ -664,13 +810,20 @@ impl Flow {
     /// 文字优先（2026-10-06 复测 B 拍板）：中继/低预算**不降分辨率**，省码率
     /// 只走 fps 阶梯与码率缩放。960/1280 降采样档已拆除——960×540 上 1080p 屏
     /// 文字不可读，用户原话「不然文字看不清楚」；恒返 0（不限宽）。
-    pub fn resolution_limit(&self) -> u32 { 0 }
+    pub fn resolution_limit(&self) -> u32 {
+        0
+    }
 }
 
 pub(super) fn scaled_dimensions(w: u32, h: u32, limit: u32) -> (u32, u32) {
-    if limit == 0 || w <= limit { return (w.max(64) & !1, h.max(64) & !1); }
+    if limit == 0 || w <= limit {
+        return (w.max(64) & !1, h.max(64) & !1);
+    }
     let out_w = limit.max(64) & !1;
-    (out_w, ((h as u64 * out_w as u64 / w as u64) as u32).max(64) & !1)
+    (
+        out_w,
+        ((h as u64 * out_w as u64 / w as u64) as u32).max(64) & !1,
+    )
 }
 
 #[derive(Default)]
@@ -698,16 +851,22 @@ impl Receiver {
     }
 
     pub fn presented(&mut self, at_ms: i64, now: u64) {
-        if at_ms <= self.presented_at_ms { return; }
+        if at_ms <= self.presented_at_ms {
+            return;
+        }
         if let Some((_, received)) = self.arrivals.iter().find(|(at, _)| *at == at_ms) {
             self.display_delay_ms = Some(now.saturating_sub(*received));
             self.presented_at_ms = at_ms;
-            while self.arrivals.front().is_some_and(|(at, _)| *at <= at_ms) { self.arrivals.pop_front(); }
+            while self.arrivals.front().is_some_and(|(at, _)| *at <= at_ms) {
+                self.arrivals.pop_front();
+            }
         }
     }
 
     pub fn receive(&mut self, now: u64, at_ms: i64, bytes: usize, age_ms: i64) {
-        if at_ms <= self.latest_at_ms { return; }
+        if at_ms <= self.latest_at_ms {
+            return;
+        }
         self.latest_at_ms = at_ms;
         self.latest_age_ms = age_ms;
         // 两个时钟的固定偏差在差分中抵消；不用会重新校准的 clock_skew，
@@ -717,21 +876,35 @@ impl Receiver {
         *baseline = (*baseline).min(transit);
         self.latest_queue_ms = transit.saturating_sub(*baseline).max(0);
         self.arrivals.push_back((at_ms, now));
-        while self.arrivals.len() > 120 { self.arrivals.pop_front(); }
+        while self.arrivals.len() > 120 {
+            self.arrivals.pop_front();
+        }
         self.bytes = self.bytes.saturating_add(bytes as u64);
         self.last_ms.get_or_insert(now);
     }
 
-    pub fn has_pending(&self) -> bool { self.bytes > 0 }
+    pub fn has_pending(&self) -> bool {
+        self.bytes > 0
+    }
 
     pub fn take_feedback(&mut self, now: u64) -> Option<MediaFeedback> {
-        if !self.has_pending() { return None; }
+        if !self.has_pending() {
+            return None;
+        }
         let start = *self.last_ms.get_or_insert(now);
         let elapsed = now.saturating_sub(start);
-        if elapsed < FEEDBACK_MS { return None; }
-        let f = MediaFeedback { received_at_ms: self.latest_at_ms, received_bytes: self.bytes,
-            sample_ms: elapsed, age_ms: self.latest_age_ms, presented_at_ms: self.presented_at_ms,
-            display_delay_ms: self.display_delay_ms.take(), receive_queue_ms: Some(self.latest_queue_ms) };
+        if elapsed < FEEDBACK_MS {
+            return None;
+        }
+        let f = MediaFeedback {
+            received_at_ms: self.latest_at_ms,
+            received_bytes: self.bytes,
+            sample_ms: elapsed,
+            age_ms: self.latest_age_ms,
+            presented_at_ms: self.presented_at_ms,
+            display_delay_ms: self.display_delay_ms.take(),
+            receive_queue_ms: Some(self.latest_queue_ms),
+        };
         self.bytes = 0;
         self.last_ms = Some(now);
         Some(f)

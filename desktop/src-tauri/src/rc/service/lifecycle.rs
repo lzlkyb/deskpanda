@@ -152,8 +152,12 @@ impl RcService {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone(),
-            reconnecting: self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(
-                |s| RcReconnectInfo {
+            reconnecting: self
+                .auto_reconnect
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .map(|s| RcReconnectInfo {
                     peer: s.peer.clone(),
                     peer_name: s.peer_name.clone(),
                     display_name: display_of(&s.peer).unwrap_or_default(),
@@ -161,16 +165,15 @@ impl RcService {
                     attempt: s.attempt,
                     max: s.max,
                     gave_up: s.gave_up,
-                },
-            ),
+                }),
             // G3：本机静音。字段本身不带 cfg（与 peer_hevc 同例，跨平台可编译），
             // 非 Windows 上没有音频链路，恒 false。
             audio_local_mute: {
-                #[cfg(any(target_os="windows",target_os="macos"))]
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
                 {
                     self.audio_local_mute()
                 }
-                #[cfg(not(any(target_os="windows",target_os="macos")))]
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                 {
                     false
                 }
@@ -478,7 +481,10 @@ impl RcService {
             if revoked > 0 {
                 log::info!("[RC] 通道停止，已作废 {revoked} 个无人值守接入码");
             }
-            *self.auto_reconnect.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            *self
+                .auto_reconnect
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = None;
             log::info!("[RC] 远程通道已停止");
         }
     }
@@ -491,8 +497,15 @@ impl RcService {
         self.joins.arm_exchange(node_id, name, expires_at)
     }
 
-    pub fn arm_exchange_addr(&self, node_id: &str, name: &str, expires_at: i64, addr: EndpointAddr) -> Result<(), String> {
-        self.joins.arm_exchange_addr(node_id, name, expires_at, Some(addr))
+    pub fn arm_exchange_addr(
+        &self,
+        node_id: &str,
+        name: &str,
+        expires_at: i64,
+        addr: EndpointAddr,
+    ) -> Result<(), String> {
+        self.joins
+            .arm_exchange_addr(node_id, name, expires_at, Some(addr))
     }
 
     pub fn exchange_intent(&self, node_id: &str, at_ms: i64) -> Option<join::RcExchangeIntent> {

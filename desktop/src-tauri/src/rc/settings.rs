@@ -108,7 +108,9 @@ fn setting_event(key: &str, value: &str) -> Result<InputEvent, String> {
         ) => Ok(InputEvent::SetQuality {
             quality: value.into(),
         }),
-        ("codec", "h264" | "hevc" | "av1" | "jpeg") => Ok(InputEvent::SetCodec { codec: value.into() }),
+        ("codec", "h264" | "hevc" | "av1" | "jpeg") => Ok(InputEvent::SetCodec {
+            codec: value.into(),
+        }),
         ("audio", "on" | "off") => Ok(InputEvent::AudioOn { on: value == "on" }),
         ("key_mode", "type" | "direct") => Ok(InputEvent::SetKeyMode { mode: value.into() }),
         _ => Err("不支持的设置或设置值".into()),
@@ -205,9 +207,9 @@ impl RcService {
                 InputEvent::SetQuality { quality } => self.set_stream_quality(quality)?,
                 InputEvent::SetCodec { codec } => self.set_stream_codec(codec)?,
                 InputEvent::AudioOn { on } => {
-                    #[cfg(any(target_os="windows",target_os="macos"))]
+                    #[cfg(any(target_os = "windows", target_os = "macos"))]
                     self.set_audio_muted(!*on);
-                    #[cfg(not(any(target_os="windows",target_os="macos")))]
+                    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                     if tracked && *on {
                         return Err("对方系统不支持传输电脑声音".into());
                     }
@@ -321,8 +323,14 @@ mod tests {
             let event = setting_event("codec", codec).unwrap();
             assert_eq!(event_setting(&event), Some(("codec", codec)));
             for tracked in [false, true] {
-                assert!(svc.apply_inbound_setting("old", "peer", &event, tracked).is_err());
-                assert_eq!(svc.apply_inbound_setting("current", "peer", &event, tracked).unwrap(), codec);
+                assert!(svc
+                    .apply_inbound_setting("old", "peer", &event, tracked)
+                    .is_err());
+                assert_eq!(
+                    svc.apply_inbound_setting("current", "peer", &event, tracked)
+                        .unwrap(),
+                    codec
+                );
             }
         }
         assert!(setting_event("codec", "unknown").is_err());

@@ -314,7 +314,9 @@ pub fn bitrate_scale_for_loss(permille: u64) -> u32 {
 
 // 画质「自动」档的判据与状态在 `auto_quality.rs`（2A）。这里只做存放与喂帧。
 
-use super::auto_quality::{auto_decide, auto_ladder, ladder_index_of, AutoTier, LinkSample, FRAME_WINDOW};
+use super::auto_quality::{
+    auto_decide, auto_ladder, ladder_index_of, AutoTier, LinkSample, FRAME_WINDOW,
+};
 
 impl StreamCfg {
     /// 编码预算的**意图上限**（线路实际宽不宽仍由闭环决定：`Flow::feedback` 的
@@ -336,7 +338,11 @@ impl StreamCfg {
             let want = crate::rc::video_params::bitrate_for(profile.max_w, fps) / 1_000;
             return (want * pct / 100).min(40_000);
         }
-        let base = match profile.max_w { 0..=1280 => 4_000, 1281..=1920 => 8_000, _ => 12_000 };
+        let base = match profile.max_w {
+            0..=1280 => 4_000,
+            1281..=1920 => 8_000,
+            _ => 12_000,
+        };
         (base * pct / 100).min(16_000)
     }
     pub(super) fn new() -> Self {
@@ -468,8 +474,7 @@ impl StreamCfg {
         if !(50..=200).contains(&pct) {
             return Err(format!("码率倍率只能是 50–200 的整数，得到 {pct}"));
         }
-        self.user_bitrate_pct
-            .store(pct as i64, Ordering::Relaxed);
+        self.user_bitrate_pct.store(pct as i64, Ordering::Relaxed);
         // 倍率偏好到了 = 起播宽限可以收了（见 `peer_net_seen` 字段注释）
         self.peer_net_seen.store(true, Ordering::Relaxed);
         Ok(())
@@ -698,8 +703,16 @@ impl StreamCfg {
         }
         if !matches!(
             quality,
-            "uhd" | "uhd60" | "ultra" | "sharp" | "balanced" | "smooth" | "fps60" | "fps120"
-                | "fps144" | "fps165"
+            "uhd"
+                | "uhd60"
+                | "ultra"
+                | "sharp"
+                | "balanced"
+                | "smooth"
+                | "fps60"
+                | "fps120"
+                | "fps144"
+                | "fps165"
         ) {
             return Err(
                 "画质档只能是 auto / uhd / uhd60 / ultra / sharp / balanced / smooth / fps60 / fps120 / fps144 / fps165"

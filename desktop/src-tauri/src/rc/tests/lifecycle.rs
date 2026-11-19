@@ -30,14 +30,26 @@ fn set_session(svc: &RcService, s: Session) {
 fn viewer_cannot_drain_a_replacement_or_inbound_session() {
     let svc = RcService::new(store());
     let frame = crate::rc::video::VideoFrame {
-        width: 64, height: 64, jpeg: vec![1], at_ms: 1, full: true, rect: None,
-        codec: crate::rc::video::FrameCodec::Jpeg, key: true, cap_ms: 0, enc_ms: 0,
+        width: 64,
+        height: 64,
+        jpeg: vec![1],
+        at_ms: 1,
+        full: true,
+        rect: None,
+        codec: crate::rc::video::FrameCodec::Jpeg,
+        key: true,
+        cap_ms: 0,
+        enc_ms: 0,
     };
-    set_session(&svc, active_session("current", SessionPhase::OutboundActive));
+    set_session(
+        &svc,
+        active_session("current", SessionPhase::OutboundActive),
+    );
     svc.push_outbox(frame.clone());
     assert!(svc.drain_frames_for_viewer("stale").is_err());
     let (frames, native) = svc.drain_frames_for_viewer("current").unwrap();
-    assert_eq!(frames.len(), 1); assert!(native.is_empty());
+    assert_eq!(frames.len(), 1);
+    assert!(native.is_empty());
     set_session(&svc, active_session("current", SessionPhase::InboundActive));
     svc.push_outbox(frame);
     assert!(svc.drain_frames_for_viewer("current").is_err());
@@ -47,31 +59,63 @@ fn viewer_cannot_drain_a_replacement_or_inbound_session() {
 #[test]
 fn pending_viewer_waits_without_consuming_frames_or_reporting_decode_failure() {
     let svc = RcService::new(store());
-    set_session(&svc, active_session("connecting", SessionPhase::OutboundPending));
+    set_session(
+        &svc,
+        active_session("connecting", SessionPhase::OutboundPending),
+    );
     svc.push_outbox(crate::rc::video::VideoFrame {
-        width: 64, height: 64, jpeg: vec![1], at_ms: 1, full: true, rect: None,
-        codec: crate::rc::video::FrameCodec::Jpeg, key: true, cap_ms: 0, enc_ms: 0,
+        width: 64,
+        height: 64,
+        jpeg: vec![1],
+        at_ms: 1,
+        full: true,
+        rect: None,
+        codec: crate::rc::video::FrameCodec::Jpeg,
+        key: true,
+        cap_ms: 0,
+        enc_ms: 0,
     });
-    let (frames, native) = svc.drain_frames_for_viewer("connecting").expect("连接尚未建立只是等待，不是解码故障");
+    let (frames, native) = svc
+        .drain_frames_for_viewer("connecting")
+        .expect("连接尚未建立只是等待，不是解码故障");
     assert!(frames.is_empty() && native.is_empty());
-    set_session(&svc, active_session("connecting", SessionPhase::OutboundActive));
-    assert_eq!(svc.drain_frames_for_viewer("connecting").unwrap().0.len(), 1);
+    set_session(
+        &svc,
+        active_session("connecting", SessionPhase::OutboundActive),
+    );
+    assert_eq!(
+        svc.drain_frames_for_viewer("connecting").unwrap().0.len(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn independent_media_refreshes_only_its_own_session_heartbeat() {
     let svc = std::sync::Arc::new(RcService::new(store()));
-    set_session(&svc, active_session("media-alive", SessionPhase::OutboundActive));
+    set_session(
+        &svc,
+        active_session("media-alive", SessionPhase::OutboundActive),
+    );
     let frame = crate::rc::video::VideoFrame {
-        width: 64, height: 64, jpeg: vec![1], at_ms: 1, full: true, rect: None,
-        codec: crate::rc::video::FrameCodec::H264, key: true, cap_ms: 0, enc_ms: 0,
+        width: 64,
+        height: 64,
+        jpeg: vec![1],
+        at_ms: 1,
+        full: true,
+        rect: None,
+        codec: crate::rc::video::FrameCodec::H264,
+        key: true,
+        cap_ms: 0,
+        enc_ms: 0,
     };
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     svc.note_media_received("old-session", &frame);
     assert_eq!(svc.link.last_inbound_ms(), 0, "旧 reader 不能给新会话续命");
     svc.note_media_received("media-alive", &frame);
-    assert!(svc.link.last_inbound_ms() > 0,
-        "独立视频流仍在收到帧时，主控制流无 pong 不能误判整条连接死亡");
+    assert!(
+        svc.link.last_inbound_ms() > 0,
+        "独立视频流仍在收到帧时，主控制流无 pong 不能误判整条连接死亡"
+    );
 }
 
 /// B2 的顺序钉子：收口必须把被按住的键**真的**补发 up 并清空集合。
@@ -164,8 +208,12 @@ fn session_expired_only_counts_active_phases() {
 #[test]
 fn status_投影时回填会话显示名_备注优先() {
     let svc = RcService::new(store());
-    svc.store.rc_device_pair("peer-a", "DESKTOP-A").expect("配对");
-    svc.store.rc_device_note_set("peer-a", "工作电脑").expect("起备注");
+    svc.store
+        .rc_device_pair("peer-a", "DESKTOP-A")
+        .expect("配对");
+    svc.store
+        .rc_device_note_set("peer-a", "工作电脑")
+        .expect("起备注");
     set_session(&svc, active_session("s1", SessionPhase::OutboundActive));
 
     let s = svc.status().session.expect("会话在");
@@ -173,7 +221,9 @@ fn status_投影时回填会话显示名_备注优先() {
     assert_eq!(s.peer_name, "设备A", "自报名快照原样保留，不清不覆");
 
     // 清掉备注（写纯空白 = 清除）→ display_name 留空，前端回落自报名
-    svc.store.rc_device_note_set("peer-a", "   ").expect("清备注");
+    svc.store
+        .rc_device_note_set("peer-a", "   ")
+        .expect("清备注");
     let s = svc.status().session.expect("会话在");
     assert_eq!(s.display_name, "", "没备注 → 空串，绝不编默认值");
 }
@@ -183,8 +233,12 @@ fn status_投影时回填会话显示名_备注优先() {
 #[test]
 fn status_投影时回填待确认申请的显示名() {
     let svc = RcService::new(store());
-    svc.store.rc_device_pair("peer-a", "DESKTOP-A").expect("配对");
-    svc.store.rc_device_note_set("peer-a", "工作电脑").expect("起备注");
+    svc.store
+        .rc_device_pair("peer-a", "DESKTOP-A")
+        .expect("配对");
+    svc.store
+        .rc_device_note_set("peer-a", "工作电脑")
+        .expect("起备注");
     svc.inner
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -224,7 +278,13 @@ fn is_rc_online_for_three_evidences() {
     assert!(is_rc_online_for(&peer, 0, &live, Some(&peer), now));
 
     // 3. last_seen 未过期（跨网唯一线索）
-    assert!(is_rc_online_for(&peer, now - ONLINE_STALE_MS, &live, None, now));
+    assert!(is_rc_online_for(
+        &peer,
+        now - ONLINE_STALE_MS,
+        &live,
+        None,
+        now
+    ));
     assert!(is_rc_online_for(&peer, now - 1, &live, None, now));
     // 刚过窗口 1ms → 离线
     assert!(!is_rc_online_for(
@@ -278,7 +338,10 @@ fn 守卫_在线判定不得读conn_state() {
 fn 守卫_offline写回路径存在() {
     // 扫整个 rc/ 目录的源码（用多个 include_str! 拼起来）
     let sources = [
-        ("session/lifecycle.rs", include_str!("../session/lifecycle.rs")),
+        (
+            "session/lifecycle.rs",
+            include_str!("../session/lifecycle.rs"),
+        ),
         ("inbound.rs", include_str!("../inbound.rs")),
         ("outbound.rs", include_str!("../outbound.rs")),
         ("service/mod.rs", include_str!("../service/mod.rs")),

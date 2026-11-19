@@ -76,9 +76,7 @@ fn ginv(a: u8) -> u8 {
 /// 柯西矩阵的性质：任意 k×k 子矩阵都是 MDS 可逆的）。
 fn cauchy_row(r: usize, k: usize, m: usize) -> Vec<u8> {
     let xr = (k + m + r) as u8; // x 取高位段，避免与 y 重叠
-    (0..k)
-        .map(|c| ginv(xr ^ (c as u8)))
-        .collect()
+    (0..k).map(|c| ginv(xr ^ (c as u8))).collect()
 }
 
 /// 对一组数据片编码 m 片校验。`data_shards.len() == k`，各片等长（尾部不足的
@@ -173,13 +171,11 @@ pub fn decode_group(
         }
     }
     let mut pivot_of_col: [Option<usize>; 64] = [None; 64]; // 列 → 行号
-    // 每行至多做一次主元：已当过主元的行在先前列上是单位系数，再选它会让
-    // RREF 的单位结构破坏（恢复值全错）。
+                                                            // 每行至多做一次主元：已当过主元的行在先前列上是单位系数，再选它会让
+                                                            // RREF 的单位结构破坏（恢复值全错）。
     let mut row_used = vec![false; rows.len()];
     for &col in &missing {
-        let Some(r) = (0..rows.len())
-            .find(|&r| !row_used[r] && rows[r].0[col] != 0)
-        else {
+        let Some(r) = (0..rows.len()).find(|&r| !row_used[r] && rows[r].0[col] != 0) else {
             return None; // 子矩阵奇异——柯西矩阵下不会发生，防御返回
         };
         row_used[r] = true;
@@ -252,7 +248,12 @@ mod tests {
         (0..n)
             .map(|i| {
                 (0..len)
-                    .map(|j| (i as u8).wrapping_mul(31).wrapping_add(j as u8).wrapping_add(seed))
+                    .map(|j| {
+                        (i as u8)
+                            .wrapping_mul(31)
+                            .wrapping_add(j as u8)
+                            .wrapping_add(seed)
+                    })
                     .collect()
             })
             .collect()
@@ -355,4 +356,3 @@ mod tests {
         }
     }
 }
-

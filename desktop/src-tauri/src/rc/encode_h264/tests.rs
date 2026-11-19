@@ -85,7 +85,11 @@ fn level_and_bitrate_follow_resolution() {
     assert_eq!(h264_level_for(1920, 1080, 165), 52);
     assert_eq!(webcodecs_codec_str(3840, 2160, 30), "avc1.640033");
     assert_eq!(webcodecs_codec_str(1920, 1080, 120), "avc1.640033");
-    assert_eq!(webcodecs_codec_str(1920, 1080, 165), "avc1.640034", "L5.2=0x34");
+    assert_eq!(
+        webcodecs_codec_str(1920, 1080, 165),
+        "avc1.640034",
+        "L5.2=0x34"
+    );
     assert!(bitrate_for_width(3840) >= 20_000_000);
     // 审查 D3：码率随帧率抬升——fps120 不能沿用 30fps 的表
     assert_eq!(fps_bitrate_factor(30), 100);
@@ -166,7 +170,10 @@ fn 硬编连败阶梯_三帧换软编_软编再三帧才熔断() {
         encode_fail_verdict(ENC_FAIL_TO_SOFTWARE - 1, false),
         FailVerdict::RetrySameEngine
     );
-    assert_eq!(encode_fail_verdict(ENC_FAIL_TO_SOFTWARE, false), FailVerdict::SwitchToSoftware);
+    assert_eq!(
+        encode_fail_verdict(ENC_FAIL_TO_SOFTWARE, false),
+        FailVerdict::SwitchToSoftware
+    );
     // 已定罪（当前在软编档）：换档判据必须彻底闭嘴，否则「软编→软编」反复翻烧饼
     assert_eq!(
         encode_fail_verdict(ENC_FAIL_FUSE - 1, true),
@@ -183,9 +190,7 @@ fn 硬编连败阶梯_三帧换软编_软编再三帧才熔断() {
             "换引擎门槛回到 60 量级 = 一分钟白试坏编码器（RustDesk/scrcpy 均为 3）"
         )
     };
-    const {
-        assert!(ENC_FAIL_FUSE <= 5, "熔断门槛同理，冷却重试已经兜住误判")
-    };
+    const { assert!(ENC_FAIL_FUSE <= 5, "熔断门槛同理，冷却重试已经兜住误判") };
 }
 
 /// 🔴 甲-1/3/4 的状态机：换档即重开、成功清零连败但**不复位定罪**、
@@ -196,7 +201,14 @@ fn 硬编连败阶梯_三帧换软编_软编再三帧才熔断() {
 /// 坏引擎。真正的重探留给冷却期满后的重建，那里读的是会话上的 `enc_hw_broken`。
 #[test]
 fn 连败驱动状态_换档即重开_成功后清零但不复位定罪() {
-    let mut enc = H264SessionEncoder::shell(VideoCodec::H264, None, bitrate_for_width(1920), 30, 100, false);
+    let mut enc = H264SessionEncoder::shell(
+        VideoCodec::H264,
+        None,
+        bitrate_for_width(1920),
+        30,
+        100,
+        false,
+    );
     // 硬编档三连败 ⇒ 定罪 + 归零 + 标记重开（下一帧按软编档选型）
     // 计数在判决**之前**自增，所以前 N-1 帧还是 Retry，第 N 帧才换引擎。
     for i in 1..ENC_FAIL_TO_SOFTWARE {
@@ -238,7 +250,11 @@ fn 连败驱动状态_换档即重开_成功后清零但不复位定罪() {
     for c in [VideoCodec::Hevc, VideoCodec::Av1] {
         enc.reopen_needed = false;
         enc.set_codec(c);
-        assert_eq!(enc.codec(), VideoCodec::H264, "{c:?} 在硬编已定罪的会话里不得生效");
+        assert_eq!(
+            enc.codec(),
+            VideoCodec::H264,
+            "{c:?} 在硬编已定罪的会话里不得生效"
+        );
         assert!(!enc.reopen_needed, "被拒绝的切换不得标记重开");
     }
     // H.264 内部换 fps 仍然照走（别把门关上到连正常换档都不干活）
@@ -256,24 +272,51 @@ fn 连败驱动状态_换档即重开_成功后清零但不复位定罪() {
 #[test]
 fn 锁档不改码率_自动档骤降照旧重开() {
     let before = {
-        let e = H264SessionEncoder::shell(VideoCodec::H264, None, bitrate_for_width(1920), 30, 100, false);
+        let e = H264SessionEncoder::shell(
+            VideoCodec::H264,
+            None,
+            bitrate_for_width(1920),
+            30,
+            100,
+            false,
+        );
         e.scaled_bitrate()
     };
     let target = before / 3;
 
     // 锁档（auto_enabled = false ⇒ allowed = false）
-    let mut locked = H264SessionEncoder::shell(VideoCodec::H264, None, bitrate_for_width(1920), 30, 100, false);
+    let mut locked = H264SessionEncoder::shell(
+        VideoCodec::H264,
+        None,
+        bitrate_for_width(1920),
+        30,
+        100,
+        false,
+    );
     locked.set_bitrate_reopen_allowed(false);
     locked.apply_bitrate_budget(target);
-    assert!(!locked.reopen_needed, "锁档不得为码率重开 —— 每次重开是几百 ms 空窗");
+    assert!(
+        !locked.reopen_needed,
+        "锁档不得为码率重开 —— 每次重开是几百 ms 空窗"
+    );
     assert_eq!(locked.scaled_bitrate(), before, "锁档保持开档时的码率");
-    assert!(locked.bitrate_lock_noticed, "必须说过一次（规则 15.3：不许静默失败）");
+    assert!(
+        locked.bitrate_lock_noticed,
+        "必须说过一次（规则 15.3：不许静默失败）"
+    );
     // 第二拍不得重复告警：标志位一旦置上就不要再走那条 warn
     locked.apply_bitrate_budget(before / 4);
     assert!(!locked.reopen_needed);
 
     // 自动档：同样的骤降必须真的重开（安全网不能把正常路径一起砍掉）
-    let mut auto = H264SessionEncoder::shell(VideoCodec::H264, None, bitrate_for_width(1920), 30, 100, false);
+    let mut auto = H264SessionEncoder::shell(
+        VideoCodec::H264,
+        None,
+        bitrate_for_width(1920),
+        30,
+        100,
+        false,
+    );
     auto.apply_bitrate_budget(target);
     assert!(auto.reopen_needed, "自动档骤降仍要重开");
     assert_eq!(auto.scaled_bitrate(), target, "自动档必须真的把预算吃进去");

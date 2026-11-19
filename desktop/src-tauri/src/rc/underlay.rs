@@ -1,7 +1,11 @@
 //! 实验备用承载：只借已获批 RC 连接协调，媒体仍走原身份/原 ALPN 的 QUIC。
-use std::{path::{Path, PathBuf}, sync::{Arc, OnceLock}, time::Duration};
-use iroh::endpoint::Connection;
 use super::service::RcService;
+use iroh::endpoint::Connection;
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 mod config;
 mod diagnostics;
@@ -14,7 +18,9 @@ static APP_DIR: OnceLock<PathBuf> = OnceLock::new();
 static NETWORK_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(crate) const ENABLED_KEY: &str = "rc_easytier_enabled";
 
-pub(crate) fn init(dir: &Path) { let _ = APP_DIR.set(dir.to_owned()); }
+pub(crate) fn init(dir: &Path) {
+    let _ = APP_DIR.set(dir.to_owned());
+}
 
 #[cfg(target_os = "android")]
 pub(crate) fn network_changed() {
@@ -22,15 +28,21 @@ pub(crate) fn network_changed() {
 }
 
 fn enabled(cfg: &serde_json::Value) -> bool {
-    cfg.get(ENABLED_KEY).and_then(|v| v.as_bool()).unwrap_or_else(|| {
-        cfg!(feature = "easytier-underlay") || APP_DIR.get()
-            .is_some_and(|d| d.join("easytier-prototype.enabled").is_file())
-    })
+    cfg.get(ENABLED_KEY)
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| {
+            cfg!(feature = "easytier-underlay")
+                || APP_DIR
+                    .get()
+                    .is_some_and(|d| d.join("easytier-prototype.enabled").is_file())
+        })
 }
 
 pub(crate) fn start(svc: Arc<RcService>, id: String, conn: Connection, host: bool) {
-    if !enabled(&svc.cfg()) || !svc.session_id_is(&id)
-        || crate::net::path_kind::of_conn(&conn) != crate::net::path_kind::PathKind::Relay {
+    if !enabled(&svc.cfg())
+        || !svc.session_id_is(&id)
+        || crate::net::path_kind::of_conn(&conn) != crate::net::path_kind::PathKind::Relay
+    {
         return;
     }
     let epoch = NETWORK_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
@@ -39,8 +51,10 @@ pub(crate) fn start(svc: Arc<RcService>, id: String, conn: Connection, host: boo
         let cancel = async {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                if !svc.session_id_is(&id) || !enabled(&svc.cfg())
-                    || NETWORK_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch {
+                if !svc.session_id_is(&id)
+                    || !enabled(&svc.cfg())
+                    || NETWORK_EPOCH.load(std::sync::atomic::Ordering::Relaxed) != epoch
+                {
                     break;
                 }
                 // 原生 LAN/IPv6/UDP 已接管就不再保留第二套探测/承载。

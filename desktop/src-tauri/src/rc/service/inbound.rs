@@ -32,9 +32,13 @@ impl RcService {
             // 查询帧没有屏幕/键鼠权限。只把“双方是否都粘贴过”回给这条 iroh
             // 连接所认证的设备身份，不接受帧体里自报的 node_id。
             let response = match self.confirm_exchange(&peer).and_then(|paired| {
-                if paired && self.store.rc_device_note_identity(
-                    &peer, name.as_deref().unwrap_or(""), os.as_deref().unwrap_or(""),
-                )? {
+                if paired
+                    && self.store.rc_device_note_identity(
+                        &peer,
+                        name.as_deref().unwrap_or(""),
+                        os.as_deref().unwrap_or(""),
+                    )?
+                {
                     self.emit_pair_changed();
                 }
                 Ok(paired)
@@ -44,7 +48,10 @@ impl RcService {
                     name: Some(crate::rc::local_device_name()),
                     os: Some(crate::rc::local_os_label()),
                 },
-                Err(reason) => RcFrame::Deny { reason, code: Some("pair_check_failed".into()) },
+                Err(reason) => RcFrame::Deny {
+                    reason,
+                    code: Some("pair_check_failed".into()),
+                },
             };
             if let Ok(raw) = response.encode() {
                 let _ = write_frame(&mut send, &raw).await;
@@ -53,32 +60,42 @@ impl RcService {
         }
         // 对端把 Request 送到了 = 它在线。刷 last_seen，跨网时设备列表才亮得起来。
         let _ = self.store.rc_device_touch(&peer, true);
-        let (requested, uno_code, uno_pass, peer_dgram, peer_fec_rs, peer_audio, peer_video_plane, peer_media_plane, peer_media_feedback, peer_vd_frag) =
-            match RcFrame::decode(&bytes) {
-                Ok(RcFrame::Request {
-                    capability,
-                    uno_code,
-                    uno_pass,
-                    vid_dgram,
-                    fec_rs,
-                    audio,
-                    video_plane,
-                    media_plane,
-                    media_feedback,
-                    vd_frag,
-                }) => (
-                    capability,
-                    uno_code,
-                    uno_pass,
-                    vid_dgram == Some(true),
-                    fec_rs == Some(true),
-                    audio == Some(true),
-                    video_plane == Some(true) || media_plane == Some(true),
-                    media_plane == Some(true),
-                    media_feedback == Some(true),
-                    // 🔴 P3：对端声明的最大片宽（0 = 旧版对端，恒 1000B 分片）。
-                    vd_frag.map(|v| v as usize).unwrap_or(0),
-                ),
+        let (
+            requested,
+            uno_code,
+            uno_pass,
+            peer_dgram,
+            peer_fec_rs,
+            peer_audio,
+            peer_video_plane,
+            peer_media_plane,
+            peer_media_feedback,
+            peer_vd_frag,
+        ) = match RcFrame::decode(&bytes) {
+            Ok(RcFrame::Request {
+                capability,
+                uno_code,
+                uno_pass,
+                vid_dgram,
+                fec_rs,
+                audio,
+                video_plane,
+                media_plane,
+                media_feedback,
+                vd_frag,
+            }) => (
+                capability,
+                uno_code,
+                uno_pass,
+                vid_dgram == Some(true),
+                fec_rs == Some(true),
+                audio == Some(true),
+                video_plane == Some(true) || media_plane == Some(true),
+                media_plane == Some(true),
+                media_feedback == Some(true),
+                // 🔴 P3：对端声明的最大片宽（0 = 旧版对端，恒 1000B 分片）。
+                vd_frag.map(|v| v as usize).unwrap_or(0),
+            ),
             Ok(_) => {
                 deny_and_close(&link_conn, &mut send, "期望 Request 帧", "not_request").await;
                 return;
@@ -114,8 +131,8 @@ impl RcService {
                 (None, Some(pass)) => {
                     // 局域网判定在这里做（函数要拿连接），准入逻辑收进纯函数可测的
                     // `pass_admit`（`rc/tests.rs` 直接打它）。
-                    let is_lan =
-                        crate::net::path_kind::of_conn(&link_conn) == crate::net::path_kind::PathKind::Lan;
+                    let is_lan = crate::net::path_kind::of_conn(&link_conn)
+                        == crate::net::path_kind::PathKind::Lan;
                     match self.pass_admit(&peer, requested, pass, is_lan, now) {
                         UnoAdmit::Admitted => uno_admitted = true,
                         UnoAdmit::Denied(reason, deny_code) => {
@@ -306,15 +323,33 @@ impl RcService {
                     // decision 块已结束），与 `status()` 的加锁顺序一致。
                     self.link.attach(&link_conn);
                     if let Some(svc) = global() {
-                        let session_id = svc.inner.lock().unwrap_or_else(|p| p.into_inner())
-                            .session.as_ref().map(|s| s.id.clone());
+                        let session_id = svc
+                            .inner
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .session
+                            .as_ref()
+                            .map(|s| s.id.clone());
                         if let Some(id) = session_id {
                             crate::rc::underlay::start(svc, id, link_conn.clone(), true);
                         }
                     }
                     // R1：推 JPEG 画面直到会话结束（conn 一并交给推流任务：
                     // 鼠标数据报读取 + stats 采样都挂在它身上）
-                    super::inbound_accept::spawn_inbound_video(&peer, send, recv, link_conn, peer_dgram, peer_fec_rs, peer_audio, peer_video_plane, peer_media_plane, peer_media_feedback, peer_vd_frag).await;
+                    super::inbound_accept::spawn_inbound_video(
+                        &peer,
+                        send,
+                        recv,
+                        link_conn,
+                        peer_dgram,
+                        peer_fec_rs,
+                        peer_audio,
+                        peer_video_plane,
+                        peer_media_plane,
+                        peer_media_feedback,
+                        peer_vd_frag,
+                    )
+                    .await;
                     return;
                 }
                 Some(Err("already_streaming")) => {

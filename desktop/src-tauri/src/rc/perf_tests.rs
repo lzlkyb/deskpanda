@@ -135,7 +135,10 @@ mod tests {
         assert!(line.contains("cap 20"), "均值 (10+30)/2=20: {line}");
         assert!(line.contains("enc 10"), "均值 (5+15)/2=10: {line}");
         assert!(line.contains("send 2"), "均值 (1+3)/2=2: {line}");
-        assert!(line.contains("丢失 1") || line.contains("丢 1"), "丢帧: {line}");
+        assert!(
+            line.contains("丢失 1") || line.contains("丢 1"),
+            "丢帧: {line}"
+        );
         // 收尾行必须带上全局计数器，否则「熔断过几次」还得翻别的日志
         assert!(line.contains("熔断"), "缺计数器: {line}");
         assert!(line.contains("JPEG兜底"), "缺计数器: {line}");
@@ -234,7 +237,10 @@ mod tests {
     #[test]
     fn profile_name_阶梯内档位可反查() {
         use crate::rc::video::EncodeProfile;
-        assert_eq!(profile_name(&EncodeProfile::of_name("balanced")), "balanced");
+        assert_eq!(
+            profile_name(&EncodeProfile::of_name("balanced")),
+            "balanced"
+        );
         assert_eq!(profile_name(&EncodeProfile::of_name("ultra")), "ultra");
         assert_eq!(profile_name(&EncodeProfile::of_name("smooth")), "smooth");
     }
@@ -256,7 +262,10 @@ mod tests {
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(10));
         s.note_frame(&FrameTiming::produced(10, 10, None), 10);
         let first = s.report(ReportExtra::default()).unwrap();
-        assert!(first.contains("本区间 0.1fps") || first.contains("本区间"), "{first}");
+        assert!(
+            first.contains("本区间 0.1fps") || first.contains("本区间"),
+            "{first}"
+        );
         // 再补一帧并把报告时刻拨回去
         s.note_frame(&FrameTiming::produced(10, 10, None), 10);
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(5));
@@ -282,13 +291,19 @@ mod tests {
         bump(&counters::CAPTURE_FAIL);
         s.note_frame(&FrameTiming::produced(10, 10, None), 10);
         let line = s.report(ReportExtra::default()).expect("应输出汇总");
-        assert!(line.contains("兜底 +2（本场 2）"), "区间增量与本场累计都要可见: {line}");
+        assert!(
+            line.contains("兜底 +2（本场 2）"),
+            "区间增量与本场累计都要可见: {line}"
+        );
         assert!(line.contains("抓屏失败 +1（本场 1）"), "{line}");
         // 第二个区间没有新兜底 → 整段消失（正常会话的行宽不该被诊断撑大）。
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(5));
         s.note_frame(&FrameTiming::produced(10, 10, None), 10);
         let second = s.report(ReportExtra::default()).expect("应输出汇总");
-        assert!(!second.contains("兜底"), "无新增兜底时不该再附这一段: {second}");
+        assert!(
+            !second.contains("兜底"),
+            "无新增兜底时不该再附这一段: {second}"
+        );
         counters::JPEG_FALLBACK.fetch_sub(2, std::sync::atomic::Ordering::Relaxed);
         counters::CAPTURE_FAIL.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -336,7 +351,10 @@ mod tests {
         });
         assert!(take_pick_report_once(&mut slot).is_some());
         assert!(slot.is_none(), "取出后槽位应清空");
-        assert!(take_pick_report_once(&mut slot).is_none(), "第二次应为 None");
+        assert!(
+            take_pick_report_once(&mut slot).is_none(),
+            "第二次应为 None"
+        );
     }
 
     #[test]
@@ -406,9 +424,14 @@ mod tests {
             s.note_idle(30);
         }
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(10));
-        let line = s.report(ReportExtra::default()).expect("有产出帧就要出汇总");
+        let line = s
+            .report(ReportExtra::default())
+            .expect("有产出帧就要出汇总");
         assert!(line.contains("空转 4 圈"), "空转圈必须可见: {line}");
-        assert!(line.contains("单圈均值 30 峰值 30 ms"), "空转的单圈墙钟: {line}");
+        assert!(
+            line.contains("单圈均值 30 峰值 30 ms"),
+            "空转的单圈墙钟: {line}"
+        );
         // 🔴 关键：空转**不进**分段均值。5 圈里只 1 圈真出帧，cap 均值一旦把它
         // 算进去就变成 40/5=8，「慢在编码」的信号被静默抹平。
         assert!(line.contains("cap 40"), "分段均值只算产出帧: {line}");
@@ -426,10 +449,14 @@ mod tests {
         let mut s = FrameStats::new();
         s.note_idle(31);
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(10));
-        let line = s.report(ReportExtra::default()).expect("零产出帧也要出汇总");
+        let line = s
+            .report(ReportExtra::default())
+            .expect("零产出帧也要出汇总");
         assert!(line.contains("帧 0"), "{line}");
         assert!(line.contains("空转 1 圈"), "{line}");
-        let done = s.summary(ReportExtra::default()).expect("收尾行同样不许沉默");
+        let done = s
+            .summary(ReportExtra::default())
+            .expect("收尾行同样不许沉默");
         assert!(done.contains("空转 1 圈 均值 31"), "{done}");
         // 反例：一场真的什么都没跑（连圈都没走）才该沉默。
         assert!(FrameStats::new().report(ReportExtra::default()).is_none());
@@ -491,7 +518,10 @@ mod probe_output_preview {
         let mut s = FrameStats::new();
         // 模拟 12 帧 1080p 硬编：抓 38ms / 编 10ms / 发 2ms
         for i in 0..12u64 {
-            s.note_frame(&FrameTiming::produced(35 + i % 5, 9 + i % 3, Some(1 + i % 2)), 52 + i % 7);
+            s.note_frame(
+                &FrameTiming::produced(35 + i % 5, 9 + i % 3, Some(1 + i % 2)),
+                52 + i % 7,
+            );
         }
         s.note_dropped();
         s.last_report = Some(Instant::now() - std::time::Duration::from_secs(6));

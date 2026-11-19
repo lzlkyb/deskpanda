@@ -230,7 +230,6 @@ fn 按设备清空保留其他设备和运行中任务() {
     assert_eq!(st.tasks().len(), 1);
 }
 
-
 /// 🔴 P3-14（2026-09-25 审计）守卫：终态粘滞。
 ///
 /// file_cancel 的 `is_running → task_finish(Canceled)` 两步与传输收口
@@ -266,10 +265,16 @@ fn 终态粘滞_迟到终态不得覆盖先到的_p3_14() {
 fn peer占位互斥且可释放() {
     let st = FileState::new();
     assert!(st.try_reserve_peer("p1"));
-    assert!(!st.try_reserve_peer("p1"), "second claim of same peer must fail");
+    assert!(
+        !st.try_reserve_peer("p1"),
+        "second claim of same peer must fail"
+    );
     assert!(st.try_reserve_peer("p2"));
     st.release_peer("p1");
-    assert!(st.try_reserve_peer("p1"), "after release, claim must succeed");
+    assert!(
+        st.try_reserve_peer("p1"),
+        "after release, claim must succeed"
+    );
 }
 
 #[test]
@@ -278,7 +283,10 @@ fn peer占位与未结束任务互斥() {
     let id = st.task_start("p", "n", TaskDir::Send, "a", 10, 0, T0);
     assert!(!st.try_reserve_peer("p"), "live task blocks reserve");
     st.task_finish(&id, TaskState::Done, None, T0 + 1);
-    assert!(st.try_reserve_peer("p"), "finished task must not block reserve");
+    assert!(
+        st.try_reserve_peer("p"),
+        "finished task must not block reserve"
+    );
 }
 
 #[test]
@@ -293,7 +301,10 @@ fn part槽互斥且可释放() {
     let st = FileState::new();
     assert!(st.try_reserve_part("a.bin.pppart"));
     assert!(st.part_reserved("a.bin.pppart"));
-    assert!(!st.try_reserve_part("a.bin.pppart"), "same part must not double-claim");
+    assert!(
+        !st.try_reserve_part("a.bin.pppart"),
+        "same part must not double-claim"
+    );
     assert!(st.try_reserve_part("b.bin.pppart"));
     st.release_part("a.bin.pppart");
     assert!(!st.part_reserved("a.bin.pppart"));

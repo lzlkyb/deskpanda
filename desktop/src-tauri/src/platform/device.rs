@@ -32,9 +32,9 @@ mod tests {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let call = ["hostname::", "get()"].concat();
                     assert!(
-                        !source
-                            .lines()
-                            .any(|line| !line.trim_start().starts_with("//") && line.contains(&call)),
+                        !source.lines().any(
+                            |line| !line.trim_start().starts_with("//") && line.contains(&call)
+                        ),
                         "{} 绕过了本模块直接取主机名——同一台机器会出现两个名字",
                         path.display()
                     );

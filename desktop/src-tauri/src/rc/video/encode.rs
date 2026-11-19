@@ -4,17 +4,20 @@ use super::*;
 
 /// 抓屏并编码（带脏矩形与自适应）。按 profile 选虚拟屏或主屏。
 pub fn capture_and_encode(state: &mut EncoderState) -> Result<Encoded, String> {
-    #[cfg(not(any(target_os = "windows",target_os="macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = state;
         Err("远程画面目前仅支持 Windows".into())
     }
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     {
-        let ts=chrono::Utc::now().timestamp_millis();let start=std::time::Instant::now();
-        let (w,h,rgba)=capture_mac_rgba(state)?;
-        let capture_ms=start.elapsed().as_millis().min(u16::MAX as u128) as u16;
-        let mut output=encode_rgba_ts(state,w,h,rgba,ts)?;output.frame.cap_ms=capture_ms;Ok(output)
+        let ts = chrono::Utc::now().timestamp_millis();
+        let start = std::time::Instant::now();
+        let (w, h, rgba) = capture_mac_rgba(state)?;
+        let capture_ms = start.elapsed().as_millis().min(u16::MAX as u128) as u16;
+        let mut output = encode_rgba_ts(state, w, h, rgba, ts)?;
+        output.frame.cap_ms = capture_ms;
+        Ok(output)
     }
     #[cfg(target_os = "windows")]
     {
@@ -46,7 +49,13 @@ pub fn encode_rgba(
     height: u32,
     rgba: &[u8],
 ) -> Result<Encoded, String> {
-    encode_rgba_ts(state, width, height, rgba.to_vec(), chrono::Utc::now().timestamp_millis())
+    encode_rgba_ts(
+        state,
+        width,
+        height,
+        rgba.to_vec(),
+        chrono::Utc::now().timestamp_millis(),
+    )
 }
 
 pub fn encode_rgba_ts(
@@ -163,7 +172,11 @@ pub fn encode_rgba_ts(
         (rgb_bytes, tw, th)
     };
 
-    let enc_quality = if refine_now { REFINE_QUALITY } else { state.quality };
+    let enc_quality = if refine_now {
+        REFINE_QUALITY
+    } else {
+        state.quality
+    };
     // P0-2 延迟分段：JPEG 编码耗时单独记。
     //
     // 🔴 编码器是**系统 WIC**（`rc/wic_jpeg`），不再是 `image` crate 那个纯 Rust 实现：
@@ -270,7 +283,15 @@ fn find_dirty_rect(prev: &[u8], cur: &[u8], w: u32, h: u32) -> DirtyOutcome {
 /// 借口「均值只增不减」，可运行均值并不单调（后续小于均值的像素会拉低它）：
 /// 块内第 1 个像素 d=100 就立即判脏，全块均值 0.39 本不该脏——微噪点块
 /// 永久判脏，静止跳帧与 q95 精修静默失效（2026-09-19 审查 P2）。
-pub(in crate::rc) fn tile_dirty(prev: &[u8], cur: &[u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+pub(in crate::rc) fn tile_dirty(
+    prev: &[u8],
+    cur: &[u8],
+    w: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> bool {
     let threshold = TILE_DIFF_THRESHOLD as u64;
     let max_d = (255u64) * 3;
     let total = ((x1 - x0) as u64) * ((y1 - y0) as u64);
@@ -321,16 +342,27 @@ fn crop_rgb(rgb: &[u8], w: u32, h: u32, r: DirtyRect) -> Result<Vec<u8>, String>
     Ok(out)
 }
 
-#[cfg(target_os="macos")]
-pub(crate) fn capture_mac_rgba(state:&mut EncoderState)->Result<(u32,u32,Vec<u8>),String>{
-    let fps=crate::rc::video_params::mac_capture_fps(state.profile.interval_ms);
+#[cfg(target_os = "macos")]
+pub(crate) fn capture_mac_rgba(state: &mut EncoderState) -> Result<(u32, u32, Vec<u8>), String> {
+    let fps = crate::rc::video_params::mac_capture_fps(state.profile.interval_ms);
     capture_mac_rgba_at_fps(state, fps)
 }
-#[cfg(target_os="macos")]
-pub(crate) fn capture_mac_rgba_at_fps(state:&mut EncoderState, fps:u32)->Result<(u32,u32,Vec<u8>),String>{
-    if state.mac_capture.as_ref().is_none_or(|c|!c.matches(state.monitor,state.virtual_screen,fps)){
-        state.mac_capture=None;
-        state.mac_capture=Some(crate::rc::mac_capture::Capture::start(state.monitor,state.virtual_screen,fps)?);
+#[cfg(target_os = "macos")]
+pub(crate) fn capture_mac_rgba_at_fps(
+    state: &mut EncoderState,
+    fps: u32,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    if state
+        .mac_capture
+        .as_ref()
+        .is_none_or(|c| !c.matches(state.monitor, state.virtual_screen, fps))
+    {
+        state.mac_capture = None;
+        state.mac_capture = Some(crate::rc::mac_capture::Capture::start(
+            state.monitor,
+            state.virtual_screen,
+            fps,
+        )?);
     }
     state.mac_capture.as_mut().unwrap().frame()
 }

@@ -42,28 +42,38 @@ impl RcService {
 
     /// Bound both queue consumption and late decoded output to the requesting
     /// outbound session. Decode on a blocking worker, never the UI thread.
-    pub fn drain_frames_for_viewer(&self, session: &str) -> Result<(Vec<crate::rc::video::VideoFrame>, Vec<usize>), String> {
+    pub fn drain_frames_for_viewer(
+        &self,
+        session: &str,
+    ) -> Result<(Vec<crate::rc::video::VideoFrame>, Vec<usize>), String> {
         let _serial = self.viewer_drain.lock().unwrap_or_else(|p| p.into_inner());
         let frames = {
             let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-            if matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundPending) {
+            if matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundPending)
+            {
                 // Viewers mount while dialing/awaiting approval. This is an
                 // ordinary empty wait, not a decode failure; do not drain yet.
                 return Ok((Vec::new(), Vec::new()));
             }
-            if !matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundActive) {
+            if !matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundActive)
+            {
                 return Err("远程会话已改变".into());
             }
             self.drain_frames()
         };
         #[cfg(target_os = "macos")]
-        let result = self.av1_receiver.lock().unwrap_or_else(|p| p.into_inner()).batch(session, frames);
+        let result = self
+            .av1_receiver
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .batch(session, frames);
         #[cfg(not(target_os = "macos"))]
         let result = (frames, Vec::new());
         // Receiver lock is released before taking inner: teardown uses inner
         // and then clears receiver state, so no inverse lock ordering.
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        if !matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundActive) {
+        if !matches!(inner.session.as_ref(), Some(s) if s.id == session && s.phase == SessionPhase::OutboundActive)
+        {
             return Err("远程会话已改变".into());
         }
         Ok(result)
@@ -72,7 +82,10 @@ impl RcService {
     pub(in crate::rc) fn clear_outbox(&self) {
         let _serial = self.viewer_drain.lock().unwrap_or_else(|p| p.into_inner());
         #[cfg(target_os = "macos")]
-        self.av1_receiver.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.av1_receiver
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         self.frame_outbox
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -125,7 +138,9 @@ impl RcService {
     }
 
     pub(in crate::rc) async fn send_input_with_request(
-        &self, ev: &crate::rc::input::InputEvent, request: Option<(&str, &str)>,
+        &self,
+        ev: &crate::rc::input::InputEvent,
+        request: Option<(&str, &str)>,
     ) -> Result<(), String> {
         use crate::rc::input::InputEvent;
         if let InputEvent::FramePresented { session_id, at_ms } = ev {
@@ -146,9 +161,15 @@ impl RcService {
         let session_id = {
             let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             let s = inner.session.as_ref().ok_or("没有进行中的会话")?;
-            if s.phase != SessionPhase::OutboundActive { return Err("会话尚未建立".into()); }
-            if request.is_some_and(|(session, _)| session != s.id) { return Err("会话已改变".into()); }
-            if needs_control { crate::rc::input::assert_control_allowed(s.capability)?; }
+            if s.phase != SessionPhase::OutboundActive {
+                return Err("会话尚未建立".into());
+            }
+            if request.is_some_and(|(session, _)| session != s.id) {
+                return Err("会话已改变".into());
+            }
+            if needs_control {
+                crate::rc::input::assert_control_allowed(s.capability)?;
+            }
             s.id.clone()
         };
         // P0-3：鼠标移动走 QUIC 数据报——不可靠但免队头阻塞，视频大帧堵住
@@ -172,8 +193,12 @@ impl RcService {
         {
             let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             let s = inner.session.as_ref().ok_or("会话已结束")?;
-            if s.id != session_id || s.phase != SessionPhase::OutboundActive { return Err("会话已改变".into()); }
-            if needs_control { crate::rc::input::assert_control_allowed(s.capability)?; }
+            if s.id != session_id || s.phase != SessionPhase::OutboundActive {
+                return Err("会话已改变".into());
+            }
+            if needs_control {
+                crate::rc::input::assert_control_allowed(s.capability)?;
+            }
         }
         let json = if let Some((_, id)) = request {
             let mut json = serde_json::to_value(ev).map_err(|e| e.to_string())?;

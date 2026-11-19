@@ -17,10 +17,17 @@ fn saved_peer_addr(config: &serde_json::Value, peer: &str) -> Option<EndpointAdd
 }
 
 impl RcService {
-    pub(in crate::rc) fn peer_addr(&self, peer: &str, presence: &PresenceTable) -> Result<EndpointAddr, String> {
+    pub(in crate::rc) fn peer_addr(
+        &self,
+        peer: &str,
+        presence: &PresenceTable,
+    ) -> Result<EndpointAddr, String> {
         let id = iroh::EndpointId::from_str(peer).map_err(|e| format!("设备号无效：{e}"))?;
         let config = self.store.get_config()?;
-        let mut addr = self.joins.exchange_for(peer, now_ms()).and_then(|intent| intent.addr)
+        let mut addr = self
+            .joins
+            .exchange_for(peer, now_ms())
+            .and_then(|intent| intent.addr)
             .or_else(|| saved_peer_addr(&config, peer))
             .unwrap_or_else(|| EndpointAddr::new(id));
         for socket in presence.addrs_of(peer, now_ms()) {
@@ -29,21 +36,33 @@ impl RcService {
         Ok(addr)
     }
 
-    pub(in crate::rc) fn save_peer_addr(&self, peer: &str, addr: &EndpointAddr) -> Result<(), String> {
+    pub(in crate::rc) fn save_peer_addr(
+        &self,
+        peer: &str,
+        addr: &EndpointAddr,
+    ) -> Result<(), String> {
         if addr.id.to_string() != peer {
             return Err("设备地址与身份不一致".into());
         }
         let mut config = self.store.get_config()?;
         let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
-        let addrs = obj.entry(CFG_PEER_ADDRS).or_insert_with(|| serde_json::json!({}));
+        let addrs = obj
+            .entry(CFG_PEER_ADDRS)
+            .or_insert_with(|| serde_json::json!({}));
         let map = addrs.as_object_mut().ok_or("已保存的设备地址格式无效")?;
-        map.insert(peer.to_string(), serde_json::to_value(addr).map_err(|e| e.to_string())?);
+        map.insert(
+            peer.to_string(),
+            serde_json::to_value(addr).map_err(|e| e.to_string())?,
+        );
         self.store.save_config(&config)
     }
 
     pub fn forget_peer_addr(&self, peer: &str) -> Result<(), String> {
         let mut config = self.store.get_config()?;
-        if let Some(map) = config.get_mut(CFG_PEER_ADDRS).and_then(|v| v.as_object_mut()) {
+        if let Some(map) = config
+            .get_mut(CFG_PEER_ADDRS)
+            .and_then(|v| v.as_object_mut())
+        {
             map.remove(peer);
             self.store.save_config(&config)?;
         }
@@ -192,7 +211,8 @@ mod short_pair_addr_tests {
             serde_json::to_value(EndpointAddr::new(other)).unwrap();
         assert!(saved_peer_addr(&config, &peer).is_none());
         let id = iroh::EndpointId::from_str(&peer).unwrap();
-        config[CFG_PEER_ADDRS][peer.as_str()] = serde_json::to_value(EndpointAddr::new(id)).unwrap();
+        config[CFG_PEER_ADDRS][peer.as_str()] =
+            serde_json::to_value(EndpointAddr::new(id)).unwrap();
         assert_eq!(saved_peer_addr(&config, &peer).unwrap().id, id);
     }
 }

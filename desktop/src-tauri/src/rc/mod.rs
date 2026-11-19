@@ -16,18 +16,15 @@ pub mod host_capability;
 pub mod inbound;
 pub mod inbound_tasks;
 pub mod input;
-#[cfg(target_os="macos")]
-#[path="../macos/remote_input.rs"]
-pub(crate) mod mac_input;
-#[cfg(target_os="macos")]
-#[path="../macos/remote_capture.rs"]
-pub(crate) mod mac_capture;
-#[cfg(target_os="macos")]
-#[path="../macos/remote_video.rs"]
-pub(crate) mod mac_video;
+// 🔴 macOS 采集/输入/编码三件套（原 `#[path = "../macos/remote_*.rs"]`）**本仓未迁**。
+// 它们依赖 `src/macos/` 下一整套 Objective-C 桥接（`av1_bridge.c`、
+// `remote_audio_encoder.m`、`recording_frame.m` 等）与对应的 build.rs 链接配置，
+// 属于「macOS 是否本轮交付」这个待定项（拆分方案 §S6）。
+// 删掉声明而不是留着空指向：留着的后果是 `cargo fmt` / 任何按模块遍历的工具
+// 都会去读一个不存在的文件而直接失败（本次就是被它挡在门禁 [2/7]）。
+// 恢复方式：把原仓 `src/macos/` 与这三行一起搬回来。
 pub mod join;
 pub mod jpeg;
-pub mod video_params;
 /// 被控端会话防休眠（Windows 电源执行状态锁）。**跨平台声明**：非 Windows 由内部
 /// stub 返回 `None`，推流任务的字段因此不必写 cfg（与 [`wic_jpeg`] 同一处理）。
 /// ⚠️ 与 Android 端那条前台服务保活不是一回事：那条管进程不被冻结，这条管机器不睡。
@@ -51,14 +48,15 @@ pub mod probe_out;
 pub mod protocol;
 pub mod rs_fec;
 pub mod service;
+pub mod session;
 pub mod settings;
 pub mod short_pair;
-pub mod session;
 pub mod stream_cfg;
 pub(crate) mod underlay;
 pub mod uno;
 pub mod unop;
 pub mod video;
+pub mod video_params;
 /// JPEG 兜底路径的编码器（Windows 自带 WIC，比纯 Rust `image` 快 9.4 倍）。
 /// Mac 使用 ImageIO 编码，失败时回退纯 Rust；其它非 Windows 平台返回 Err。`video/encode.rs`
 /// 调用点因此不必写 cfg（见该文件头注释）。
@@ -66,7 +64,7 @@ pub mod wic_jpeg;
 /// 锁屏感知（S1）：WTS 会话通知 + 初始桌名探测，纯逻辑跨平台可测（见文件头）。
 pub mod wts_watch;
 
-#[cfg(any(target_os = "windows",target_os="macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod audio;
 #[cfg(target_os = "windows")]
 pub mod dxgi;
@@ -158,7 +156,7 @@ pub fn local_os_label() -> String {
 }
 
 pub use pin::{
-    commit_allowed, Confirmed, Done, Outgoing, PairPrompt, PinOkIn, Pairs, PAIR_WINDOW_SECS,
+    commit_allowed, Confirmed, Done, Outgoing, PairPrompt, Pairs, PinOkIn, PAIR_WINDOW_SECS,
 };
 pub use protocol::{Capability, RcFrame, SessionPhase, ALPN};
 pub use service::{cfg_enabled, global, install_global, RcService, RcStatus};

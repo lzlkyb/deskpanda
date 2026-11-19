@@ -94,27 +94,13 @@ pub(super) fn note_pong(rtt_ms: i64, skew_sample: i64) {
 
 /// 一帧交付（push.rs 两路共用入口）。`skew` = 发起端当前校准值
 /// （`svc.clock_skew_ms()`），age = 本机收帧时刻 − 对端采集时刻 + skew。
-pub(super) fn note_frame(
-    at_ms: i64,
-    cap_ms: u16,
-    enc_ms: u16,
-    width: u32,
-    height: u32,
-    skew: i64,
-) {
+pub(super) fn note_frame(at_ms: i64, cap_ms: u16, enc_ms: u16, width: u32, height: u32, skew: i64) {
     note_telemetry(at_ms, cap_ms, enc_ms, width, height, skew, false);
 }
 
 /// 一帧 JPEG（handle_jpeg：H.264 打不开 / 单帧失败时的兜底路径）。
 /// JPEG 帧计数 > 0 即说明本场会话硬编没走起来——这是「编码慢」最重要的分诊信号。
-pub(super) fn note_jpeg(
-    at_ms: i64,
-    cap_ms: u16,
-    enc_ms: u16,
-    width: u32,
-    height: u32,
-    skew: i64,
-) {
+pub(super) fn note_jpeg(at_ms: i64, cap_ms: u16, enc_ms: u16, width: u32, height: u32, skew: i64) {
     note_telemetry(at_ms, cap_ms, enc_ms, width, height, skew, true);
 }
 
@@ -134,16 +120,17 @@ fn note_telemetry(
     // 在 15% 整整半分钟。停顿是链路事件不是稳态排队，2.5s 封顶让码控「看见了
     // 就压、过去了就放」，深停顿另由 RTT 档位兜底。
     let age_c = age.clamp(-1000, 2500);
-    AGE_EMA.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
-        Some(if prev < 0 {
-            age_c
-        } else if age_c > prev {
-            (prev + age_c) / 2
-        } else {
-            (prev * 7 + age_c) / 8
+    AGE_EMA
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+            Some(if prev < 0 {
+                age_c
+            } else if age_c > prev {
+                (prev + age_c) / 2
+            } else {
+                (prev * 7 + age_c) / 8
+            })
         })
-    })
-    .ok();
+        .ok();
     DELIVERED.fetch_add(1, Ordering::Relaxed);
     let Ok(mut g) = WINDOW.lock() else { return };
     let w = g.get_or_insert_with(|| blank(Instant::now()));

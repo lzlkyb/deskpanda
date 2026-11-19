@@ -152,7 +152,8 @@ impl OutputDup {
                     sd.MipLevels = 1;
                     sd.ArraySize = 1;
                     let mut st: Option<ID3D11Texture2D> = None;
-                    device.CreateTexture2D(&sd, None, Some(&mut st))
+                    device
+                        .CreateTexture2D(&sd, None, Some(&mut st))
                         .map_err(|e| format!("staging：{e}"))?;
                     self.staging = Some(st.ok_or("staging 创建为空")?);
                     self.width = desc.Width;
@@ -279,14 +280,15 @@ impl OutputDup {
                     // GPU 侧暂存：VP 输入视图/编码器都吃 DEFAULT 纹理；
                     // BIND_RENDER_TARGET | BIND_SHADER_RESOURCE 是 VP 视图的安全集合
                     sd.Usage = windows::Win32::Graphics::Direct3D11::D3D11_USAGE_DEFAULT;
-                    sd.BindFlags = (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0)
-                        as u32;
+                    sd.BindFlags =
+                        (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32;
                     sd.CPUAccessFlags = 0;
                     sd.MiscFlags = 0;
                     sd.MipLevels = 1;
                     sd.ArraySize = 1;
                     let mut st: Option<ID3D11Texture2D> = None;
-                    device.CreateTexture2D(&sd, None, Some(&mut st))
+                    device
+                        .CreateTexture2D(&sd, None, Some(&mut st))
                         .map_err(|e| format!("gpu staging：{e}"))?;
                     self.gpu_staging = Some(st.ok_or("gpu staging 创建为空")?);
                     self.width = desc.Width;
@@ -445,9 +447,10 @@ impl DxgiPool {
             }
             Err(e) => {
                 self.retry_backoff_secs = next_disable_retry_secs(self.retry_backoff_secs);
-                self.retry_after =
-                    Some(std::time::Instant::now()
-                        + std::time::Duration::from_secs(self.retry_backoff_secs));
+                self.retry_after = Some(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_secs(self.retry_backoff_secs),
+                );
                 log::warn!(
                     "[RC] DXGI 熔断重试仍失败，{}s 后再试：{e}",
                     self.retry_backoff_secs
@@ -473,7 +476,9 @@ impl DxgiPool {
         virtual_screen: bool,
         monitor: i32,
     ) -> Result<Option<GrabbedFrame<'_>>, String> {
-        Ok(self.grab_common(virtual_screen, monitor, false)?.map(|(f, _)| f))
+        Ok(self
+            .grab_common(virtual_screen, monitor, false)?
+            .map(|(f, _)| f))
     }
 
     /// rec 专用：虚拟屏抓帧 + 指针快照。与 [`Self::grab`] 的差别只有两条：
@@ -550,7 +555,11 @@ impl DxgiPool {
                     }
                     GrabHit::Canvas(w, h) => {
                         // take 必须在借用画布之前完成（同 P3-10 借用顺序约束）
-                        let ptr = if want_ptr { self.last_ptr_snapshot.take() } else { None };
+                        let ptr = if want_ptr {
+                            self.last_ptr_snapshot.take()
+                        } else {
+                            None
+                        };
                         Ok(Some(((w, h, &self.canvas[..]), ptr)))
                     }
                 }
@@ -577,7 +586,10 @@ impl DxgiPool {
             // 「谁先问」变成了「谁能恢复」。
             self.maybe_revive();
             if self.disabled {
-                return Err(format!("[gpu_unavailable] DXGI 已禁用：{}", self.disabled_reason));
+                return Err(format!(
+                    "[gpu_unavailable] DXGI 已禁用：{}",
+                    self.disabled_reason
+                ));
             }
         }
         if self.outs.is_empty() {
@@ -677,7 +689,12 @@ impl DxgiPool {
     /// `&mut self` 操作全部冲突（经典的 get-or-insert 借用困境）。所以先回
     /// 位置，由 `grab()` 在簿记结束后按位置取出借用——借用只在 return
     /// 表达式里诞生，不再与其后的任何 `&mut self` 操作共存。
-    fn grab_inner(&mut self, virtual_screen: bool, monitor: i32, want_ptr: bool) -> Result<GrabHit, String> {
+    fn grab_inner(
+        &mut self,
+        virtual_screen: bool,
+        monitor: i32,
+        want_ptr: bool,
+    ) -> Result<GrabHit, String> {
         // 甲-②：本圈的等待从这一次抓取重新算——上面任何一条早退路径都不会留下
         // 上一圈的旧值（`last_wait_ms` 只在 grab 入口清零，别处不写）。
         self.last_wait_ms = 0;
@@ -696,10 +713,7 @@ impl DxgiPool {
                 .outs
                 .iter()
                 .position(|o| {
-                    o.left == mx
-                        && o.top == my
-                        && o.width == mw as u32
-                        && o.height == mh as u32
+                    o.left == mx && o.top == my && o.width == mw as u32 && o.height == mh as u32
                 })
                 .ok_or_else(|| {
                     format!("[no_output] 显示器 {monitor} 没有对应的 DXGI 输出（多 GPU？）")
@@ -767,7 +781,11 @@ impl DxgiPool {
         // rec（want_ptr）：指针变化（移动/换形/显隐）也算「有帧」。判定用指纹
         // （meta + 形状 FNV，不拷数据）；真正合成画布时才取快照随帧交出。
         // 指纹必须在**合成后**缓存——合成中途指针又动一次，下一帧还要再出。
-        let ptr_fp = if want_ptr { self.ptr_fingerprint() } else { None };
+        let ptr_fp = if want_ptr {
+            self.ptr_fingerprint()
+        } else {
+            None
+        };
         let ptr_changed = want_ptr && self.ptr_cache_fp != ptr_fp;
         if !any_fresh && !ptr_changed {
             return Ok(GrabHit::None);
@@ -782,9 +800,9 @@ impl DxgiPool {
     /// 指针状态指纹：第一个报告「指针可见」的输出的 meta + 形状数据 FNV-1a
     ///（多屏时指针只在所在输出的 duplicator 上可见）。None = 无指针。
     fn ptr_fingerprint(&self) -> Option<(PtrMeta, u64)> {
-        self.outs.iter().find_map(|o| {
-            o.ptr.as_ref().map(|m| (m.clone(), fnv1a(&o.ptr_shape)))
-        })
+        self.outs
+            .iter()
+            .find_map(|o| o.ptr.as_ref().map(|m| (m.clone(), fnv1a(&o.ptr_shape))))
     }
 
     /// 指针快照（含形状数据拷贝）。只在合成画布的帧上调用。
@@ -832,8 +850,7 @@ impl Drop for DxgiPool {
     }
 }
 
-fn open_outputs()
--> Result<(ID3D11Device, ID3D11DeviceContext, Vec<OutputDup>, bool), String> {
+fn open_outputs() -> Result<(ID3D11Device, ID3D11DeviceContext, Vec<OutputDup>, bool), String> {
     unsafe {
         // 🔴 走 `ensure_mta_quiet` 而非 `.is_ok()`（2026-09-23）：被拒时（线程已是 STA）
         // 公寓仍是 STA，D3D11 抓屏 + 硬编 MFT 都在上面跑必然出问题，而这条信息过去

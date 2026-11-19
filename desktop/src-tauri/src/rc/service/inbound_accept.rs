@@ -133,7 +133,13 @@ impl RcService {
         } else {
             knock.capability
         };
-        let s = self.establish_inbound_with(&mut inner, peer, knock.peer_name, cap, InboundTrust::Whitelist)?;
+        let s = self.establish_inbound_with(
+            &mut inner,
+            peer,
+            knock.peer_name,
+            cap,
+            InboundTrust::Whitelist,
+        )?;
         inner.pending.remove(idx);
         drop(inner);
         // B-b：人工批准 = 首次 elevate 确认。仅同步配对的设备在此写入 rc_devices，
@@ -213,7 +219,7 @@ pub(in crate::rc) async fn spawn_inbound_video(
     let probe_conn = conn.clone();
     // G3：对端申请了系统声音 → 音频 worker 由 InboundVideo::run 启动
     // （音频状态是 Windows 宿主专属字段，mobile 无可置/可清，跳过）
-    #[cfg(any(target_os="windows",target_os="macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     svc.audio_set_peer_wants(peer_audio);
     let Some(video) = crate::rc::inbound::InboundVideo::try_new(
         svc.clone(),
@@ -225,9 +231,8 @@ pub(in crate::rc) async fn spawn_inbound_video(
         peer_video_plane,
         peer_media_plane,
         peer_media_feedback,
-    )
-    else {
-        #[cfg(any(target_os = "windows",target_os="macos"))]
+    ) else {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         svc.audio_reset();
         log::warn!("[RC] 被控推流启动前会话已结束，放弃推流");
         return;
@@ -238,7 +243,8 @@ pub(in crate::rc) async fn spawn_inbound_video(
         crate::rc::pmtud::run_during(
             crate::rc::pmtud::run(probe_conn, peer_vd_frag, probe),
             video.run(recv),
-        ).await;
+        )
+        .await;
     } else {
         video.run(recv).await;
     }

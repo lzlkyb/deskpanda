@@ -199,7 +199,7 @@ unsafe fn activate_and_probe(act: &IMFActivate, codec: VideoCodec) -> ProbeOutco
 /// 提取 D3D11 设备所在 DXGI 适配器的 LUID（打包成 u64：High<<32 | Low）。
 /// 提不到（异常驱动）返回 None，调用方退回「枚举第一个」的旧行为。
 pub(super) fn adapter_luid_of(device: &ID3D11Device) -> Option<u64> {
-    use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGIAdapter};
+    use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
     unsafe {
         let dxgi: IDXGIDevice = device.cast().ok()?;
         let adapter: IDXGIAdapter = dxgi.GetAdapter().ok()?;
@@ -228,7 +228,9 @@ const HW_TIERS: [MFT_ENUM_FLAG; 3] = [
     MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_SYNCMFT.0),
     MFT_ENUM_FLAG_ALL,
 ];
-const SW_TIERS: [MFT_ENUM_FLAG; 1] = [MFT_ENUM_FLAG(MFT_ENUM_FLAG_SYNCMFT.0 | MFT_ENUM_FLAG_ASYNCMFT.0)];
+const SW_TIERS: [MFT_ENUM_FLAG; 1] = [MFT_ENUM_FLAG(
+    MFT_ENUM_FLAG_SYNCMFT.0 | MFT_ENUM_FLAG_ASYNCMFT.0,
+)];
 
 fn enum_tiers(skip_hw: bool) -> &'static [MFT_ENUM_FLAG] {
     if skip_hw {
@@ -303,7 +305,10 @@ pub(super) unsafe fn create_h264_mft(
     let mut order: Vec<IMFActivate> = Vec::new();
     if let Some(want) = prefer_adapter {
         for a in slice.iter().flatten() {
-            if a.GetUINT64(&MFT_ENUM_ADAPTER_LUID).map(|v| v == want).unwrap_or(false) {
+            if a.GetUINT64(&MFT_ENUM_ADAPTER_LUID)
+                .map(|v| v == want)
+                .unwrap_or(false)
+            {
                 order.push(a.clone());
             }
         }
@@ -312,9 +317,7 @@ pub(super) unsafe fn create_h264_mft(
         }
     }
     for a in slice.iter().flatten() {
-        let dup = order
-            .iter()
-            .any(|c| std::ptr::eq(c.as_raw(), a.as_raw()));
+        let dup = order.iter().any(|c| std::ptr::eq(c.as_raw(), a.as_raw()));
         if !dup {
             order.push(a.clone());
         }
@@ -385,10 +388,7 @@ pub(super) unsafe fn create_h264_mft(
         match act.ActivateObject::<IMFTransform>() {
             Ok(clean) => {
                 if tried > 1 {
-                    log::info!(
-                        "[RC] 跳过 {} 台不可用编码器，选中「{name}」",
-                        tried - 1
-                    );
+                    log::info!("[RC] 跳过 {} 台不可用编码器，选中「{name}」", tried - 1);
                 }
                 report.tried = tried;
                 report.skipped = tried.saturating_sub(1);
@@ -399,7 +399,9 @@ pub(super) unsafe fn create_h264_mft(
             }
             Err(e) => {
                 log::warn!("[RC] 编码器「{name}」二次实例化失败：{e}");
-                report.details.push((format!("{name}（二次实例化失败）"), false, 0));
+                report
+                    .details
+                    .push((format!("{name}（二次实例化失败）"), false, 0));
             }
         }
     }
@@ -429,9 +431,7 @@ pub(super) unsafe fn friendly_name_of(act: &IMFActivate) -> Option<String> {
     let mut len = 0u32;
     act.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut buf, Some(&mut len))
         .ok()
-        .map(|_| {
-            String::from_utf16_lossy(&buf[..(len as usize).min(buf.len()).saturating_sub(1)])
-        })
+        .map(|_| String::from_utf16_lossy(&buf[..(len as usize).min(buf.len()).saturating_sub(1)]))
 }
 
 /// 试编探测：不改变 transform 的对外状态，只回答「这台 MFT 能不能一路出包」。
@@ -498,11 +498,7 @@ pub(super) unsafe fn probe_encodable(t: &IMFTransform, codec: VideoCodec) -> boo
     }
 
     // async 走事件协议；同步直接 ProcessInput/ProcessOutput
-    let events: Option<IMFMediaEventGenerator> = if is_async {
-        t.cast().ok()
-    } else {
-        None
-    };
+    let events: Option<IMFMediaEventGenerator> = if is_async { t.cast().ok() } else { None };
     let mut got = 0usize;
     for idx in 0..2u64 {
         match probe_feed(t, events.as_ref(), &nv12, idx, need) {
@@ -567,8 +563,7 @@ unsafe fn probe_feed(
             if t.ProcessInput(0, &sample, 0).is_err() {
                 return Err(());
             }
-            let out_deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(600);
+            let out_deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
             while std::time::Instant::now() < out_deadline {
                 match eg.GetEvent(MF_EVENT_FLAG_NO_WAIT) {
                     Ok(ev) => {
@@ -707,7 +702,12 @@ pub(super) unsafe fn make_dxgi_sample(
     Ok(sample)
 }
 
-pub(super) unsafe fn make_sample(nv12: &[u8], len: usize, idx: u64, fps: u32) -> Result<IMFSample, String> {
+pub(super) unsafe fn make_sample(
+    nv12: &[u8],
+    len: usize,
+    idx: u64,
+    fps: u32,
+) -> Result<IMFSample, String> {
     let buf = MFCreateMemoryBuffer(len as u32).map_err(mf_err)?;
     {
         let mut data: *mut u8 = std::ptr::null_mut();
@@ -747,7 +747,9 @@ pub(super) unsafe fn lock_buf(buf: &IMFMediaBuffer) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod timeout_tests {
-    use super::{run_with_timeout, ProbeOutcome, MAX_DRAIN_PER_FRAME, PICK_BUDGET_MS, PROBE_TIMEOUT_MS};
+    use super::{
+        run_with_timeout, ProbeOutcome, MAX_DRAIN_PER_FRAME, PICK_BUDGET_MS, PROBE_TIMEOUT_MS,
+    };
     use std::time::{Duration, Instant};
 
     /// 守卫：超时必须生效，且必须**及时**返回。
@@ -816,7 +818,12 @@ mod timeout_tests {
                 "单台超时相对实测最坏（580ms）至少要有 2 倍余量"
             )
         };
-        const { assert!(PROBE_TIMEOUT_MS <= 10_000, "单台超时超过 10s 就失去了保护意义") };
+        const {
+            assert!(
+                PROBE_TIMEOUT_MS <= 10_000,
+                "单台超时超过 10s 就失去了保护意义"
+            )
+        };
         // 预算是「兜底 × 候选数」的收敛手段，必须明显小于 6 × 单台
         const {
             assert!(
@@ -837,7 +844,9 @@ mod timeout_tests {
 
 #[cfg(test)]
 mod tier_tests {
-    use super::{enum_tiers, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT};
+    use super::{
+        enum_tiers, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT,
+    };
 
     /// 守卫：甲-3 的「软编档」必须**真的**不带 HARDWARE 位（`&&` 反向也一样钉）。
     ///
@@ -860,11 +869,19 @@ mod tier_tests {
         // 软编档必须仍允许同步与异步两类（MS H.264 Encoder MFT 是 sync，
         // 只留 ASYNC 会把它挡在外面 = 回到「无候选」）
         let bits = sw.iter().fold(0i32, |acc, f| acc | f.0);
-        assert_ne!(bits & MFT_ENUM_FLAG_SYNCMFT.0, 0, "软编档必须含 SYNCMFT（MS H.264 是同步 MFT）");
+        assert_ne!(
+            bits & MFT_ENUM_FLAG_SYNCMFT.0,
+            0,
+            "软编档必须含 SYNCMFT（MS H.264 是同步 MFT）"
+        );
         assert_ne!(bits & MFT_ENUM_FLAG_ASYNCMFT.0, 0, "软编档必须含 ASYNCMFT");
         // 反方向：硬编级联的每一档都必须带 HARDWARE，否则等于偷偷改了默认档
         for f in enum_tiers(false) {
-            assert_ne!(f.0 & MFT_ENUM_FLAG_HARDWARE.0, 0, "硬编级联的档必须带 HARDWARE 位");
+            assert_ne!(
+                f.0 & MFT_ENUM_FLAG_HARDWARE.0,
+                0,
+                "硬编级联的档必须带 HARDWARE 位"
+            );
         }
     }
 }

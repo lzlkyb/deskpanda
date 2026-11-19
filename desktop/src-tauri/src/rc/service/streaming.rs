@@ -93,14 +93,20 @@ impl RcService {
                     ));
                 }
             }
-            #[cfg(target_os="macos")]
+            #[cfg(target_os = "macos")]
             {
-                let opts=self.stream_opts_snapshot();
-                let(hz,high)=crate::rc::mac_video::scope_support(opts.monitor,opts.virtual_screen);
-                if high==0 || hz<min_hz {return Err(format!("{quality} 档需要单屏纹理采集、硬件 H.264 编码和 ≥{min_hz}Hz 刷新率；当前 {hz}Hz"));}
+                let opts = self.stream_opts_snapshot();
+                let (hz, high) =
+                    crate::rc::mac_video::scope_support(opts.monitor, opts.virtual_screen);
+                if high == 0 || hz < min_hz {
+                    return Err(format!("{quality} 档需要单屏纹理采集、硬件 H.264 编码和 ≥{min_hz}Hz 刷新率；当前 {hz}Hz"));
+                }
             }
-            #[cfg(not(any(target_os="windows",target_os="macos")))]
-            {let _=min_hz;return Err(format!("{quality} 档需要支持硬件编码的电脑"));}
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                let _ = min_hz;
+                return Err(format!("{quality} 档需要支持硬件编码的电脑"));
+            }
         }
         // Q4：uhd60 要求 HEVC 硬编——4K60 的 H.264 需要 L5.2（多数解码端跑不动
         // 或兼容性差），HEVC L5.1 即覆盖且同画质省一半带宽。没有 HEVC MFT 就
@@ -113,13 +119,21 @@ impl RcService {
                     return Err("本机没有硬件 D3D11 编码器，4K60 档不可用".into());
                 }
                 if !caps.hevc_hw {
-                    return Err("本机没有硬件 HEVC 编码器，4K60 档不可用（H.264 无法稳定 4K60）".into());
+                    return Err(
+                        "本机没有硬件 HEVC 编码器，4K60 档不可用（H.264 无法稳定 4K60）".into(),
+                    );
                 }
             }
-            #[cfg(target_os="macos")]
-            {if !crate::rc::mac_video::hardware_available(true){return Err("本机没有可用硬件 HEVC 编码器，4K60 档不可用".into());}}
-            #[cfg(not(any(target_os="windows",target_os="macos")))]
-            {return Err("4K60 档需要支持硬件编码的电脑".into());}
+            #[cfg(target_os = "macos")]
+            {
+                if !crate::rc::mac_video::hardware_available(true) {
+                    return Err("本机没有可用硬件 HEVC 编码器，4K60 档不可用".into());
+                }
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                return Err("4K60 档需要支持硬件编码的电脑".into());
+            }
         }
         self.stream.set_quality(quality)?;
         // 🔴 复测 B（2026-10-06）的教训：这条路径是全仓唯一能在会话中关掉自动档的
@@ -181,7 +195,8 @@ impl RcService {
     }
 
     pub(in crate::rc) fn note_stream_health(&self, rtt_ms: i64, loss_permille: i64, bw_kbps: i64) {
-        self.stream.note_stream_health(rtt_ms, loss_permille, bw_kbps);
+        self.stream
+            .note_stream_health(rtt_ms, loss_permille, bw_kbps);
     }
 
     /// 发起端：pong 带回的时钟偏差样本（P0-1 A3）。
@@ -231,10 +246,10 @@ impl RcService {
         self.peer_av1.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-
     /// 发起端视角：被控端 caps 是否声明可读鼠标数据报（R3）。false = 旧版。
     pub fn peer_dgram_input(&self) -> bool {
-        self.peer_dgram_input.load(std::sync::atomic::Ordering::Relaxed)
+        self.peer_dgram_input
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn peer_refresh_hz(&self) -> u32 {

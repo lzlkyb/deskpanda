@@ -72,11 +72,15 @@ unsafe fn codecapi_set_u32(api: &ICodecAPI, key: &windows::core::GUID, value: u3
 
 impl MfH264Encoder {
     pub(in crate::rc) fn set_bitrate(&mut self, bps: u32) -> bool {
-        let Some(api) = self.codec_api.as_ref() else { return false; };
+        let Some(api) = self.codec_api.as_ref() else {
+            return false;
+        };
         let key = &CODECAPI_AVEncCommonMeanBitRate;
         let value = windows::core::VARIANT::from(bps);
         unsafe {
-            if api.IsModifiable(key).is_err() || api.SetValue(key, &value).is_err() { return false; }
+            if api.IsModifiable(key).is_err() || api.SetValue(key, &value).is_err() {
+                return false;
+            }
         }
         self.bitrate = bps;
         true
@@ -120,7 +124,16 @@ impl MfH264Encoder {
         fps: u32,
         bitrate: u32,
     ) -> Result<Self, String> {
-        Self::open_inner(codec, width, height, fps, bitrate, Some((device, ctx)), false, false)
+        Self::open_inner(
+            codec,
+            width,
+            height,
+            fps,
+            bitrate,
+            Some((device, ctx)),
+            false,
+            false,
+        )
     }
 
     #[allow(clippy::too_many_arguments)] // 独立语义参数，打包结构体反而难读
@@ -167,9 +180,8 @@ impl MfH264Encoder {
                 attrs
                     .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
                     .map_err(mf_err)?;
-                let eg: IMFMediaEventGenerator = transform
-                    .cast()
-                    .map_err(|e| format!("MFT 事件源：{e}"))?;
+                let eg: IMFMediaEventGenerator =
+                    transform.cast().map_err(|e| format!("MFT 事件源：{e}"))?;
                 Some(eg)
             } else {
                 None
@@ -202,8 +214,8 @@ impl MfH264Encoder {
             // 所以这里改为**先取 MFT 自己给出的可用类型、只改帧尺寸与码率**：
             // 实测 2560×1440 下 30/30 帧成功、10.08ms/帧（99fps）；
             // 1920×1080 下 7.15ms/帧（140fps）。
-            let out_type = pick_output_type(&transform, codec, w, h, fps, bitrate)
-                .or_else(|e| {
+            let out_type =
+                pick_output_type(&transform, codec, w, h, fps, bitrate).or_else(|e| {
                     log::warn!("[RC] 取 MFT 基准输出类型失败，退回自造：{e}");
                     create_video_type(codec.mf_subtype(), w, h, fps)
                 })?;
@@ -259,7 +271,12 @@ impl MfH264Encoder {
                         eAVEncCommonRateControlMode_PeakConstrainedVBR.0 as u32,
                         "RateControlMode=PeakVBR(rec)",
                     );
-                    codecapi_set_u32(api, &CODECAPI_AVEncCommonMeanBitRate, bitrate, "MeanBitRate");
+                    codecapi_set_u32(
+                        api,
+                        &CODECAPI_AVEncCommonMeanBitRate,
+                        bitrate,
+                        "MeanBitRate",
+                    );
                     codecapi_set_u32(
                         api,
                         // windows-rs 的 IDL 名：codecapi.h 的 CODECAPI_AVEncCommonMaxBitRate
@@ -275,7 +292,12 @@ impl MfH264Encoder {
                         eAVEncCommonRateControlMode_CBR.0 as u32,
                         "RateControlMode=CBR",
                     );
-                    codecapi_set_u32(api, &CODECAPI_AVEncCommonMeanBitRate, bitrate, "MeanBitRate");
+                    codecapi_set_u32(
+                        api,
+                        &CODECAPI_AVEncCommonMeanBitRate,
+                        bitrate,
+                        "MeanBitRate",
+                    );
                 }
                 // P0-3：GOP = fps×1（1s）。之前是 ×2（2s）：解码断链又没等到
                 // ForceKeyFrame 时要花 2s 等自然 GOP。request_key 自愈兜底 + 1s GOP。
@@ -406,13 +428,14 @@ impl MfH264Encoder {
         w: u32,
         h: u32,
     ) -> Result<Vec<H264Packet>, String> {
-        let conv = self
-            .gpu
-            .as_mut()
-            .ok_or("编码器不是 D3D11 零拷贝模式")?;
+        let conv = self.gpu.as_mut().ok_or("编码器不是 D3D11 零拷贝模式")?;
         let (ew, eh) = ((w.max(64) & !1), (h.max(64) & !1));
         if conv.size() != (ew, eh) {
-            return Err(format!("纹理尺寸不符：{ew}x{eh} vs 编码器 {}x{}", conv.size().0, conv.size().1));
+            return Err(format!(
+                "纹理尺寸不符：{ew}x{eh} vs 编码器 {}x{}",
+                conv.size().0,
+                conv.size().1
+            ));
         }
         let nv12 = conv.convert(bgra)?;
         let sample = unsafe { make_dxgi_sample(&nv12, self.frame_idx, self.fps)? };
@@ -571,7 +594,8 @@ impl MfH264Encoder {
                 }
                 return Err(format!("ProcessOutput：{e}"));
             }
-        }        if let Some(sample) = outs[0].pSample.as_ref() {
+        }
+        if let Some(sample) = outs[0].pSample.as_ref() {
             if let Ok(buf) = sample.ConvertToContiguousBuffer() {
                 if let Ok(bytes) = lock_buf(&buf) {
                     let key = match sample.GetUINT32(&MFSampleExtension_CleanPoint) {
@@ -626,7 +650,6 @@ impl Drop for MfH264Encoder {
         self.release_com();
     }
 }
-
 
 pub(in crate::rc) fn to_annex_b(raw: &[u8]) -> Vec<u8> {
     if raw.len() >= 4 && raw[0] == 0 && raw[1] == 0 && raw[2] == 0 && raw[3] == 1 {

@@ -22,7 +22,11 @@ fn default_允许被远程开着_但没配对的设备照样进不来() {
         Capability::View,
         false,
     );
-    assert_eq!(g, crate::rc::session::Gate::NotPaired, "默认开也不放过没配对的设备");
+    assert_eq!(
+        g,
+        crate::rc::session::Gate::NotPaired,
+        "默认开也不放过没配对的设备"
+    );
     set_cfg(&s, CFG_ENABLED, serde_json::Value::Bool(false));
     assert!(!RcService::new(s).enabled(), "显式关过必须照旧关");
 }
@@ -90,7 +94,12 @@ async fn request_with_uno_code_skips_pairing_gate() {
     let s = store();
     let svc = RcService::new(s.clone());
     let err = svc
-        .request_session(&"cc".repeat(32), Capability::Control, Some("AB2C-3DEF".into()), None)
+        .request_session(
+            &"cc".repeat(32),
+            Capability::Control,
+            Some("AB2C-3DEF".into()),
+            None,
+        )
         .await
         .unwrap_err();
     assert!(err.contains("通道未启动"), "带码不该死在配对门：{err}");
@@ -102,7 +111,12 @@ async fn request_with_uno_code_skips_pairing_gate() {
     assert!(err.contains("远程配对"), "{err}");
     // 空串视同没带码，不绕门
     let err = svc
-        .request_session(&"cc".repeat(32), Capability::Control, Some("  ".into()), None)
+        .request_session(
+            &"cc".repeat(32),
+            Capability::Control,
+            Some("  ".into()),
+            None,
+        )
         .await
         .unwrap_err();
     assert!(err.contains("远程配对"), "{err}");

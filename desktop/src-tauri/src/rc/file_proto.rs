@@ -372,7 +372,8 @@ fn is_reserved_name(name: &str) -> bool {
         None => name,
     };
     let up = stem.trim().to_ascii_uppercase();
-    if up == "CON" || up == "PRN" || up == "AUX" || up == "NUL" || up == "CONIN$" || up == "CONOUT$" {
+    if up == "CON" || up == "PRN" || up == "AUX" || up == "NUL" || up == "CONIN$" || up == "CONOUT$"
+    {
         return true;
     }
     // COM0-9 / LPT0-9。0 也一并算上：部分 Windows 版本把 COM0/LPT0 同样

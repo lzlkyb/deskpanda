@@ -75,9 +75,7 @@ pub(super) fn append_history(store: &DataStore, facts: HistoryFacts<'_>) {
         "rtt_avg": end.rtt_avg,
         "rtt_max": end.rtt_max,
     });
-    let _rmw = CONFIG_RMW_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _rmw = CONFIG_RMW_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut config = store.get_config().unwrap_or_default();
     let Some(obj) = config.as_object_mut() else {
         return;
@@ -134,9 +132,9 @@ pub(super) fn clear_history(store: &DataStore) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::DataStore;
-    use crate::rc::link::LinkEnd;
     use crate::net::path_kind::PathKind;
+    use crate::rc::link::LinkEnd;
+    use crate::store::DataStore;
 
     fn temp_store() -> DataStore {
         DataStore::new(":memory:").expect("open store")
