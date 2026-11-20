@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { rcPlatformDegraded, rcPlatformSupported } from "./rcPlatform";
 
-describe("rcPlatform 判据（S6：远程功能只交付 Windows）", () => {
-  it("windows 是唯一受支持平台", () => {
+describe("rcPlatform 判据（S6 后：远程功能交付 Windows 与 macOS）", () => {
+  it("windows / macos 都是受支持平台（S6 起 mac 桥接已迁入）", () => {
     expect(rcPlatformSupported("windows")).toBe(true);
+    expect(rcPlatformSupported("macos")).toBe(true);
   });
 
   it("🔴 undefined（首帧 / 读取失败）不降级——Windows 首帧不许闪降级提示", () => {
@@ -12,13 +13,15 @@ describe("rcPlatform 判据（S6：远程功能只交付 Windows）", () => {
     expect(rcPlatformSupported(undefined)).toBe(false);
   });
 
-  it("macos / linux 走降级态", () => {
-    expect(rcPlatformDegraded("macos")).toBe(true);
+  it("linux 等其余平台走降级态；🔴 macOS 不再降级（S6 交付）", () => {
+    expect(rcPlatformDegraded("macos")).toBe(false);
     expect(rcPlatformDegraded("linux")).toBe(true);
+    expect(rcPlatformDegraded("android")).toBe(true);
   });
 
-  it("大小写敏感：Rust 恒给小写，大写不当成 Windows（保守降级而不是假装支持）", () => {
+  it("大小写敏感：Rust 恒给小写，大写不当成受支持平台（保守降级而不是假装支持）", () => {
     expect(rcPlatformSupported("Windows")).toBe(false);
+    expect(rcPlatformSupported("MacOS")).toBe(false);
     expect(rcPlatformDegraded("Windows")).toBe(true);
   });
 

@@ -132,6 +132,8 @@ pub fn unprotect(cipher: &[u8], entropy: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
+    // 测试全是 Windows 的；mac 构建下这行 import 没有消费者。
+    #[cfg(windows)]
     use super::*;
 
     #[test]

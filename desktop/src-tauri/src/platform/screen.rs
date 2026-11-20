@@ -116,13 +116,37 @@ pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
     Ok(ctx.list)
 }
 
-/// 非 Windows 桩：多屏枚举是 Win32 能力（`EnumDisplayMonitors`）。
+/// macOS 实现（S6，2026-11-21）：ScreenCaptureKit 侧的显示器枚举
+/// （`src/macos/screen.rs`，AppKit 坐标已换算物理像素）。字段与 Win32 版同形。
+#[cfg(target_os = "macos")]
+pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
+    let list = crate::macos::screen::monitors()?;
+    if list.is_empty() {
+        return Err("枚举显示器失败".into());
+    }
+    // 主屏排到 index 0（与 Win32 版同一约定，前端「显示器1=主屏」）。
+    // 类型转换（而非复用）：macos 桥接层与平台门面各自演化，字段同形不共享类型。
+    Ok(list
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| MonitorInfo {
+            index: i as i32,
+            x: m.x,
+            y: m.y,
+            w: m.w,
+            h: m.h,
+            primary: m.primary,
+        })
+        .collect())
+}
+
+/// 其余平台（Linux / Android）桩：多屏枚举是桌面平台能力。
 ///
 /// 诚实报错而不返回空 Vec：空 Vec 会让调用方以为「这台机器没有显示器」，
 /// 会话 UI 直接不渲染逐屏切换器——用户看到的是功能凭空消失且零提示。
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
-    Err("多屏枚举目前仅支持 Windows".into())
+    Err("多屏枚举目前仅支持 Windows 与 macOS".into())
 }
 
 /// 指定显示器的桌面矩形 `(x, y, w, h)`（与截帧同一坐标系，供键鼠映射）。
@@ -145,10 +169,16 @@ pub fn get_cursor_pos() -> (i32, i32) {
     (pt.x, pt.y)
 }
 
-/// 非 Windows 桩：`GetCursorPos` 是 Win32。回 `(0, 0)` 而不是 `Err`——
+/// macOS 实现：`macos::screen::cursor()`（物理像素、全局坐标，同口径）。
+#[cfg(target_os = "macos")]
+pub fn get_cursor_pos() -> (i32, i32) {
+    crate::macos::screen::cursor()
+}
+
+/// 其余平台桩：`GetCursorPos` 是 Win32。回 `(0, 0)` 而不是 `Err`——
 /// 签名就是 `(i32, i32)`，且唯一消费方（`rc/ask_pop` 的浮层落位）在 Android
 /// 根本不编译浮层窗口路径，回原点不会把任何弹窗摆到错误的位置。
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn get_cursor_pos() -> (i32, i32) {
     (0, 0)
 }
@@ -256,15 +286,43 @@ fn hwnd_null() -> windows::Win32::Foundation::HWND {
     windows::Win32::Foundation::HWND(std::ptr::null_mut())
 }
 
-/// 非 Windows 桩：GDI 抓帧（见 [`grab_rect_rgba`] 的 Windows 实现）。
-#[cfg(not(windows))]
+/// macOS 实现（S6）：`macos::screen::capture` 截区域 PNG → 解码成 RGBA。
+///
+/// 这是 GDI 兜底的**等价物**（编码拿不到帧时的退路），不是实时流路径——
+/// 实时采集走 `rc/mac_capture`（ScreenCaptureKit 帧回调，见 `remote_capture.rs`）。
+/// PNG 往返有开销，但兜底路径本来就低频（对端无 SCK 权限/独占全屏等场景）。
+#[cfg(target_os = "macos")]
+pub fn grab_rect_rgba(
+    origin_x: i32,
+    origin_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<Vec<u8>, String> {
+    if width <= 0 || height <= 0 {
+        return Err(format!("无效的抓帧区域尺寸: {width}x{height}"));
+    }
+    let capture = crate::macos::screen::capture(origin_x, origin_y, width, height)?;
+    let Some(png) = capture.data_url.strip_prefix("data:image/png;base64,") else {
+        return Err("截图数据格式异常".into());
+    };
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let bytes = STANDARD
+        .decode(png)
+        .map_err(|e| format!("截图解码失败: {e}"))?;
+    let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .map_err(|e| format!("截图解码失败: {e}"))?;
+    Ok(img.to_rgba8().into_raw())
+}
+
+/// 其余平台桩：GDI 抓帧（见 [`grab_rect_rgba`] 的 Windows 实现）。
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn grab_rect_rgba(
     _origin_x: i32,
     _origin_y: i32,
     _width: i32,
     _height: i32,
 ) -> Result<Vec<u8>, String> {
-    Err("远程画面目前仅支持 Windows".into())
+    Err("远程画面目前仅支持 Windows 与 macOS".into())
 }
 
 /// 指定显示器的 RGBA（不编码）。
@@ -314,10 +372,43 @@ pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     Ok((width, height, canvas))
 }
 
-/// 非 Windows 桩：整屏拼合同样是 GDI 能力。
-#[cfg(not(windows))]
+/// macOS 实现：逐显示器抓帧再拼合（与 Win32 版同一「不跨屏整拷」纪律；
+/// mac 的混合 DPI 由 `screen_layout::compose` 处理坐标系）。
+#[cfg(target_os = "macos")]
 pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
-    Err("远程画面目前仅支持 Windows".into())
+    let desktop = crate::macos::screen::desktop()?;
+    let width = desktop.w;
+    let height = desktop.h;
+    let monitors = list_monitors()?;
+    let cw = width as usize;
+    let ch = height as usize;
+    let mut canvas = vec![0u8; cw * ch * 4];
+    for m in &monitors {
+        let rgba = grab_rect_rgba(m.x, m.y, m.w, m.h)?;
+        let ox = (m.x - desktop.x).max(0) as usize;
+        let oy = (m.y - desktop.y).max(0) as usize;
+        if ox >= cw || oy >= ch {
+            continue;
+        }
+        let copy_w = (m.w as usize).min(cw - ox);
+        let copy_h = (m.h as usize).min(ch - oy);
+        if copy_w == 0 || copy_h == 0 {
+            continue;
+        }
+        let m_w = m.w as usize;
+        for y in 0..copy_h {
+            let src = &rgba[y * m_w * 4..y * m_w * 4 + copy_w * 4];
+            let dst = (oy + y) * cw + ox;
+            canvas[dst * 4..dst * 4 + copy_w * 4].copy_from_slice(src);
+        }
+    }
+    Ok((width, height, canvas))
+}
+
+/// 其余平台桩：整屏拼合同样是桌面平台能力。
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
+    Err("远程画面目前仅支持 Windows 与 macOS".into())
 }
 
 /// 仅主屏的 RGBA（单显示器场景更省编码）。
@@ -331,10 +422,18 @@ pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     Ok((width, height, rgba))
 }
 
-/// 非 Windows 桩：主屏抓帧（`GetSystemMetrics` + GDI）。
-#[cfg(not(windows))]
+/// macOS 实现：主屏即 primary() 的矩形。
+#[cfg(target_os = "macos")]
 pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
-    Err("远程画面目前仅支持 Windows".into())
+    let m = crate::macos::screen::primary()?;
+    let rgba = grab_rect_rgba(m.x, m.y, m.w, m.h)?;
+    Ok((m.w, m.h, rgba))
+}
+
+/// 其余平台桩：主屏抓帧（`GetSystemMetrics` + GDI）。
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
+    Err("远程画面目前仅支持 Windows 与 macOS".into())
 }
 
 /// 显示器工作区（物理像素，含原点）+ 该屏缩放因子。
@@ -408,10 +507,37 @@ pub fn get_monitor_work_area(px: f64, py: f64) -> MonitorWorkArea {
     }
 }
 
-/// 非 Windows 桩：`MonitorFromPoint` / `GetMonitorInfoW` / `GetDpiForMonitor`
+/// macOS 实现：以主屏全幅近似工作区（不含 Dock/菜单栏扣减）。
+///
+/// 消费方是弹窗落位钳制（把窗口摆回可视区域），全幅只会让钳制线更靠边、
+/// 不会把窗口摆出屏；真正的扣减需要 NSScreen.visibleFrame 桥接，等有
+/// 实际错位反馈再补（不为没出过问题的路径先加桥接面）。
+#[cfg(target_os = "macos")]
+pub fn get_monitor_work_area(_px: f64, _py: f64) -> MonitorWorkArea {
+    let scale = crate::macos::screen::primary_scale();
+    let fallback = MonitorWorkArea {
+        work_x: 0.0,
+        work_y: 0.0,
+        work_w: 1920.0,
+        work_h: 1080.0,
+        scale,
+    };
+    let Some(m) = crate::macos::screen::primary().ok() else {
+        return fallback;
+    };
+    MonitorWorkArea {
+        work_x: f64::from(m.x),
+        work_y: f64::from(m.y),
+        work_w: f64::from(m.w),
+        work_h: f64::from(m.h),
+        scale,
+    }
+}
+
+/// 其余平台桩：`MonitorFromPoint` / `GetMonitorInfoW` / `GetDpiForMonitor`
 /// 全是 Win32。回 1920x1080 @ scale 1.0（与拆分前 `tray_manager.rs` 同口径）：
 /// 消费方是弹窗落位钳制，回一个「常规桌面」尺寸至少不会把窗口摆到负坐标。
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn get_monitor_work_area(_px: f64, _py: f64) -> MonitorWorkArea {
     MonitorWorkArea {
         work_x: 0.0,

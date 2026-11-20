@@ -61,31 +61,31 @@ pub use update_android::*;
 // 随 `rc` 同一道门控；macOS / Linux 构建里整块不存在。
 // 同样走 glob（理由同上：`__cmd__mobile_received_file_action` 包装器要在
 // `commands::` 里可见，否则第 1 段注册表 E0433）。
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 mod mobile_received_file;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub use mobile_received_file::*;
 
 // 远程电脑命令层。**Windows / Android**：`rc::` 本身按
-// `cfg(any(windows, target_os = "android"))` 门控（采集/编码/音频/输入注入是
+// `cfg(any(windows, target_os = "android", target_os = "macos"))` 门控（采集/编码/音频/输入注入是
 // Win32 绑定，但协议/状态/传输层要随手机端远程面一起进 Android 包），命令层
 // 跟着同一道门控。macOS 构建只出壳子（见 `lib.rs` 的 rc 门控注释）。
 // 三个文件按职责分开（不是按规模任意切）：
 // - `rc`：配对（邀请码 + 局域网）、设备表、会话、输入、设置
 // - `rc_file`：文件传输
 // - `rc_pair`：局域网附近设备
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 mod rc;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 mod rc_file;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 mod rc_pair;
 
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub use rc::*;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub use rc_file::*;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub use rc_pair::*;
 
 #[cfg(all(test, windows))]
@@ -204,7 +204,7 @@ mod registry_guard {
 
     /// **只存在于 Windows / Android 构建**的命令名集合。
     ///
-    /// 判据是「定义所在的模块按 `cfg(any(windows, target_os = "android"))` 门控」
+    /// 判据是「定义所在的模块按 `cfg(any(windows, target_os = "android", target_os = "macos"))` 门控」
     /// （`commands/mod.rs` 顶部把 `rc` / `rc_file` / `rc_pair` 三个模块连同
     /// `rc/ask_pop.rs`、`mobile_received_file` 一起门控；macOS / Linux 构建里
     /// 这些模块整体不存在），**不是**命令名的前缀。按前缀判会把 `rc_net_diag`
@@ -295,7 +295,7 @@ mod registry_guard {
         let other: Vec<&str> = lists[1].iter().map(String::as_str).collect();
 
         // ① 非 Windows/Android 段不能有只在 Windows/Android 存在的命令：那些命令
-        //    函数本身按 `cfg(any(windows, target_os = "android"))` 门控，在
+        //    函数本身按 `cfg(any(windows, target_os = "android", target_os = "macos"))` 门控，在
         //    macOS / Linux 上符号不存在 ⇒ 整条注册列表编不过（不是运行时才炸）。
         //    判据取「定义所在模块是否门控」而不是名字前缀（见 windows_only_commands）。
         let win_only = windows_only_commands();

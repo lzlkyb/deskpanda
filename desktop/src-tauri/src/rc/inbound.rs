@@ -125,11 +125,13 @@ pub(super) struct InboundVideo {
     /// 对端是否支持视频数据报（Request 帧能力位）。false = 旧版发起端：
     /// 它没有视频数据报读取任务，P 帧必须继续走可靠流，否则画面退化成
     /// 每秒一张关键帧的幻灯片。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) peer_dgram: bool,
     /// 🔴 视频数据报放行闸（2026-10-02 两次公网实测收口）：默认 **false**（可靠流），
     /// 只有 RTT 采样到达且路径快（`video_dgram_allowed`）才进一次数据报模式。
     /// 未采样/中继路径永远可靠流——数据报在公网近乎全丢、在中继会灌爆
     /// 拥塞窗口把 pong/控制帧一起堵死，见 `stream_cfg::video_dgram_allowed` 文档。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) dgram_allowed: bool,
     /// 「传输分 plane」（2026-10-03）：对端（Request.video_plane）支持在独立
     /// 单向流上收视频。true = H.264 帧走专属 uni 流（`PPVID1` 流头），积压
@@ -158,6 +160,7 @@ pub(super) struct InboundVideo {
     #[cfg(target_os = "windows")]
     pub(super) stream_last_write_ms: u64,
     /// P3.1：对端能解 RS FEC（Request 帧能力位）。false = 走 XOR 老格式。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) peer_fec_rs: bool,
     /// 输入提帧信号：键鼠事件到达时 `boost_frame`（notify_one，存许可），
     /// 推流循环提前醒。**别改回 notify_waiters**，理由见 `boost_frame`。
@@ -187,10 +190,13 @@ pub(super) struct InboundVideo {
     pub(super) work_ema_ms: u64,
     /// Q8：**动帧**字节数 EMA——静止判定的稳定基线（静止时 P 帧几乎全是跳块，
     /// 极小）。只对判为「在动」的帧更新，静止期间不衰减。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) motion_ema_bytes: u64,
     /// Q8：画面进入静止的时刻（None = 非静止）。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) static_since: Option<std::time::Instant>,
     /// Q8：本轮静止是否已做过 IDR 精修（画面再动才重新武装）。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(super) static_refined: bool,
     /// 诊断探针（2026-09-21）：分段耗时采样器 + 选型报告槽。
     /// 纯旁路——任何统计失败都不影响推流（见 `perf` 模块头注释）。
@@ -240,6 +246,7 @@ pub(in crate::rc) enum Step {
 
 /// [`motion_verdict`] 的判定结果，驱动 Q8 静止精修状态机。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) enum MotionVerdict {
     /// 关键帧：**不参与运动判定**。自然 GOP 的 IDR 是节拍产物，精修强制的
     /// IDR 是本状态机自己的输出——把它们当成「画面动了」的话，精修 IDR
@@ -257,6 +264,7 @@ pub(crate) enum MotionVerdict {
 ///
 /// 「动了」的判据：帧字节 ≥ 动帧基准的 1/6——静止画面的跳块 P 帧只有
 /// 基准的零头。基准未建立（0）时任何非关键帧都算动（负责建立基准）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn motion_verdict(
     is_key: bool,
     motion_ema_bytes: u64,

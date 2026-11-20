@@ -89,6 +89,9 @@ impl RcService {
         .unwrap_or(Admission::Wait)
     }
 
+    /// 消费方在 Windows 编码侧的降档判据；mac 编码走 remote_video.m 自理，
+    /// mac 构建下无引用（平台分工，非死代码）。
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(in crate::rc) fn media_resolution_limit(&self, id: &str) -> u32 {
         // 无会话时同样不降分辨率：文字优先，降档判据只来自 fps/码率。
         self.with_media(id, |s| s.flow.resolution_limit())

@@ -632,7 +632,7 @@ fn 守卫_入站浮层三处接线() {
         "{} 的 windows 名单里没有 rc-ask —— 浮层收不到任何事件",
         caps.0
     );
-    // 注册表在 app.rs（两段 `generate_handler!`，rc 那条是 `cfg(any(windows, target_os = "android"))` 段）。
+    // 注册表在 app.rs（两段 `generate_handler!`，rc 那条是 `cfg(any(windows, target_os = "android", target_os = "macos"))` 段）。
     let app_rs = include_str!("../../app.rs");
     assert!(
         app_rs.contains("rc::ask_pop::rc_ask_state,")

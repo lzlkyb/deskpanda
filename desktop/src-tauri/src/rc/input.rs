@@ -405,7 +405,7 @@ pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
     if opts.monitor >= 0 {
         #[cfg(target_os = "macos")]
         {
-            return crate::macos::screen::monitors()
+            crate::macos::screen::monitors()
                 .ok()
                 .and_then(|list| list.into_iter().find(|m| m.index == opts.monitor))
                 .map(|m| ScreenRegion {
@@ -414,7 +414,7 @@ pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
                     w: m.w,
                     h: m.h,
                 })
-                .unwrap_or_else(ScreenRegion::virtual_screen);
+                .unwrap_or_else(ScreenRegion::virtual_screen)
         }
         // 指定屏几何是 Windows 宿主能力（mobile 无多屏采集）
         #[cfg(target_os = "windows")]
@@ -433,14 +433,14 @@ pub(in crate::rc) fn capture_region(opts: &StreamOpts) -> ScreenRegion {
     } else {
         #[cfg(target_os = "macos")]
         {
-            return crate::macos::screen::primary()
+            crate::macos::screen::primary()
                 .map(|m| ScreenRegion {
                     x: m.x,
                     y: m.y,
                     w: m.w,
                     h: m.h,
                 })
-                .unwrap_or_else(|_| ScreenRegion::virtual_screen());
+                .unwrap_or_else(|_| ScreenRegion::virtual_screen())
         }
         #[cfg(target_os = "windows")]
         {

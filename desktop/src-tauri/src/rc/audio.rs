@@ -45,11 +45,16 @@ use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFre
 /// 音频流魔数（版本号缀在末尾：协议不兼容时对端认不出，直接关流）。
 pub(super) const MAGIC: &[u8; 6] = b"PPAUD1";
 /// AAC-LC 每帧采样数（每声道）。收件箱编码器固定值。
+/// 消费方是 Windows MFT 编码器（`audio/encode.rs`）；mac 的 AAC 参数在
+/// `remote_audio_encoder.m` 内部——mac 构建下无引用（平台分工，非死代码）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const AAC_SAMPLES_PER_FRAME: usize = 1024;
-/// 编码声道数（采集侧缩混到此）。
+/// 编码声道数（采集侧缩混到此）。同上，仅 Windows MFT 消费。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const CHANNELS: u32 = 2;
 /// 目标码率：128kbps 立体声（桌面音频透明档）。rec/ 的 MP4 音轨装配同用此值
 /// （MF_MT_AUDIO_AVG_BYTES_PER_SECOND = 此值/8），改这里两处同步。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) const BITRATE_BPS: u32 = 128_000;
 /// 发起端收包队列上限（≈40ms/包 → 2.5s）；满了丢最旧的——音频要新鲜。
 const QUEUE_CAP: usize = 64;
@@ -419,6 +424,13 @@ pub use encode::*;
 pub use capture::*;
 #[cfg(target_os = "windows")]
 use encode::mf_err;
+
+// macOS 系统声音采集（S6 迁入，2026-11-21）：CoreAudio 回环 + AAC 编码桥接。
+#[cfg(target_os = "macos")]
+#[path = "../macos/remote_audio.rs"]
+mod mac_capture;
+#[cfg(target_os = "macos")]
+pub use mac_capture::*;
 
 // 🔴 macOS 音频采集（原 `#[path = "../macos/remote_audio.rs"] mod mac_capture;`）
 // 本仓未迁：它依赖 `src/macos/remote_audio.m` 那套 Objective-C 桥接，

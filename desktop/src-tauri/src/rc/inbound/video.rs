@@ -21,31 +21,6 @@ pub(in crate::rc) fn want_stream_codec(
     }
 }
 
-#[cfg(test)]
-mod want_codec_tests {
-    use super::want_stream_codec;
-    use crate::rc::stream_cfg::StreamCodec;
-    use crate::rc::video_params::VideoCodec;
-
-    #[test]
-    fn 编码标准决策_档位偏好优先_显式次之() {
-        assert_eq!(want_stream_codec(true, &StreamCodec::Av1), VideoCodec::Hevc);
-        assert_eq!(
-            want_stream_codec(false, &StreamCodec::Hevc),
-            VideoCodec::Hevc
-        );
-        assert_eq!(want_stream_codec(false, &StreamCodec::Av1), VideoCodec::Av1);
-        assert_eq!(
-            want_stream_codec(false, &StreamCodec::Auto),
-            VideoCodec::H264
-        );
-        assert_eq!(
-            want_stream_codec(false, &StreamCodec::ForceJpeg),
-            VideoCodec::H264,
-            "JPEG 由 force_jpeg 门控另走，这里恒 H264"
-        );
-    }
-}
 // 推流节拍判据收口在 `rc::pace`（inbound.rs 的主题是会话结构与生命周期）。
 // Windows 限定：三个符号在本文件只被硬编管线（melt_step / henc 提帧 /
 // request_key_after_drop）消费，那些全是 `cfg(target_os = "windows")` 项；
@@ -1229,5 +1204,31 @@ impl InboundVideo {
             return false;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod want_codec_tests {
+    use super::want_stream_codec;
+    use crate::rc::stream_cfg::StreamCodec;
+    use crate::rc::video_params::VideoCodec;
+
+    #[test]
+    fn 编码标准决策_档位偏好优先_显式次之() {
+        assert_eq!(want_stream_codec(true, &StreamCodec::Av1), VideoCodec::Hevc);
+        assert_eq!(
+            want_stream_codec(false, &StreamCodec::Hevc),
+            VideoCodec::Hevc
+        );
+        assert_eq!(want_stream_codec(false, &StreamCodec::Av1), VideoCodec::Av1);
+        assert_eq!(
+            want_stream_codec(false, &StreamCodec::Auto),
+            VideoCodec::H264
+        );
+        assert_eq!(
+            want_stream_codec(false, &StreamCodec::ForceJpeg),
+            VideoCodec::H264,
+            "JPEG 由 force_jpeg 门控另走，这里恒 H264"
+        );
     }
 }

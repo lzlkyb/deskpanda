@@ -372,11 +372,20 @@ describe("RcWorkbench 接线：S6 平台降级（非 Windows）", () => {
     platformValue.value = undefined;
   });
 
-  it("macOS：主区只剩通知卡；侧栏（设备列表 / 工具行）整体不渲染", () => {
+  it("🔴 macOS（S6 交付后）：完整工作台照常渲染，无降级痕迹", () => {
     platformValue.value = "macos";
     render(<RcWorkbench />);
 
-    expect(screen.getByText("远程电脑暂不支持 macOS")).toBeTruthy();
+    // 与 Windows 同款：工具行在、通知卡不在
+    expect(screen.getByRole("button", { name: "文件" })).toBeTruthy();
+    expect(screen.queryByText(/暂不支持/)).toBeNull();
+  });
+
+  it("linux 等未交付平台：主区只剩通知卡；侧栏（设备列表 / 工具行）整体不渲染", () => {
+    platformValue.value = "linux";
+    render(<RcWorkbench />);
+
+    expect(screen.getByText("远程电脑暂不支持当前系统")).toBeTruthy();
     // 侧栏退场的两个探针：设备页搜索框与底部工具行
     expect(screen.queryByRole("searchbox", { name: "搜索设备" })).toBeNull();
     for (const tool of ["文件", "记录", "设置"]) {
@@ -389,11 +398,11 @@ describe("RcWorkbench 接线：S6 平台降级（非 Windows）", () => {
     }
   });
 
-  it("macOS：标题栏中格是静态徽章，不出「通道未启动 · 点击开启」死按钮", () => {
-    platformValue.value = "macos";
+  it("linux 等未交付平台：标题栏中格是静态徽章，不出「通道未启动 · 点击开启」死按钮", () => {
+    platformValue.value = "linux";
     render(<RcWorkbench />);
 
-    expect(screen.getByText("远程电脑仅支持 Windows")).toBeTruthy();
+    expect(screen.getByText("远程电脑不支持当前系统")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /通道未启动/ })).toBeNull();
   });
 
@@ -402,8 +411,8 @@ describe("RcWorkbench 接线：S6 平台降级（非 Windows）", () => {
     render(<RcWorkbench />);
 
     expect(screen.queryByText("远程电脑暂不支持")).toBeNull();
-    expect(screen.queryByText("远程电脑仅支持 Windows")).toBeNull();
-    // 正常态的中格照旧是可点补救入口（上面 mac 那条刚钉了它不许出现）
+    expect(screen.queryByText("远程电脑不支持当前系统")).toBeNull();
+    // 正常态的中格照旧是可点补救入口（上面 linux 那条刚钉了它不许出现）
     expect(screen.getByRole("button", { name: /通道未启动 · 点击开启/ })).toBeTruthy();
     // 侧栏照旧渲染（工具横排是它的常驻底栏；搜索框默认折叠，不能当探针）
     expect(screen.getByRole("button", { name: "文件" })).toBeTruthy();
@@ -417,12 +426,12 @@ describe("RcWorkbench 接线：S6 平台降级（非 Windows）", () => {
     expect(screen.getByRole("button", { name: "文件" })).toBeTruthy();
   });
 
-  it("降级态抑制错误条：mac 上「命令不存在」不是用户该看的话（Windows 仍照常显示）", () => {
-    platformValue.value = "macos";
+  it("降级态抑制错误条：未交付平台上「命令不存在」不是用户该看的话（Windows / macOS 仍照常显示）", () => {
+    platformValue.value = "linux";
     h.error = "command not found: rc_get_status";
     render(<RcWorkbench />);
     // 通知卡照常；错误条不在（RcErrorPanel 对未识别错误把原文印在 hint 里）
-    expect(screen.getByText("远程电脑暂不支持 macOS")).toBeTruthy();
+    expect(screen.getByText("远程电脑暂不支持当前系统")).toBeTruthy();
     expect(screen.queryByText("command not found: rc_get_status")).toBeNull();
 
     platformValue.value = "windows";

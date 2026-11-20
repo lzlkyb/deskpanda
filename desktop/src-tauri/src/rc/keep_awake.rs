@@ -124,6 +124,9 @@ pub struct KeepAwake {
     display: u32,
 }
 #[cfg(target_os = "macos")]
+// 测试构建里 start() 走 #[cfg(test)] 短路分支、不触 extern——链在
+// 非 test 构建是活的，test 构建按 cfg_attr 收口。
+#[cfg_attr(test, allow(dead_code))]
 extern "C" {
     fn pp_mac_awake_start(system: *mut u32, display: *mut u32) -> i32;
     fn pp_mac_awake_stop(system: u32, display: u32);

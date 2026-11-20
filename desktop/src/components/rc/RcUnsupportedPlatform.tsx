@@ -12,9 +12,8 @@ import { MonitorX } from "lucide-react";
 import styles from "./RemoteComputerA2.module.css";
 
 export function RcUnsupportedPlatform({ platform }: { platform?: string }) {
-  /* 标题带平台名：唯一现实受众是 macOS（mac 构建保留、只出壳子，见 S6）；
-     linux 等未发行平台走通用措辞，不谎称「不是 mac 却说是 mac」。 */
-  const title = platform === "macos" ? "远程电脑暂不支持 macOS" : "远程电脑暂不支持当前系统";
+  /* S6 交付 macOS 后，现实受众只剩 linux 等未发行平台——统一通用措辞。 */
+  const title = "远程电脑暂不支持当前系统";
 
   return (
     <div className={styles.unsupportedWrap}>
@@ -26,7 +25,7 @@ export function RcUnsupportedPlatform({ platform }: { platform?: string }) {
           <span className={styles.unsupportedTitle}>{title}</span>
         </div>
         <div className={styles.unsupportedBody}>
-          远程画面、声音与键鼠控制依赖 <b>Windows 平台</b>的屏幕采集与编码能力，当前版本只在 Windows 电脑上提供。请在 Windows 电脑上安装 DeskPanda，用另一台电脑连接使用。
+          远程画面、声音与键鼠控制依赖<b>桌面平台</b>（Windows / macOS）的屏幕采集与编码能力，当前系统不在交付范围。请在 Windows 或 macOS 电脑上安装 DeskPanda，用另一台电脑连接使用。
         </div>
         <div className={styles.unsupportedNote}>
           本机仍可正常使用托盘常驻、检查更新与退出。当前平台：<code>{platform ?? "未知"}</code>
