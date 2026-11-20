@@ -2819,6 +2819,35 @@
   line-height: 1.6;
 }
 
+/* —— 「画面」分区（RcCaptureSettings）的本机能力读取失败条 ——
+   2026-11-20 补设置项覆盖时新增。样式沿用原设置页 `rcLoadError` 的口径
+   （danger 红 + 重试钮；那条在 `settings/RcSettings.module.css`，随死代码树
+   一并清，不跨目录 import）：读失败必须出错误条 + 重试，禁止落成
+   「本机没这个能力」（U3.5：失败 ≠ 不存在）。 */
+.setLoadError {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.setRetryBtn {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 /* —— 等待连接：原 wbIdle 的表现层，数据不变 ——
    2026-09-21（A 方案稿对账）：删掉空闲态的装饰层——显示器插画 / 极光 / 扫光 /
    悬浮 / 地面投影。稿要求「不再用欢迎插画、极光、扫光填充空闲态」；同时它们带

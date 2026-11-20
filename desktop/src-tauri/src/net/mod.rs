@@ -24,6 +24,7 @@
 //! 保留原模块名（而非重构成 `net::frame` 之类）是为了让 `rc/` 里 46k 行代码及其
 //! 注释里的 `net::transport::write_frame` 能一一对上原来的取证记录。
 
+pub mod diagnostics;
 pub mod endpoint;
 pub mod identity;
 pub mod invite;

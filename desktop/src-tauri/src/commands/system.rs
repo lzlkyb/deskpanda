@@ -115,6 +115,63 @@ pub fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("打开链接失败: {e}"))
 }
 
+/// 安全检查：拒绝 UNC / 网络共享路径（`\\server\share` 或 `//server/share`）。
+///
+/// Windows 上对这类路径做 `exists()` / `metadata()` / `explorer` **会自动发起
+/// SMB 认证**，泄漏用户的 NTLMv2 凭据哈希（可被离线爆破或中继）。远程文件面板
+/// 展示的「源文件路径」来自对端，可能是被投毒的内容，因此必须在任何文件系统
+/// 操作前拦截（原仓 pastePanda C3 修复的同一条）。
+pub(crate) fn is_unsafe_network_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    trimmed.starts_with("\\\\") || trimmed.starts_with("//")
+}
+
+/// 在系统文件管理器中定位某个路径（文件则选中它，目录则打开目录）。
+///
+/// 消费方：远程文件面板「打开所在文件夹」（`RcFilePanel`）、接收目录设置
+/// 「打开接收目录」（`RcReceiveDirectorySetting`）。**这两处在迁移时漏掉了
+/// 本命令**——Rust 侧没有定义，前端 invoke 直接报「命令不存在」（2026-11-20
+/// 功能迁移核查发现）。判据见 `docs/DeskPanda-拆分方案-2026-11-19.md` S6 的
+/// 「迁移对账」小节：前端 invoke 名必须与 `generate_handler!` 双向对齐。
+///
+/// 自带存在性检查与网络路径拦截，调用方不要再写一份。
+#[tauri::command]
+pub fn open_file_location(path: String) -> Result<(), String> {
+    if is_unsafe_network_path(&path) {
+        return Err("不支持打开网络共享路径（安全限制）".to_string());
+    }
+    let p = std::path::Path::new(&path);
+    // 目录直接打开；文件定位到父目录（explorer /select 会选中它）。
+    let check_path = if p.is_dir() {
+        p.to_path_buf()
+    } else {
+        p.parent().map(|pp| pp.to_path_buf()).unwrap_or_default()
+    };
+    if !check_path.exists() {
+        return Err("目标路径不存在".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // 与 open_external 同一纪律：直接调 explorer，不经 cmd /C start
+        // （后者有 shell 解析导致的命令注入面）。`/select,` 是 explorer 的
+        // 固定写法：逗号后紧跟路径即「打开并选中」。
+        Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // macOS 的 reveal 桥接（`open::file(_, true)`）尚未迁入，见 S6。
+        // 诚实报错：静默失败会让用户以为点了没反应。
+        let _ = path;
+        Err("当前平台不支持在文件管理器中定位".to_string())
+    }
+}
+
 /// 复制纯文本到系统剪贴板。
 ///
 /// 🔴 前端复制**一律先走这条**，不要直接用 `navigator.clipboard.writeText`：
@@ -212,5 +269,39 @@ mod tests {
         // 不存在「看起来 A 实际 B」的混淆面；strip 后 scheme 非法照样拒。
         assert!(!is_allowed_external_url("java\nscript:alert(1)"));
         assert!(!is_allowed_external_url("java\tscript:alert(1)"));
+    }
+
+    /// 网络共享路径必须在任何文件系统操作前被拒。
+    ///
+    /// 这条是真安全边界而不是形式：Windows 上对 `\\server\share` 做
+    /// `exists()` 就会向对方发起 SMB 认证，泄漏 NTLMv2 哈希。
+    #[test]
+    fn network_paths_are_rejected_before_any_fs_access() {
+        assert!(is_unsafe_network_path(r"\\server\share\evil.exe"));
+        assert!(is_unsafe_network_path("//server/share"));
+        assert!(is_unsafe_network_path(r"  \\server\share")); // 前导空格后仍识别
+                                                              // 正常路径不误伤：盘符、相对路径、正斜杠的普通路径
+        assert!(!is_unsafe_network_path(r"C:\Users\me\Downloads"));
+        assert!(!is_unsafe_network_path("./relative/path"));
+        assert!(!is_unsafe_network_path("C:/Users/me/Downloads"));
+        assert!(!is_unsafe_network_path(""));
+    }
+
+    /// 「路径不存在」必须**在 spawn explorer 之前**返回 Err。
+    ///
+    /// 顺序就是这条用例的意义：若把存在性检查挪到 spawn 之后，这条会变成
+    /// 「explorer 被拉起后报错」——测试环境里表现为突然弹出资源管理器窗口。
+    #[test]
+    fn open_file_location_rejects_missing_path_without_spawning() {
+        let e = open_file_location("C:\\ definitely \\ not \\ existing \\ 12345.txt".to_string())
+            .unwrap_err();
+        assert!(e.contains("目标路径不存在"), "实际报错: {e}");
+    }
+
+    /// UNC 路径走的是安全拦截，报错文案要能让前端原样展示。
+    #[test]
+    fn open_file_location_rejects_unc_with_security_message() {
+        let e = open_file_location(r"\\server\share\evil.exe".to_string()).unwrap_err();
+        assert!(e.contains("网络共享路径"), "实际报错: {e}");
     }
 }

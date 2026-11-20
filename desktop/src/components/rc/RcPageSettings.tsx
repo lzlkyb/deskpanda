@@ -4,17 +4,26 @@
  * 纪律：**每一行都必须有真数据或真动作**——盘点发现旧版 6 行里 2 行与主页重复、
  * 1 行是纯文字说明、3 行只是跳转（design/远程电脑-设置去摆设与美化-设计稿.html）。
  * 同一设置只有一个家：
- * - 「允许被远程」常驻工作台侧栏；「本机画质 / 采集范围」只在主窗口设置页（本页页脚有入口），
- *   工作台内不提供——A2 设计稿本就没给画质留位置（2026-09-22 校正：旧文案「常驻主页左栏」
+ * - 「允许被远程」常驻工作台侧栏（「这台电脑」卡 `RcA2SelfCard` → `rc.setEnabled`），
+ *   空态引导另有「立即打开」——本页不摆第二份（2026-09-22 校正：旧文案「常驻主页左栏」
  *   在 A2 重构后已不成立，旧侧栏 `RcWorkbenchSide` 亦已作死代码删除）；
  * - 「被控能力上限」= 后端 `rc_status.capability`（rc_set_capability 持久写
- *   config，服务端 max_capability() 真实钳制入站授权）；主窗「被控上限」组（RcCapGroup）同款；
+ *   config，服务端 max_capability() 真实钳制入站授权）；
  * - 「默认发起方式」「自动开通道」是纯前端偏好（lib/rcRequest / lib/rcPrefs）。
  * 顶栏不摆「恢复默认」：没有对应后端，摆了就是新的摆设。
  *
  * 2026-09-21（A 方案稿对账）：补上「无人值守」分区——稿在设置页就摆了这两行，
  * 而实现此前只留一个「更多设置在主窗口」的跳转链接。功能与弹层（RcUnoDialog
  * 的 generate / pass 两种 side）早已齐全，缺的只是本页入口。
+ *
+ * 🔴 2026-11-20（拆分迁移对账）：补上「画面」分区（画质档 / 画面范围，
+ * 组件 `RcCaptureSettings`）与「通用」里的会话防休眠行（`RcKeepAwakeRow`）——
+ * 这三项此前的 UI 只在 pastePanda 的 `RcCapGroup` 里，该组件随 `RcSection`
+ * 未迁而成为死代码，DeskPanda 里 Rust 命令齐全却无界面可达。同时**删除页脚
+ * 「更多远程设置在主窗口」链接**：本仓主窗口即工作台、壳子设置页
+ * （general/ai/mcp/help/about）没有远程分区，链接 emit 的
+ * `pp:open-settings-rc` 无人监听，点击静默无响应。设计稿见
+ * `design/远程电脑-设置页补画面分区-2026-11-20.html`。
  */
 import { useEffect, useState } from "react";
 import { rcSessionHistory, type RcCapability } from "@/lib/api/rc";
@@ -22,6 +31,8 @@ import { readAutoStartChannel, writeAutoStartChannel } from "@/lib/rcPrefs";
 import type { UseRc } from "@/hooks/useRc";
 import type { useToast } from "@/components/Toast";
 import { RcHistoryClearButton } from "./RcPageHistory";
+import { RcCaptureSettings } from "./RcCaptureSettings";
+import { RcKeepAwakeRow } from "./RcKeepAwakeRow";
 import settings from "@/components/Settings.module.css";
 import styles from "./RemoteComputer.module.css";
 import { RcReceiveDirectorySetting } from "./RcReceiveDirectorySetting";
@@ -32,7 +43,6 @@ export function RcPageSettings({
   cap,
   toast,
   onSetDefaultCap,
-  onOpenSettings,
   onNavigateHistory,
   onManageTrusted,
   onOpenUno,
@@ -42,8 +52,6 @@ export function RcPageSettings({
   cap: RcCapability;
   toast: ReturnType<typeof useToast>["toast"];
   onSetDefaultCap: (c: RcCapability) => void;
-  /** 页脚逃生门：跳主窗口设置页的 rc 分区。 */
-  onOpenSettings: () => void;
   onNavigateHistory: () => void;
   /** U10：管理免确认设备 = 切到设备页并打开 trusted 过滤（不再让用户逐台翻）。 */
   onManageTrusted: () => void;
@@ -123,6 +131,7 @@ export function RcPageSettings({
             <span className={settings.sToggleLabel}>{autoChannel ? "开" : "关"}</span>
           </button>
         </div>
+        <RcKeepAwakeRow rc={rc} />
         <RcReceiveDirectorySetting toast={toast} />
       </section>
 
@@ -169,6 +178,8 @@ export function RcPageSettings({
           </div>
         </div>
       </section>
+
+      <RcCaptureSettings rc={rc} />
 
       <section className={styles.setCard}>
         <h3 className={styles.setSecTitle} id="rc-set-unattended">
@@ -225,12 +236,6 @@ export function RcPageSettings({
           <RcHistoryClearButton rc={rc} onCleared={() => setHistoryCount(0)} label="清空" withIcon={false} />
         </div>
       </section>
-
-      <div className={styles.setFoot}>
-        <button type="button" className={styles.linkBtn} onClick={onOpenSettings}>
-          更多远程设置在主窗口 →（主窗口设置页 ·「远程电脑」分区）
-        </button>
-      </div>
     </div>
   );
 }

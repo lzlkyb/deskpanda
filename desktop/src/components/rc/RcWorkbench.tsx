@@ -8,7 +8,6 @@
  * 各自拉一次会让「全部 N 条」与各设备计数来自不同批快照，对不上账。
  */
 import { useEffect, useMemo, useState } from "react";
-import { emitTo } from "@tauri-apps/api/event";
 import { useToast } from "@/components/Toast";
 import { RcPairLayer, type RcPairLayerMode } from "@/components/settings/RcPairLayer";
 import { useRc } from "@/hooks/useRc";
@@ -99,11 +98,6 @@ export function RcWorkbench() {
 
   useRcWorkbenchClose(hasLiveSession, rc.end);
 
-  const openMainWindowSettings = () => {
-    void emitTo("main", "pp:open-settings-rc").catch(() => {
-      toast("跳转设置失败：主窗口不可达", "error");
-    });
-  };
   const startChannel = () => {
     void rc.startChannel().then((ok) => {
       if (ok) toast("远程通道已启动", "success");
@@ -165,7 +159,6 @@ export function RcWorkbench() {
         cap={cap}
         toast={toast}
         onSetDefaultCap={setDefaultCap}
-        onOpenSettings={openMainWindowSettings}
         onNavigateHistory={() => setPage("history")}
         onManageTrusted={() => {
           setPage("devices");

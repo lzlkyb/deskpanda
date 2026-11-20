@@ -490,6 +490,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         commands::reveal_install_dir,
         commands::open_external,
         commands::get_app_info,
+        // 在文件管理器中定位路径（远程文件面板「打开所在文件夹」/ 接收目录）。
+        // 壳子级命令：非 Windows 也注册（内部按平台返回错误），两段都要列。
+        commands::open_file_location,
+        // 网络诊断快照。定义在未门控的 `commands/net_diag.rs`（读共享端点，
+        // 端点没绑定时返回「未绑定」而不是报错）⇒ 壳子级，两段都要列。
+        commands::rc_net_diag,
         commands::start_update,
         commands::check_update,
         commands::copy_only,
@@ -600,6 +606,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         commands::reveal_install_dir,
         commands::open_external,
         commands::get_app_info,
+        // 与上面 Windows 段的壳子部分**必须一致**（见段首注释）。
+        commands::open_file_location,
+        commands::rc_net_diag,
         commands::start_update,
         commands::check_update,
         commands::copy_only,

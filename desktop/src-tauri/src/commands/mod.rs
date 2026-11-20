@@ -8,9 +8,11 @@
 //! - 新增命令：在子模块写 `#[tauri::command]` → 此处 `mod` + `pub use` →
 //!   `main.rs` 的 `invoke_handler!` 加一行。三处，缺一不可。
 
+mod net_diag;
 mod system;
 mod update;
 
+pub use net_diag::*;
 pub use system::*;
 pub use update::*;
 
@@ -147,6 +149,30 @@ mod registry_guard {
         out
     }
 
+    /// **只存在于 Windows 构建**的命令名集合。
+    ///
+    /// 判据是「定义所在的模块按 `cfg(windows)` 门控」（`commands/mod.rs` 顶部
+    /// 把 `rc` / `rc_file` / `rc_pair` 三个模块连同 `rc/ask_pop.rs` 一起门控），
+    /// **不是**命令名的前缀。按前缀判会把 `rc_net_diag` 这类误杀——它定义在
+    /// 未门控的 `commands/net_diag.rs` 里，macOS 上符号存在、注册合法
+    /// （2026-11-20 补该命令时实际撞到过：按前缀一刀切会把它判成泄漏）。
+    fn windows_only_commands() -> std::collections::HashSet<String> {
+        let files = [
+            ("commands/rc.rs", include_str!("rc.rs")),
+            ("commands/rc_file.rs", include_str!("rc_file.rs")),
+            ("commands/rc_pair.rs", include_str!("rc_pair.rs")),
+            // 入站申请浮层的三条命令（定义在 rc 里，注册前缀是 `rc::ask_pop::`）。
+            ("rc/ask_pop.rs", include_str!("../rc/ask_pop.rs")),
+        ];
+        let mut set = std::collections::HashSet::new();
+        for (name, src) in files {
+            for cmd in declared(name, src) {
+                set.insert(cmd);
+            }
+        }
+        set
+    }
+
     #[test]
     fn 每个命令都必须进_invoke_handler() {
         let lists = handler_lists();
@@ -192,16 +218,24 @@ mod registry_guard {
         let win: std::collections::HashSet<&str> = lists[0].iter().map(String::as_str).collect();
         let other: Vec<&str> = lists[1].iter().map(String::as_str).collect();
 
-        // ① 非 Windows 段不能有 `rc*`：那些命令函数本身按 `cfg(windows)` 门控，
-        //    在 macOS / Linux 上符号不存在 ⇒ 整条注册列表编不过（不是运行时才炸）。
-        let leaked: Vec<&&str> = other.iter().filter(|c| c.starts_with("rc")).collect();
+        // ① 非 Windows 段不能有 Windows-only 命令：那些命令函数本身按
+        //    `cfg(windows)` 门控，在 macOS / Linux 上符号不存在 ⇒ 整条注册列表
+        //    编不过（不是运行时才炸）。
+        //    判据取「定义所在模块是否门控」而不是名字前缀（见 windows_only_commands）。
+        let win_only = windows_only_commands();
+        assert!(
+            win_only.len() > 70,
+            "只解析到 {} 条 Windows-only 命令，解析器或门控文件已经不对了",
+            win_only.len()
+        );
+        let leaked: Vec<&&str> = other.iter().filter(|c| win_only.contains(**c)).collect();
         assert!(
             leaked.is_empty(),
-            "非 Windows 段里出现了远程电脑命令（{leaked:?}）——那边 `commands::rc*` 根本不存在，会编不过"
+            "非 Windows 段里出现了只在 Windows 存在的命令（{leaked:?}）——那边 `commands::rc*` 根本不存在，会编不过"
         );
 
         // ② 反向：壳子命令必须两边都有，否则 macOS 构建少一批功能而没人发现。
-        let shell: Vec<&&str> = win.iter().filter(|c| !c.starts_with("rc")).collect();
+        let shell: Vec<&&str> = win.iter().filter(|c| !win_only.contains(**c)).collect();
         assert!(
             !shell.is_empty(),
             "Windows 段里连壳子命令都没有，解析器已经不对了"
@@ -210,6 +244,18 @@ mod registry_guard {
             assert!(
                 other.contains(cmd),
                 "壳子命令 {cmd} 只在 Windows 段注册了 —— 非 Windows 构建会缺它"
+            );
+        }
+        // ②b 反向的镜像：非 Windows 段里出现的命令，Windows 段也必须注册。
+        //     少了它，「只在非 Windows 段注册」这类漏洞没人抓——`rc_net_diag`
+        //     与 `open_file_location` 2026-11-20 迁移时是**两段全漏**
+        //     （前端一调用就 command not found：网络诊断卡一进 App 就报、
+        //     「打开所在文件夹」点了没反应），而 ② 的方向查不到这个。
+        //     非 Windows 段按构造全是壳子命令（① 已禁掉 win_only），直接全量查。
+        for cmd in &other {
+            assert!(
+                win.contains(*cmd),
+                "壳子命令 {cmd} 只在非 Windows 段注册了 —— Windows 构建会缺它"
             );
         }
     }
