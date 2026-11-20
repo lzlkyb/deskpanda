@@ -1,6 +1,6 @@
 <svg viewBox="0 0 680 276" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
   <title>DeskPanda 协作开发流程</title>
-  <desc>从需求到发版的六步流程：需求 Issue、功能分支、本地七项门禁、发起 PR、Review 审批、合并 main 后打 tag 发版。</desc>
+  <desc>从需求到发版的六步流程：需求 Issue、功能分支、本地七项门禁、发起 PR、CI 四项全绿、合并 main 后打 tag 发版；不要求人工审批。</desc>
   <defs>
     <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M2 1L8 5L2 9" fill="none" stroke="#185FA5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -34,8 +34,8 @@
   <text x="120" y="238" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="400" fill="#0F6E56">模板 + CHANGELOG</text>
 
   <rect x="260" y="200" width="160" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-  <text x="340" y="220" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#085041">Review 审批</text>
-  <text x="340" y="238" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="400" fill="#0F6E56">CI 绿灯 + 1 人 approve</text>
+  <text x="340" y="220" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#085041">CI 门禁</text>
+  <text x="340" y="238" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="400" fill="#0F6E56">四项全绿即可合并</text>
 
   <rect x="480" y="200" width="160" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
   <text x="560" y="220" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#085041">合并 main</text>
