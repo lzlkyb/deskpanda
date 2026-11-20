@@ -32,7 +32,6 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://lzlkyb.github.io/deskpanda/updater.json",
         "https://github.com/lzlkyb/deskpanda/releases/latest/download/updater.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1RDZEOEE5MzVGQzgyMDgKUldRSWd2dzFxZGpXWmR3K3VML1VYOFp1bFZBK2ltVXlmZjFjWVIxSnNMTkZRend6TXladUVvbzIK",
