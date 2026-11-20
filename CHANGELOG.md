@@ -46,6 +46,7 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 修复关不掉远程电脑工作台窗口：注册关闭拦截后缺窗口销毁权限，点 ✕ 白屏、窗口不动，已补上权限
 
 ### 技术细节
+- 死代码清仓（约 1600 行，docs/项目体检报告-2026-11-20.md §1.3/§2）：`lib/utils.ts` 1343 → 367 行（99 个导出清掉 77 个零引用的死导出，保留 22 个在用——普查覆盖 `src` 与 `src-mobile`）；`components/layout/`（883 行）、`components/tabs/`（254 行）、`rc/RcOverlay.tsx`（201 行）、`lib/headerSecurityBadges.ts` 零引用整删；`clsx` / `tailwind-merge` 依赖随之摘除；入站申请收口守卫同步升级（RcOverlay 与壳子死目录纳入「保持不存在」清单）。
 - 修复 d586885 引入的 macOS 编译失败：`commands/net_diag.rs` 无条件 `use crate::net`，而 `net` 模块整体 `#[cfg(windows)]` 门控 ⇒ mac 侧 clippy/test 编不过（CI「Rust check + test (macOS)」红灯）。修法是命令保持双段注册（mac 诊断卡片要调，漏注册就是「命令不存在」），实现按平台分派：非 Windows 返回 `snapshot: null` +「远程电脑功能仅支持 Windows」，返回结构的 snapshot 字段类型用 `#[cfg]` 各自声明，前端 `NetDiagSnapshot | null` 契约不变。
 - Gitee 镜像仓库路径从「运行时环境变量」改为**编译期常量** `DEFAULT_GITEE_REPOSITORY`：装在用户机器上的应用没有 `APP_GITEE_REPOSITORY`，旧实现只读 `std::env::var`，结果是 CI 把产物推上了 Gitee、客户端永远读不到（2026-11-20 配镜像时发现）。运行时 env 仍可覆盖（本地调试 / 私服）。
 - `start_update` 里「本候选报告已是最新」从 `return` 改成 `continue`：Gitee 镜像比 GitHub 晚一拍同步时，托盘点更新会让第一路判成「没有更新」并直接报错；现在继续问下一路，全部问完仍没有才发 `stale`（原有语义不变，只是不再被第一路提前终止）。
