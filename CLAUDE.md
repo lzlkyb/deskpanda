@@ -45,6 +45,18 @@
 
 用户确认后才在 `desktop/` 目录执行 `npm run build`（= `tauri build`，产出 `<app-name>.exe` + NSIS 安装包）。构建前先结束占用进程（`taskkill //F //IM <app-name>.exe`）。
 
+**本地构建要带签名私钥**，否则 `createUpdaterArtifacts` 到最后一步报
+`A public key has been found, but no private key`，产不出 `.sig`（自动更新无法验签）：
+
+```bash
+# Git Bash，本机私钥在 ~/.tauri/deskpanda.key
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/deskpanda.key")"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+cd desktop && npm run build
+```
+
+CI 走仓库 secret `TAURI_SIGNING_PRIVATE_KEY`，本地不用改 `tauri.conf.json`。
+
 ## 4. 改动 UI 要先出 HTML 设计稿
 
 涉及界面变更时，先生成 HTML 设计稿让用户确认效果，再改代码。设计稿放 `design/`（见规则 13）。
