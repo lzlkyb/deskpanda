@@ -15,6 +15,21 @@ on:
 
 # 共享编译缓存：sccache 把每个 crate 的编译对象按 hash 存到 GitHub Actions Cache，
 # 跨发版 / 跨 PR 命中（依赖不变时基本秒级）；第一次或改了大段 Rust 仍要全编。
+#
+# 🔴 Windows 的两个作业**故意不用** sccache（各自用 job 级 env 把 RUSTC_WRAPPER
+# 清空），原因是一次真红（2026-11-20，run 44644667187）：
+#   cargo 1.100 起「新 build-dir 布局」默认开启 —— 每个依赖产物落在
+#   `target/debug/build/<crate>/<hash>/out` 独立目录，于是 rustc 不再收一个
+#   `-L dependency=deps`，而是每个依赖一条 `-L`。本仓 ~450 个依赖 ⇒ 这条命令行
+#   **56 KB**（实测），超过 Windows CreateProcess 的 32 KB 上限。
+#   cargo 本有兜底：spawn 失败就改写成 argfile 用 `@argfile` 重跑一次。但
+#   sccache 作为 RUSTC_WRAPPER 不认 argfile（mozilla/sccache 当时仍未支持），
+#   于是报 `failed to spawn ... os error 206`（"filename or extension is too long"）
+#   并直接判编译失败 —— 而且报错文本里全仓 grep 不到 "command line too long"，
+#   极难归因。
+#   ⇒ Windows 上把 sccache 摘掉，让 cargo 自己的 argfile 兜底生效；跨运行缓存
+#     改由 Swatinem/rust-cache 承担（它缓存整个 target/，配合 Cargo.lock 键已够用）。
+#   macOS 不受影响（ARG_MAX 是 1 MB 量级，根本走不到 argfile 分支），继续用 sccache。
 env:
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
@@ -64,11 +79,13 @@ jobs:
     name: Rust test suite (Windows)
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    # 🔴 Windows 上禁 sccache：超长命令行 + sccache 不认 argfile 的完整取证见文件头 env 注释。
+    env:
+      RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - name: Sccache Setup (跨 PR 编译缓存)
-        uses: mozilla/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
@@ -276,6 +293,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write   # 创建 GitHub Release 需要写权限（默认 token 只读）
+    # 🔴 Windows 上禁 sccache：超长命令行 + sccache 不认 argfile 的完整取证见文件头 env 注释。
+    # 发版路径同样会撞（`cargo test --release` 与 `tauri build` 都是本 crate），必须一起改。
+    env:
+      RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
 
@@ -310,9 +332,6 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Sccache Setup (跨发版编译缓存)
-        uses: mozilla/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:

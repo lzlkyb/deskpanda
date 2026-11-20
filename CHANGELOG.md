@@ -42,6 +42,8 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 删除 `ui-guards` feature：它把「命令注册 / capabilities / 前端 invoke」三侧成对的守卫挡在默认测试之外，而 pre-push 跑的是 `--no-default-features` ⇒ 守卫永远不会执行。改为常开后按本仓结构校正路径（注册表在 `main.rs`、`on_change` 在 `rc/boot.rs`、capabilities 只有 `default.json`）。
 - 注册穷举守卫两处假绿：① 只认 `commands::` 前缀，`rc::ask_pop::` 的注册等于不存在；② 不剥行注释，注释掉一条注册仍会被解析成「已注册」（实测注释掉 `rc_ask_state` 后 787 条测试全绿）。已修，并用「注释掉注册 → 红」验证过。
 - FF DLL 覆盖环境变量改名 `DESKPANDA_FF_DLL_DIR`（旧名 `PASTEPANDA_FF_DLL_DIR` 仍认）。
+- CI 的 Windows 作业摘掉 sccache：cargo 1.100 起新 build-dir 布局默认开启，每个依赖一条 `-L`，本 crate 近 450 个依赖把 rustc 命令行撑到 56 KB，超过 Windows 32 KB 上限；cargo 本会用 argfile 兜底，而 sccache 不认 argfile ⇒ 编译期报 `failed to spawn ... os error 206`（报错文本里没有「命令行过长」字样，极难归因）。跨运行缓存改由 rust-cache 承担，macOS 侧 ARG_MAX 足够大，继续用 sccache。
+- 帧龄 EMA 的原子更新改成 CAS 循环：rustc 1.100 把 `AtomicI64::fetch_update` 标为 deprecated（改名 `try_update`），CI 的 clippy 带 `-D warnings` 会判红，而本机 1.96 还没有新名字。同时把单步推进抽成纯函数 `ema_step` 并补 4 条单测（首样本落值 / 升 α=1/2 / 降 α=1/8 / 相等幂等），防日后 α 被悄悄改动。
 
 ## [0.1.1] - 2026-11-02
 

@@ -104,6 +104,43 @@ pub(super) fn note_jpeg(at_ms: i64, cap_ms: u16, enc_ms: u16, width: u32, height
     note_telemetry(at_ms, cap_ms, enc_ms, width, height, skew, true);
 }
 
+/// 帧龄 EMA 的单步推进（纯函数，便于单测）。首样本直接落值，之后升快降慢
+/// （见 [`AGE_EMA`] 的注释）。
+///
+/// clamp 到 [-1000, 2500] 的取值理由：🔴 2026-09-28 真机复盘——13s 级链路停顿的
+/// 样本若原样进 EMA（曾 clamp 到 60s），升 α=1/2 一拍跳上去了、降 α=1/8 要几十秒
+/// 才缓过来，B 端码率被钉死在 15% 整整半分钟。停顿是链路事件不是稳态排队，
+/// 2.5s 封顶让码控「看见了就压、过去了就放」，深停顿另由 RTT 档位兜底。
+fn ema_step(prev: i64, age_c: i64) -> i64 {
+    if prev < 0 {
+        age_c
+    } else if age_c > prev {
+        (prev + age_c) / 2
+    } else {
+        (prev * 7 + age_c) / 8
+    }
+}
+
+/// 把一帧的帧龄样本并入 [`AGE_EMA`]。
+///
+/// 为什么不用 `AtomicI64::fetch_update`：rustc 1.100 起这个方法被标记 deprecated
+/// （改名 `try_update`），而本机工具链仍是 1.96（没有 `try_update`）——CI 跑
+/// latest stable 且 clippy 带 `-D warnings`，旧名字在 CI 上直接红、新名字在本机
+/// 编不过。两头都要过，所以写等价的 CAS 循环，不依赖任一版本的命名。
+///
+/// 语义与 `fetch_update(|prev| Some(f(prev)))` 逐字等价：CAS 失败说明别人先改了，
+/// 用**实际**值（`actual`）重新计算，而不是拿旧样本重放。
+fn store_ema(age_c: i64) {
+    let mut prev = AGE_EMA.load(Ordering::Relaxed);
+    loop {
+        let next = ema_step(prev, age_c);
+        match AGE_EMA.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
 fn note_telemetry(
     at_ms: i64,
     cap_ms: u16,
@@ -114,23 +151,9 @@ fn note_telemetry(
     jpeg: bool,
 ) {
     let age = chrono::Utc::now().timestamp_millis() - at_ms + skew;
-    // 帧龄 EMA：升快降慢（见 AGE_EMA 注释）。clamp 到 [-1000, 2500]：
-    // 🔴 2026-09-28 真机复盘——13s 级链路停顿的样本若原样进 EMA（曾 clamp 到
-    // 60s），升 α=1/2 一拍跳上去了、降 α=1/8 要几十秒才缓过来，B 端码率被钉死
-    // 在 15% 整整半分钟。停顿是链路事件不是稳态排队，2.5s 封顶让码控「看见了
-    // 就压、过去了就放」，深停顿另由 RTT 档位兜底。
+    // 帧龄 EMA：升快降慢，clamp 与 α 的取舍见 `ema_step` 的注释。
     let age_c = age.clamp(-1000, 2500);
-    AGE_EMA
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
-            Some(if prev < 0 {
-                age_c
-            } else if age_c > prev {
-                (prev + age_c) / 2
-            } else {
-                (prev * 7 + age_c) / 8
-            })
-        })
-        .ok();
+    store_ema(age_c);
     DELIVERED.fetch_add(1, Ordering::Relaxed);
     let Ok(mut g) = WINDOW.lock() else { return };
     let w = g.get_or_insert_with(|| blank(Instant::now()));
@@ -222,4 +245,41 @@ fn maybe_report(w: &mut Window) {
     );
     let started = Instant::now();
     *w = blank(started);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ema_step;
+
+    /// 首样本（prev = -1「尚无样本」）必须直接落值，不能被平滑成半个样本。
+    #[test]
+    fn first_sample_lands_verbatim() {
+        assert_eq!(ema_step(-1, 120), 120);
+        assert_eq!(ema_step(-1, -1000), -1000);
+    }
+
+    /// 升快：α=1/2，(prev + 样本) / 2。
+    #[test]
+    fn rising_is_half() {
+        assert_eq!(ema_step(100, 300), 200);
+        assert_eq!(ema_step(0, 250), 125);
+    }
+
+    /// 降慢：α=1/8，(prev * 7 + 样本) / 8。与升侧刻意不对称——
+    /// 升侧一拍就动、降侧要好几拍才缓回来（2026-09-28 码率被钉死的复盘）。
+    #[test]
+    fn falling_is_eighth_and_slower_than_rising() {
+        assert_eq!(ema_step(800, 0), 700);
+        // 同一个 800ms 差距，升侧一步吃掉一半，降侧只吃掉八分之一。
+        let up = ema_step(0, 800);
+        let down = 800 - ema_step(800, 0);
+        assert_eq!(up, 400);
+        assert_eq!(down, 100);
+    }
+
+    /// 相等时走「降」分支（不抖动）：样本 == prev 结果恒等。
+    #[test]
+    fn equal_sample_is_idempotent() {
+        assert_eq!(ema_step(345, 345), 345);
+    }
 }
