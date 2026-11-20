@@ -202,6 +202,6 @@ cd desktop && npm run release -- --patch      # 或 --minor / --major / version 
 ## 附：更新架构关键决策（改动前必读）
 
 - **单飞闸（SingleFlight）**：`commands/update.rs` 同一时刻只允许一个检查，重复调用直接返回进行中的状态——防止用户连点出多个下载。
-- **多源回退**：`tauri.conf.json` 的 endpoints 数组按序尝试，配了 `APP_GITEE_REPOSITORY` env 才启用 Gitee 候选组（没配镜像时第一候选必然 404，每次检查白等一轮退避）。
+- **多源回退**：候选源分组按序尝试，**Gitee 镜像组在前、`tauri.conf.json` 的 endpoints 在后**；任一组在检查或下载阶段失败才换下一组。Gitee 仓库路径来自 `update.rs` 的 `DEFAULT_GITEE_REPOSITORY`（**编译期常量**，装在用户机器上的应用没有环境变量，只读 `std::env::var` 等于永远读不到——2026-11-20 踩过）；运行时 env `APP_GITEE_REPOSITORY` 仅作覆盖。换镜像仓库要同时改这个常量与 CI 的 `GITEE_REPOSITORY` secret。
 - **updater.json 跨平台合并**：mac 与 Windows 两个 job 各产平台片段，由 build-windows 用 `UPDATER_MERGE_INTO` 合并成完整 updater.json——**防止两个平台互相覆盖**。改动发版链时先读 `scripts/generate-updater-json.mjs` 头部注释。
 - **密钥必须自签**：每个新应用必须自己 `tauri signer generate`，公钥进 `tauri.conf.json` 的 `plugins.updater.pubkey`，私钥进 GitHub secret `TAURI_SIGNING_PRIVATE_KEY`。**复制壳子的密钥对是发不了版的**（验签必失败）。

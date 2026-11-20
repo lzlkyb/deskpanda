@@ -224,20 +224,34 @@ fn resolve_update_endpoints() -> Result<Option<Vec<url::Url>>, String> {
     }
 }
 
-/// Gitee 镜像仓库路径（owner/repo），**默认不启用**——设了环境变量
-/// `APP_GITEE_REPOSITORY=owner/repo` 才把 Gitee 列为第一候选。
+/// 默认 Gitee 镜像仓库（owner/repo）。镜像内容由 CI 每次发版推到该仓库的
+/// `releases` 分支 `latest/`（见 .github/workflows/build.yml 的镜像步骤）。
 ///
-/// 启用后：CI 需要把每次发版的产物 + manifest 同步到该仓库的 `releases` 分支
-/// `latest/` 目录（见 .github/workflows/build.yml 的可选镜像步骤）。国内访问远比
-/// 任何公共 GitHub 代理稳定；失败时自动回退到 tauri.conf.json 配置的端点
-/// （见 candidate_endpoint_groups）。
+/// 🔴 必须是**编译期常量**，不能只靠环境变量：装在用户机器上的应用没有
+/// `APP_GITEE_REPOSITORY`。2026-11-20 首次配镜像时发现旧实现只读 `std::env::var`，
+/// 结果 CI 把产物推上了 Gitee、客户端永远读不到——"配好了"却完全没生效。
+const DEFAULT_GITEE_REPOSITORY: &str = "lzul/deskpanda";
+
+/// Gitee 镜像仓库路径（owner/repo），作为第一候选源。
 ///
-/// 为何默认关：没配镜像时第一候选必然 404，每次检查更新白等一轮退避重试
-/// （2026-10-22 实测：旧逻辑每次检查多花 3.5 秒）。
+/// 国内访问 Gitee raw 比任何公共 GitHub 代理稳定；这一路检查或下载失败时自动
+/// 回退到 tauri.conf.json 配置的端点（见 `candidate_endpoint_groups`）。
+///
+/// 运行时 `APP_GITEE_REPOSITORY` 仍可覆盖（本地调试、指向私服镜像）；留空串
+/// 视为不覆盖，避免 CI 里 secret 缺失时把默认值误删。
 fn gitee_repository() -> Option<String> {
-    match std::env::var("APP_GITEE_REPOSITORY") {
-        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
-        _ => None,
+    resolve_gitee_repository(std::env::var("APP_GITEE_REPOSITORY").ok())
+}
+
+/// 纯判断，抽出来才能在无环境变量的单测里覆盖两条分支（env 是进程级全局态，
+/// 测试里改它会让同进程其他用例互相污染）。
+fn resolve_gitee_repository(runtime: Option<String>) -> Option<String> {
+    match runtime {
+        Some(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => {
+            let fallback = DEFAULT_GITEE_REPOSITORY.trim();
+            (!fallback.is_empty()).then(|| fallback.to_string())
+        }
     }
 }
 
@@ -315,6 +329,9 @@ pub fn start_update<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let mut last_message: Option<String> = None;
         // 最近一次失败的机器可读原因，随 update:error 一起发（见 classify_update_error）。
         let mut last_code: &'static str = "unknown";
+        // 是否至少有一路候选明确回答「已是最新」。与 last_message 合起来决定收尾：
+        // 全部报没有更新 ⇒ stale；有真错误 ⇒ 按错误报。
+        let mut saw_uptodate = false;
         for endpoints in groups {
             let updater = match build_updater(&app, endpoints) {
                 Ok(u) => u,
@@ -342,18 +359,13 @@ pub fn start_update<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             let update = match check_result {
                 Some(u) => u,
                 None => {
-                    // 下载链路不负责"已是最新"判定（那是 check_update 的事）。
-                    // 这里返回 None 说明下载前复查没拿到可用更新，发 error 而非 uptodate，
-                    // 避免把用户手上已有的可用更新静默清空；不再尝试下一个候选（各源应给出一致结论，
-                    // 换源重试只会徒增耗时）。
-                    let _ = app.emit(
-                        "update:error",
-                        serde_json::json!({
-                            "message": "下载前复查未找到可用更新，可能已发布新版本，请重新检查",
-                            "code": "stale"
-                        }),
-                    );
-                    return;
+                    // 这一路候选报告「没有可用更新」，但**不代表全部候选的结论**：
+                    // Gitee 镜像比 GitHub 晚一拍（镜像步骤失败时 GitHub 已发布、Gitee
+                    // 还留着上一版），直接 return 会让「托盘点更新」在国内源滞后时
+                    // 凭空报错。继续问下一路，全部问完仍没有才在循环外收尾。
+                    log::info!("[Update] 候选源报告已是最新，继续问后续源");
+                    saw_uptodate = true;
+                    continue;
                 }
             };
 
@@ -438,6 +450,20 @@ pub fn start_update<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                     continue; // 换下一个候选源重试
                 }
             }
+        }
+
+        // 全部候选问完仍没拿到可下载的更新。两种收尾必须分开：没有任何真错误 ⇒
+        // 每一路都说「已是最新」，沿用原语义发 stale（用户是从「有可用更新」点进来
+        // 的，静默清空徽章比报错更糟）；有错误 ⇒ 如实报错，别让「没有更新」掩盖失败。
+        if last_message.is_none() && saw_uptodate {
+            let _ = app.emit(
+                "update:error",
+                serde_json::json!({
+                    "message": "下载前复查未找到可用更新，可能已发布新版本，请重新检查",
+                    "code": "stale"
+                }),
+            );
+            return;
         }
 
         let _ = app.emit(
@@ -695,5 +721,59 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 2, "可重试错误应再试一次");
+    }
+
+    /// 🔴 装好的应用没有环境变量：默认镜像必须来自编译期常量，否则「配了镜像
+    /// 但客户端读不到」（2026-11-20 首次配 Gitee 时的真实形态）。
+    #[test]
+    fn default_mirror_applies_without_env() {
+        assert_eq!(
+            resolve_gitee_repository(None).as_deref(),
+            Some("lzul/deskpanda")
+        );
+        assert_eq!(
+            resolve_gitee_repository(None).as_deref(),
+            Some(DEFAULT_GITEE_REPOSITORY)
+        );
+    }
+
+    /// 运行时覆盖优先于默认值：本地调试 / 指向私服镜像时改 env 即可，不用重编。
+    #[test]
+    fn runtime_env_overrides_default_mirror() {
+        assert_eq!(
+            resolve_gitee_repository(Some("myorg/mirror".into())).as_deref(),
+            Some("myorg/mirror")
+        );
+        // 前后空格要吃掉，拼 URL 时多一个空格就是另一个（404 的）地址。
+        assert_eq!(
+            resolve_gitee_repository(Some("  myorg/mirror  ".into())).as_deref(),
+            Some("myorg/mirror")
+        );
+    }
+
+    /// 空串 / 纯空格视为「没设」，回落到默认镜像：CI 里 secret 缺失时会传空串，
+    /// 不能因此把默认源删掉（那会让国内用户直接退化成直连 GitHub）。
+    #[test]
+    fn blank_runtime_env_falls_back_to_default() {
+        assert_eq!(
+            resolve_gitee_repository(Some(String::new())).as_deref(),
+            Some(DEFAULT_GITEE_REPOSITORY)
+        );
+        assert_eq!(
+            resolve_gitee_repository(Some("   ".into())).as_deref(),
+            Some(DEFAULT_GITEE_REPOSITORY)
+        );
+    }
+
+    /// 常量必须是 `owner/repo` 形状：多一段或少了斜杠拼出来的 raw 地址必然 404。
+    #[test]
+    fn default_mirror_has_owner_repo_shape() {
+        let parts: Vec<&str> = DEFAULT_GITEE_REPOSITORY.split('/').collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "应为 owner/repo：{DEFAULT_GITEE_REPOSITORY}"
+        );
+        assert!(parts.iter().all(|p| !p.trim().is_empty()), "两段都不能为空");
     }
 }
