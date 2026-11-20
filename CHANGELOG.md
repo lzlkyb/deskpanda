@@ -45,6 +45,7 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 修复关不掉远程电脑工作台窗口：注册关闭拦截后缺窗口销毁权限，点 ✕ 白屏、窗口不动，已补上权限
 
 ### 技术细节
+- 修复 d586885 引入的 macOS 编译失败：`commands/net_diag.rs` 无条件 `use crate::net`，而 `net` 模块整体 `#[cfg(windows)]` 门控 ⇒ mac 侧 clippy/test 编不过（CI「Rust check + test (macOS)」红灯）。修法是命令保持双段注册（mac 诊断卡片要调，漏注册就是「命令不存在」），实现按平台分派：非 Windows 返回 `snapshot: null` +「远程电脑功能仅支持 Windows」，返回结构的 snapshot 字段类型用 `#[cfg]` 各自声明，前端 `NetDiagSnapshot | null` 契约不变。
 - Gitee 镜像仓库路径从「运行时环境变量」改为**编译期常量** `DEFAULT_GITEE_REPOSITORY`：装在用户机器上的应用没有 `APP_GITEE_REPOSITORY`，旧实现只读 `std::env::var`，结果是 CI 把产物推上了 Gitee、客户端永远读不到（2026-11-20 配镜像时发现）。运行时 env 仍可覆盖（本地调试 / 私服）。
 - `start_update` 里「本候选报告已是最新」从 `return` 改成 `continue`：Gitee 镜像比 GitHub 晚一拍同步时，托盘点更新会让第一路判成「没有更新」并直接报错；现在继续问下一路，全部问完仍没有才发 `stale`（原有语义不变，只是不再被第一路提前终止）。
 - 设置项补覆盖的前端接线落成源码守卫 `desktop/src/__tests__/RcSettingsWiring.test.ts`：三个 `rc_set_*` 从 API 封装 → store action → `useRc` 投影 → 组件消费 → 设置页挂载**五环逐环**钉住，另钉死链接事件名 `pp:open-settings-rc` 的字符串字面量不复辟、`onOpenSettings` prop 不回来。四环注入破坏均精确变红后还原。
