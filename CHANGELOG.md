@@ -38,6 +38,7 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 远程电脑功能当前只在 Windows 电脑上提供；macOS 上的采集 / 编码 / 音频 / 键鼠注入依赖一整套尚未迁入的平台桥接，已正式排入后续阶段（拆分方案 S6），期间 mac 构建保留、只出壳子与提示
 
 ### 修复
+- 修复设备列表「自动接收文件」开关失灵：开关状态永远显示「未开启」，点了也只能开、关不掉——后端漏把 `auto_accept` 带进设备列表，前端读到的一直是空值（开关真值一直在后台、只是没下发）。现已随设备列表下发真实状态，开关可正常显示与切换
 - 修复工作台设置页缺项：画质档、画面范围、会话防休眠此前只有后台能力、没有界面入口（拆分迁移时丢失），现已补进设置页——「画面」分区两行 + 「通用」里的会话防休眠行
 - 修复设置页底部「更多远程设置在主窗口」点了没反应：本应用主窗口就是工作台，那个跳转本来就没有接收方，已删除
 - 修复远程文件面板「打开所在文件夹」与「打开接收目录」报「命令不存在」：后端命令迁移时整个漏掉了，已补上
@@ -57,6 +58,8 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 降级态四处接线：主区换通知卡（`RcUnsupportedPlatform`，吃 theme.css warning 令牌）/ 侧栏整体不渲染 / 错误槽抑制（mac 上 invoke 失败也无红条）/ 标题栏中格静态徽章（「远程电脑仅支持 Windows」，非按钮）；另停 `useRcAutoCheck` 轮询与自动开通道（该 pref 缺省 true，否则 mac 白弹失败 toast）。判据「出口不存在时就不要画一个出口」。
 - 拆分方案文档迁入本仓 `docs/DeskPanda-拆分方案-2026-11-19.md`（自 PastePanda，现为 DeskPanda 侧活文档）：S1–S5 标记完成态并补记实际偏差（S2 未迁 macOS 三件套、S3 的 12 处依赖落点、S5 体积红线实测值），新增 **S6 正式阶段**（macOS 交付：迁入范围清单 / 迁移对账 / 验收判据；§6 的 macOS 待定项改为 2026-11-20 已决断 D6）。`CLAUDE.md`、`README.md` 与 5 处代码注释（`lib.rs` / `commands/rc.rs` / `commands/system.rs` / `rc/mod.rs` / `rc/audio.rs`）原指向 PastePanda 仓的悬空引用全部改指本文件。
 - 新增 19 条测试（全量 1009 → 1028）：`rcPlatform` 5（含 🔴 undefined 不降级、大小写敏感）/ `usePlatform` 3（含 🔴 多处挂载只发一次 invoke）/ `RcUnsupportedPlatform` 4 / `RcA2TitleBar` +2（降级态中格是静态徽章、无死按钮）/ `RcWorkbench` +5（接线：mac 主区只剩通知卡、侧栏退场、🔴 Windows 零影响、首帧 undefined 不降级、错误条抑制）。7 处注入破坏均精确变红后还原。
+- 设备列表 IPC 镜像契约钉成源码守卫 `desktop/src/__tests__/RcTargetDeviceMirror.test.ts`：前端 `rcTypes.ts` 声明的每个字段必须存在于 Rust 投影结构体（TS ⊆ Rust），防「后端少字段、前端读恒 undefined」型漂移——`auto_accept` 漏投影正是这样漏的，TS 编译器对此零感知。
+- `.githooks/pre-push` 文件模式 644 → 755：git 存的模式是非可执行时，clone 后配 `core.hooksPath` 的门禁会被 git **静默跳过**（只留一行 hint），本地门禁形同虚设——2026-11-20 main 上 macOS 编译红灯因此漏网（push 时钩子根本没跑）。
 
 ## [0.1.1] - 2026-11-20
 
