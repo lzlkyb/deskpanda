@@ -84,6 +84,18 @@ pub struct RcTargetDevice {
     pub display_name: String,
     /// 方案 D「免确认直连」：这台设备发起远程时跳过人工同意。默认 false。
     pub trusted: bool,
+    /// 决策 10「自动接收」：这台设备**推送**文件过来时跳过确认条。
+    /// 与 `trusted` 是两件独立的事（那条管接管屏幕，这条只管自动收文件）。
+    ///
+    /// 🔴 2026-11-20 体检发现此字段此前漏投影：真值一直在 store
+    /// （`store::rc_device::RcDevice::auto_accept`，`rc_device_auto_accept_set`
+    /// 也一直在写），但 `rc_targets` 没把它带出来——前端
+    /// `RcDeviceManageActions` 等 4 处读 `target.auto_accept` 恒 undefined，
+    /// 开关永远显示「未开启」，且 `!undefined` 恒 true 导致**只能开、关不掉**。
+    /// 前端接口（`lib/api/rcTypes.ts`）当时就声明了这个字段，TS 对这种
+    /// 「后端少字段」零感知——镜像契约由
+    /// `src/__tests__/RcTargetDeviceMirror.test.ts` 逐字段钉住。
+    pub auto_accept: bool,
     /// 对端**自报的系统**短标签（`Windows 11` / `macOS` / `Linux`）。
     ///
     /// 来源是会话 `Accept` 帧（`rc/protocol.rs`）；空串 = 还没建立过会话，
@@ -173,6 +185,7 @@ pub fn rc_targets(
             last_path: d.last_path,
             note: d.note,
             trusted: d.trusted,
+            auto_accept: d.auto_accept,
             os: d.os,
             tags: d.tags,
             remark: d.remark,
@@ -208,6 +221,8 @@ pub fn rc_targets(
             note: String::new(),
             // 仅同步配对还没提升进 rc 表，无从谈「免确认」——恒 false。
             trusted: false,
+            // 同理：它从没发起过文件推送，谈不上「自动接收」——恒 false。
+            auto_accept: false,
             // 同理：它从没跑过 rc 会话，没有 Accept 帧可读系统，恒空串。
             os: String::new(),
             // 标签/描述备注同属 rc 表的组织信息，仅同步配对没有落点，恒空。
