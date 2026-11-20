@@ -18,10 +18,12 @@ import { useRcLaunch } from "@/hooks/useRcLaunch";
 import { useRcRequestEndNotice } from "@/hooks/useRcRequestEndNotice";
 import { useRcTransferNotice } from "@/hooks/useRcTransferNotice";
 import { useRcWorkbenchClose } from "@/hooks/useRcWorkbenchClose";
+import { usePlatform } from "@/hooks/usePlatform";
 import { fingerprintOf } from "@/lib/fingerprint";
 import { rcDisplayName } from "@/lib/rcDevice";
 import { rcDeviceRename, rcDeviceRemarkSet, rcDeviceTagsSet } from "@/lib/api/rc";
 import { normalizeHistoryPeer, summarizeHistoryDevices } from "@/lib/rcHistory";
+import { rcPlatformDegraded } from "@/lib/rcPlatform";
 import { readAutoStartChannel } from "@/lib/rcPrefs";
 import { capabilityLabel } from "@/lib/rcRequest";
 import { isSessionActive, workbenchMainMode } from "@/lib/rcWorkbench";
@@ -34,6 +36,7 @@ import { RcPageFiles } from "./RcPageFiles";
 import { RcPageHistory } from "./RcPageHistory";
 import { RcPageSettings } from "./RcPageSettings";
 import { RcStage } from "./RcStage";
+import { RcUnsupportedPlatform } from "./RcUnsupportedPlatform";
 import { RcWorkbenchErrorSlot } from "./RcWorkbenchErrorSlot";
 import styles from "./RemoteComputerA2.module.css";
 
@@ -70,10 +73,13 @@ export function RcWorkbench() {
 
   const mode = workbenchMainMode(rc.status);
   const surface = resolveRcA2Surface(mode, page);
+  /* S6 平台降级：非 Windows 时主区只剩通知卡，侧栏 / 错误槽 / 补救入口全退场（首帧 undefined 不降级，Windows 无感）。 */
+  const platform = usePlatform();
+  const unsupported = rcPlatformDegraded(platform);
   const channelUp = rc.status?.running ?? false;
   const hasLiveSession = isSessionActive(rc.status);
   const refreshDeviceChecks = useRcAutoCheck({
-    enabled: !hasLiveSession && page !== "history",
+    enabled: !hasLiveSession && page !== "history" && !unsupported,
     channelUp,
     refreshTargets: rc.refreshTargets,
     probeTargets: rc.probeTargets,
@@ -85,6 +91,8 @@ export function RcWorkbench() {
 
   useEffect(() => {
     if (autoStartDone) return;
+    // S6：非 Windows 上 rc 命令不存在（Rust 整模块 cfg(windows) 门控），自动开通道只会白发一次失败 toast。
+    if (unsupported) return;
     if (rc.status === null && rc.error === null) return;
     setAutoStartDone(true);
     if (readAutoStartChannel() && !channelUp) {
@@ -143,8 +151,9 @@ export function RcWorkbench() {
      pending→session 整棵 RcStage 重挂、解码器归零）。 */
   const onStage = surface === "session" || surface === "pending" || surface === "inbound";
 
-  const content =
-    surface === "files" ? (
+  const content = unsupported ? (
+    <RcUnsupportedPlatform platform={platform} />
+  ) : surface === "files" ? (
       <RcPageFiles rc={rc} selectedPeer={selectedId} onSelectPeer={setSelectedPeer} showTargetPicker={false} />
     ) : surface === "history" ? (
       <RcPageHistory
@@ -207,12 +216,14 @@ export function RcWorkbench() {
           channelUp={channelUp}
           busy={rc.busy}
           sessionLabel={sessionLabel}
+          unsupported={unsupported}
           onStartChannel={startChannel}
         />
       )}
 
       <div className={styles.workbenchBody}>
-        {!chromeHidden && (
+        {/* S6：降级态侧栏整块不渲染——设备列表 / 「这台电脑」卡 / 工具行在非 Windows 上全是死控件。 */}
+        {!chromeHidden && !unsupported && (
           <RcA2Sidebar
             page={page}
             targets={rc.targets}
@@ -253,8 +264,8 @@ export function RcWorkbench() {
               pending={pending} capability={session.capability} busy={rc.busy}
               onEnd={rc.end} onReturn={() => setPage("devices")} toast={toast} />
           )}
-          {/* 错误条只服务页面态：stage 顶部自带 RcErrorPanel，双挂会出两条 */}
-          {rc.error && !onStage && (
+          {/* 错误条只服务页面态：stage 顶部自带 RcErrorPanel，双挂会出两条；降级态另抑制（mac 上 rc.error 必现，但不是用户该看的话）。 */}
+          {rc.error && !onStage && !unsupported && (
             <RcWorkbenchErrorSlot
               error={rc.error}
               isOpError={rc.isOpError}

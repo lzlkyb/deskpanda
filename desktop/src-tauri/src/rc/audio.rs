@@ -422,7 +422,8 @@ use encode::mf_err;
 
 // 🔴 macOS 音频采集（原 `#[path = "../macos/remote_audio.rs"] mod mac_capture;`）
 // 本仓未迁：它依赖 `src/macos/remote_audio.m` 那套 Objective-C 桥接，
-// 属于「macOS 是否本轮交付」待定项（拆分方案 §S6）。
+// 属于拆分方案 S6「macOS 交付」阶段（2026-11-20 已决断：本轮保留 mac 构建、
+// 只出壳子 + 前端降级提示；迁入范围清单见该文档 S6.2）。
 // 删声明而不是留空指向——否则 `cargo fmt` 会去读不存在的文件而整条门禁失败。
 #[cfg(test)]
 mod tests;

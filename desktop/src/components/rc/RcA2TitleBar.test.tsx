@@ -59,6 +59,25 @@ describe("RcA2TitleBar（批7 自绘标题栏）", () => {
     expect(screen.queryByText("远程通道已开启")).toBeNull();
   });
 
+  it("🔴 降级态（S6 非 Windows）：中格是静态徽章，不出可点按钮（mac 上点了必然失败，不给死按钮）", () => {
+    const onStartChannel = vi.fn();
+    renderBar({ channelUp: false, unsupported: true, onStartChannel });
+
+    expect(screen.getByText("远程电脑仅支持 Windows")).toBeTruthy();
+    // 「通道未启动 · 点击开启」那枚补救按钮在降级态不许出现
+    expect(screen.queryByRole("button", { name: /通道未启动/ })).toBeNull();
+    // 徽章本体也不是 button——没有任何「点了会发起一次注定失败 invoke」的入口
+    expect(screen.queryByRole("button", { name: /远程电脑仅支持/ })).toBeNull();
+    expect(onStartChannel).not.toHaveBeenCalled();
+  });
+
+  it("降级态让位于会话态文案（真有会话时它比平台边界紧急）", () => {
+    renderBar({ unsupported: true, sessionLabel: "对方正在远程本机" });
+
+    expect(screen.getByText("对方正在远程本机")).toBeTruthy();
+    expect(screen.queryByText("远程电脑仅支持 Windows")).toBeNull();
+  });
+
   it("三个自绘窗口按钮都在最右格", () => {
     renderBar();
 

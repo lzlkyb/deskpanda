@@ -15,6 +15,10 @@
  *  3. 状态位**优先显示会话态文案**：被别人远程 / 有申请在等对方同意，比
  *     「通道已开启」紧急。会话真正开始（surface=session）时整条标题栏会被
  *     `hidesWorkbenchTitleBar` 收掉，那一态另有 `RcSessionTop` 承担拖拽与关闭。
+ *  4. 状态位还有**第三种形态**（S6，2026-11-20）：平台降级（非 Windows）时是
+ *     静态徽章「远程电脑仅支持 Windows」——那一态通道永远起不来，可点按钮点了
+ *     必然失败，故只报状态不给出口（与 1 的「别把出口藏起来」是同一条判据的
+ *     两面：出口不存在时，就不要画一个出口）。
  */
 import { MonitorUp } from "lucide-react";
 import { RcWindowControls } from "./RcWindowControls";
@@ -24,6 +28,7 @@ export function RcA2TitleBar({
   channelUp,
   busy,
   sessionLabel,
+  unsupported = false,
   onStartChannel,
 }: {
   /** 远程通道是否已启动（`rc.status.running`）。 */
@@ -32,6 +37,8 @@ export function RcA2TitleBar({
   busy: boolean;
   /** 会话态文案（被别人远程 / 有申请等待）。空串 = 无会话，看通道状态。 */
   sessionLabel: string;
+  /** S6 平台降级（非 Windows）：中格换静态徽章，不出可点的失败入口。 */
+  unsupported?: boolean;
   onStartChannel: () => void;
 }) {
   return (
@@ -48,12 +55,19 @@ export function RcA2TitleBar({
       </div>
 
       {/* 状态位：有会话态文案就让它占位，否则报通道状态。
-          两态都是「圆点 + 一句话」，只差颜色与可点性——与稿子的单一形态同构，
-          免得看起来像两种不同的东西。 */}
+          三种形态都是「圆点 + 一句话」，只差颜色与可点性——与稿子的单一形态同构，
+          免得看起来像几种不同的东西。降级态（unsupported）是唯一的纯静态形态。 */}
       {sessionLabel ? (
         <span className={styles.channelStatus}>
           <span className={styles.channelDot} aria-hidden="true" />
           {sessionLabel}
+        </span>
+      ) : unsupported ? (
+        /* 降级态（S6）：静态徽章。非 Windows 上通道永远起不来，点了必然失败——
+           不给死按钮。圆点走 warning，与主区通知卡同一语义。 */
+        <span className={styles.channelStatus}>
+          <span className={`${styles.channelDot} ${styles.channelDotWarn}`} aria-hidden="true" />
+          远程电脑仅支持 Windows
         </span>
       ) : channelUp ? (
         <span className={styles.channelStatus}>

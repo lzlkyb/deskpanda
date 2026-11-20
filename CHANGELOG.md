@@ -30,8 +30,12 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 
 ## [Unreleased]
 
+### 新增
+- macOS 上安装 DeskPanda 也能正常用了：托盘常驻、检查更新、自动更新都可用；打开远程电脑会看到「暂不支持 macOS」的明确说明（当前平台、本机还能做什么），而不是点了没反应
+
 ### 变更
 - 自动更新在国内改走 Gitee 镜像：检查更新与下载安装包不再只能依赖 GitHub 和第三方代理
+- 远程电脑功能当前只在 Windows 电脑上提供；macOS 上的采集 / 编码 / 音频 / 键鼠注入依赖一整套尚未迁入的平台桥接，已正式排入后续阶段（拆分方案 S6），期间 mac 构建保留、只出壳子与提示
 
 ### 修复
 - 修复工作台设置页缺项：画质档、画面范围、会话防休眠此前只有后台能力、没有界面入口（拆分迁移时丢失），现已补进设置页——「画面」分区两行 + 「通用」里的会话防休眠行
@@ -48,6 +52,10 @@ gen-changelog.mjs 当成真实版本段解析——该脚本不跳过代码围�
 - 注册穷举守卫补**反向**断言：非 Windows 段里出现的壳子命令，Windows 段也必须注册。`rc_net_diag` 与 `open_file_location` 这次是两段全漏，原有守卫只查「Windows 段有的非 Windows 段必须有」这一个方向，查不到。
 - `open_file_location` 自带 UNC / 网络共享路径拦截（`is_unsafe_network_path`）：远程文件面板展示的路径来自对端、可能是被投毒的内容，Windows 上对这类路径做 `exists()` / `explorer` 会**自动发起 SMB 认证**、泄漏用户 NTLMv2 凭据哈希。macOS 的 reveal 桥接未迁，诚实报错不静默。
 - 设计稿 `design/远程电脑-设置页补画面分区-2026-11-20.html`（`design/` 按仓规不入库）：四张图含画质双列下拉展开、范围单列下拉 + 禁用态、能力读取失败错误条。错误条实现用产品真实的 danger 红，稿中近似画成橙色。
+- 平台判据收口 `desktop/src/lib/rcPlatform.ts`（rc 域唯一判断处，不复用壳子 `lib/platform.ts`——本仓无消费方，且 rc 域文件统一 `rc` 前缀）+ `desktop/src/hooks/usePlatform.ts`（模块级单飞读 `get_app_info`，进程内只发一次，失败回落 undefined 且不重试）。**undefined 不降级**：首帧与读取失败都不亮提示，防 Windows 首帧闪一下「暂不支持」。
+- 降级态四处接线：主区换通知卡（`RcUnsupportedPlatform`，吃 theme.css warning 令牌）/ 侧栏整体不渲染 / 错误槽抑制（mac 上 invoke 失败也无红条）/ 标题栏中格静态徽章（「远程电脑仅支持 Windows」，非按钮）；另停 `useRcAutoCheck` 轮询与自动开通道（该 pref 缺省 true，否则 mac 白弹失败 toast）。判据「出口不存在时就不要画一个出口」。
+- 拆分方案文档迁入本仓 `docs/DeskPanda-拆分方案-2026-11-19.md`（自 PastePanda，现为 DeskPanda 侧活文档）：S1–S5 标记完成态并补记实际偏差（S2 未迁 macOS 三件套、S3 的 12 处依赖落点、S5 体积红线实测值），新增 **S6 正式阶段**（macOS 交付：迁入范围清单 / 迁移对账 / 验收判据；§6 的 macOS 待定项改为 2026-11-20 已决断 D6）。`CLAUDE.md`、`README.md` 与 5 处代码注释（`lib.rs` / `commands/rc.rs` / `commands/system.rs` / `rc/mod.rs` / `rc/audio.rs`）原指向 PastePanda 仓的悬空引用全部改指本文件。
+- 新增 19 条测试（全量 1009 → 1028）：`rcPlatform` 5（含 🔴 undefined 不降级、大小写敏感）/ `usePlatform` 3（含 🔴 多处挂载只发一次 invoke）/ `RcUnsupportedPlatform` 4 / `RcA2TitleBar` +2（降级态中格是静态徽章、无死按钮）/ `RcWorkbench` +5（接线：mac 主区只剩通知卡、侧栏退场、🔴 Windows 零影响、首帧 undefined 不降级、错误条抑制）。7 处注入破坏均精确变红后还原。
 
 ## [0.1.1] - 2026-11-20
 

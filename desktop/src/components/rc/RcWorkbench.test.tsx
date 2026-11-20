@@ -27,10 +27,13 @@ const h = vi.hoisted(() => ({
   probeTargets: vi.fn().mockResolvedValue(undefined),
   refreshTargets: vi.fn(),
   visible: true,
+  error: null as string | null,
   end: vi.fn().mockResolvedValue(true),
   stageMount: vi.fn(),
   stageUnmount: vi.fn(),
 }));
+/** S6 平台降级用例：控制 usePlatform 的回值（默认 undefined = 首帧未读到）。 */
+const platformValue = vi.hoisted(() => ({ value: undefined as string | undefined }));
 /** 批7 审查补：toast 要能被断言——「通道未启动时点检测」的修复靠的就是它。 */
 const toastSpy = vi.hoisted(() => vi.fn());
 
@@ -46,7 +49,7 @@ vi.mock("./RcStage", async () => {
 vi.mock("@/hooks/useRc", () => ({
   useRc: () => ({
     status: h.status,
-    error: null,
+    error: h.error,
     busy: false,
     isOpError: false,
     targets: h.targets,
@@ -67,6 +70,7 @@ vi.mock("@/hooks/useRc", () => ({
   }),
 }));
 vi.mock("@/hooks/useWindowVisible", () => ({ useWindowVisible: () => h.visible }));
+vi.mock("@/hooks/usePlatform", () => ({ usePlatform: () => platformValue.value }));
 vi.mock("@/hooks/useRcLaunch", () => ({
   useRcLaunch: () => ({
     cap: "control",
@@ -349,5 +353,80 @@ describe("RcWorkbench 自动确认设备", () => {
     // waitguard:allow: 本用例零取数，微任务 flush 不是就绪信号
     await act(async () => { await Promise.resolve(); });
     expect(h.probeTargets).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * S6 平台降级接线（2026-11-20）：非 Windows 上 rc 命令在 Rust 侧整模块
+ * `#[cfg(windows)] 门控 ⇒ invoke 一律失败。降级态的四件事在这层汇合：
+ * 主区换通知卡 / 侧栏整体不渲染 / 错误条抑制 / 标题栏中格出静态徽章。
+ *
+ * 三条成对：① mac 降级；② **Windows 不许被误伤**（守卫写反方向是常见回归）；
+ * ③ 首帧 undefined 不降级（Windows 首帧不许闪通知卡）。
+ */
+describe("RcWorkbench 接线：S6 平台降级（非 Windows）", () => {
+  beforeEach(() => {
+    h.targets = [];
+    h.status = status(null, false);
+    h.error = null;
+    platformValue.value = undefined;
+  });
+
+  it("macOS：主区只剩通知卡；侧栏（设备列表 / 工具行）整体不渲染", () => {
+    platformValue.value = "macos";
+    render(<RcWorkbench />);
+
+    expect(screen.getByText("远程电脑暂不支持 macOS")).toBeTruthy();
+    // 侧栏退场的两个探针：设备页搜索框与底部工具行
+    expect(screen.queryByRole("searchbox", { name: "搜索设备" })).toBeNull();
+    for (const tool of ["文件", "记录", "设置"]) {
+      expect(screen.queryByRole("button", { name: tool })).toBeNull();
+    }
+    // 标题栏仍在（窗口 decorations(false)，拖拽区与窗口按钮不能少）
+    expect(screen.getByRole("banner")).toBeTruthy();
+    for (const name of ["最小化", "最大化", "关闭"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+  });
+
+  it("macOS：标题栏中格是静态徽章，不出「通道未启动 · 点击开启」死按钮", () => {
+    platformValue.value = "macos";
+    render(<RcWorkbench />);
+
+    expect(screen.getByText("远程电脑仅支持 Windows")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /通道未启动/ })).toBeNull();
+  });
+
+  it("🔴 Windows 零影响：降级分支不许误伤正常态（通知卡 / 徽章 / 侧栏都在原样）", () => {
+    platformValue.value = "windows";
+    render(<RcWorkbench />);
+
+    expect(screen.queryByText("远程电脑暂不支持")).toBeNull();
+    expect(screen.queryByText("远程电脑仅支持 Windows")).toBeNull();
+    // 正常态的中格照旧是可点补救入口（上面 mac 那条刚钉了它不许出现）
+    expect(screen.getByRole("button", { name: /通道未启动 · 点击开启/ })).toBeTruthy();
+    // 侧栏照旧渲染（工具横排是它的常驻底栏；搜索框默认折叠，不能当探针）
+    expect(screen.getByRole("button", { name: "文件" })).toBeTruthy();
+  });
+
+  it("首帧 platform 未读到（undefined）：不降级，Windows 首帧不闪通知卡", () => {
+    platformValue.value = undefined;
+    render(<RcWorkbench />);
+
+    expect(screen.queryByText("远程电脑暂不支持")).toBeNull();
+    expect(screen.getByRole("button", { name: "文件" })).toBeTruthy();
+  });
+
+  it("降级态抑制错误条：mac 上「命令不存在」不是用户该看的话（Windows 仍照常显示）", () => {
+    platformValue.value = "macos";
+    h.error = "command not found: rc_get_status";
+    render(<RcWorkbench />);
+    // 通知卡照常；错误条不在（RcErrorPanel 对未识别错误把原文印在 hint 里）
+    expect(screen.getByText("远程电脑暂不支持 macOS")).toBeTruthy();
+    expect(screen.queryByText("command not found: rc_get_status")).toBeNull();
+
+    platformValue.value = "windows";
+    render(<RcWorkbench />);
+    expect(screen.getByText("command not found: rc_get_status")).toBeTruthy();
   });
 });

@@ -127,6 +127,12 @@
   background: var(--text-muted);
 }
 
+/* S6 平台降态圆点：非 Windows 上通道永远起不来，用 warning 报「本平台不提供」——
+   与主区通知卡（--warning-border/--warning-bg）同一语义，不是出错（danger）。 */
+.channelDotWarn {
+  background: var(--warning);
+}
+
 /* ── 自绘窗口按钮（批7）。尺寸照稿子 `.window-action`：46px 宽 × 满高，
    `cursor: default`（Windows 原生窗口键不是手形）。hover 灰用主题混色替掉稿子里
    写死的那个浅灰——工作台跟随主题，暗色下写死浅灰会糊成一片。
@@ -209,6 +215,83 @@
   flex: none;
   padding: 8px 12px 0;
   background: var(--app-bg);
+}
+
+/* ── S6 平台降级通知（非 Windows：远程功能只交付 Windows，见 docs/DeskPanda-拆分方案）──
+   与 .deviceLoadError 的分工：那条是「出了错、可重试」；这条是「本平台不提供」——
+   所以走 warning 三件套而非 danger，且没有任何按钮（没有可重试的操作）。
+   .unsupportedWrap 负责在主区（flex）里居中；卡自身 min(440px, 100%) 自适应窄窗口。 */
+.unsupportedWrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.unsupported {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 24px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--r-card);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.unsupportedHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.unsupportedIcon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  /* --warning 对 --warning-bg 实测 4.54:1（theme.css 语义色补全处），达 AA 小字 */
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.unsupportedTitle {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.unsupportedBody {
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+}
+
+.unsupportedBody b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 附注是「弱一级」的补充信息（本机还能用什么 + 平台回显）：虚线 + muted，
+   与卡片主线拉开，不用实线抢视线。 */
+.unsupportedNote {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  border-top: 1px dashed var(--border-color);
+  padding-top: 10px;
+}
+
+.unsupportedNote code {
+  font: 11px ui-monospace, Consolas, monospace;
+  background: var(--hover);
+  border-radius: 4px;
+  padding: 0 4px;
 }
 
 .mainSurface > :global(main),

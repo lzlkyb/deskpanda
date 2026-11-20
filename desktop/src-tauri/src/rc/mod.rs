@@ -19,8 +19,9 @@ pub mod inbound_tasks;
 pub mod input;
 // 🔴 macOS 采集/输入/编码三件套（原 `#[path = "../macos/remote_*.rs"]`）**本仓未迁**。
 // 它们依赖 `src/macos/` 下一整套 Objective-C 桥接（`av1_bridge.c`、
-// `remote_audio_encoder.m`、`recording_frame.m` 等）与对应的 build.rs 链接配置，
-// 属于「macOS 是否本轮交付」这个待定项（拆分方案 §S6）。
+// `remote_capture.m`、`remote_audio_encoder.m` 等）与对应的 build.rs 链接配置，
+// 属于拆分方案 S6「macOS 交付」阶段（2026-11-20 已决断：本轮保留 mac 构建、
+// 只出壳子 + 前端降级提示；迁入范围清单见该文档 S6.2）。
 // 删掉声明而不是留着空指向：留着的后果是 `cargo fmt` / 任何按模块遍历的工具
 // 都会去读一个不存在的文件而直接失败（本次就是被它挡在门禁 [2/7]）。
 // 恢复方式：把原仓 `src/macos/` 与这三行一起搬回来。
