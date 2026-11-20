@@ -27,6 +27,7 @@
  * `from "@/stores/rcStore"` 的引用继续原样工作。拆分只搬代码、不改行为。
  */
 import { create } from "zustand";
+import { mapConnectError } from "@/lib/rcConnectError";
 import {
   rcApproveInbound,
   rcCancelRequest,
@@ -286,9 +287,11 @@ export const useRcStore = create<RcState>((set, get) => {
   forget: (id) => get().run(() => rcForget(id)),
   approveJoin: (id, name) => get().run(() => rcJoinApprove(id, name)),
   denyJoin: (id) => get().run(() => rcJoinDeny(id)),
-  request: (id, cap) => get().run(() => rcRequestSession(id, cap)),
-  requestUno: (id, code, cap) => get().run(() => rcRequestSession(id, cap, code)),
-  requestPass: (id, pass, cap) => get().run(() => rcRequestSession(id, cap, undefined, pass)),
+  // 三个发起入口都过 mapConnectError：协议握手失败（两端版本不匹配）的裸 iroh
+  // 错误串翻成可行动的人话（lib/rcConnectError.ts，判据来自公网联调实录）。
+  request: (id, cap) => get().run(() => rcRequestSession(id, cap).catch(mapConnectError)),
+  requestUno: (id, code, cap) => get().run(() => rcRequestSession(id, cap, code).catch(mapConnectError)),
+  requestPass: (id, pass, cap) => get().run(() => rcRequestSession(id, cap, undefined, pass).catch(mapConnectError)),
   unoGenerate: (p) =>
     rcUnoGenerate({
       ttlSecs: p.ttlSecs,

@@ -1,5 +1,6 @@
 //! Windows 备用组件按需获取：安装包不再携带 EasyTier 二进制，仓库只保留驱动代码。
-//! 原型开关启用且本地找不到组件时才联网取件；按 build.json 的 SHA256 校验后才执行。
+//! 原型开关启用且本地找不到组件时才联网取件；按**编译期钉入**的仓库内 build.json
+//! 的 SHA256 校验通过后才落盘执行。
 use sha2::Digest;
 use std::{
     path::{Path, PathBuf},
@@ -75,7 +76,13 @@ async fn fetch(name: &str, dir: &Path, target: &Path) -> Result<PathBuf, String>
         .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| e.to_string())?;
-    let shas = manifest(&client).await?;
+    // 🔴 2026-11-20 体检修复：SHA 期望值从「运行时远端取清单」改为**编译期钉入**
+    // （仓库内 build.json 经 include_str! 进二进制）。旧实现清单与二进制同源——
+    // 国内走 ghproxy.net 兜底源时，第三方代理若被控可同时替换两者，SHA 校验
+    // 形同虚设（启用该特性即供应链 RCE 面）。现在代理最多劫持下载失败，不可能
+    // 劫持「校验通过」。换组件时更新 resources/easytier/ 下的组件与 build.json
+    // 即可，本函数自动跟随（编译期读的就是那份文件）。
+    let shas = pinned_shas()?;
     let expected = shas
         .get(name)
         .and_then(|v| v.as_str())
@@ -127,35 +134,17 @@ async fn fetch(name: &str, dir: &Path, target: &Path) -> Result<PathBuf, String>
     Err("备用组件获取失败，所有来源均未通过校验".into())
 }
 
-async fn manifest(
-    client: &reqwest::Client,
-) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    for source in SOURCES {
-        let url = source_url(source, "windows-x86_64/build.json");
-        let fetched: Result<serde_json::Value, String> = async {
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?
-                .error_for_status()
-                .map_err(|e| e.to_string())?;
-            let body = response.bytes().await.map_err(|e| e.to_string())?;
-            serde_json::from_slice(&body).map_err(|e| e.to_string())
-        }
-        .await;
-        match fetched {
-            Ok(json) => {
-                return json
-                    .get("sha256")
-                    .and_then(|v| v.as_object())
-                    .cloned()
-                    .ok_or_else(|| "备用组件清单格式错误".to_string());
-            }
-            Err(error) => log::warn!("[RC-UNDERLAY] 备用组件清单获取失败，换源：{error}"),
-        }
-    }
-    Err("备用组件清单不可用".into())
+/// 编译期钉入的校验清单：仓库内 `resources/easytier/windows-x86_64/build.json`。
+/// 见 [`fetch`] 里的 🔴 注释——期望值绝不能与二进制同源获取。
+fn pinned_shas() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    const PINNED_BUILD_JSON: &str =
+        include_str!("../../../resources/easytier/windows-x86_64/build.json");
+    serde_json::from_str::<serde_json::Value>(PINNED_BUILD_JSON)
+        .map_err(|e| format!("编译期钉入的备用组件清单不合法：{e}"))?
+        .get("sha256")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .ok_or_else(|| "编译期钉入的备用组件清单缺少 sha256 段".to_string())
 }
 
 async fn fetch_notices(client: &reqwest::Client, dir: &Path) {
@@ -217,7 +206,9 @@ mod tests {
 
     #[test]
     fn manifest_covers_every_bundlable_binary_with_canonical_sha() {
-        let map = committed_manifest()["sha256"].as_object().unwrap().clone();
+        // 🔴 走 pinned_shas()（运行时真正用的同一条路径）而不是另读一遍文件：
+        // 钉的就是「运行时校验清单 = 仓库内 build.json」这件事本身。
+        let map = pinned_shas().expect("编译期清单必须可用");
         for name in BINARIES {
             let sha = map.get(name).and_then(|v| v.as_str()).unwrap_or_default();
             assert!(
