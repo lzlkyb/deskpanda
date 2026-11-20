@@ -258,11 +258,22 @@ fn resolve_gitee_repository(runtime: Option<String>) -> Option<String> {
 /// 候选更新源分组，按顺序尝试：前一组检查或下载任一步失败，才换下一组。
 /// 手动 env 覆盖（APP_UPDATE_ENDPOINT）存在时只用这一组、不做自动换源，保持覆盖语义单一可预期。
 fn candidate_endpoint_groups() -> Result<Vec<Option<Vec<url::Url>>>, String> {
-    if let Some(eps) = resolve_update_endpoints()? {
+    build_candidate_groups(resolve_update_endpoints()?, gitee_repository())
+}
+
+/// 纯函数：把「环境变量里读到了什么」与「分组怎么排」分开，顺序才能被单测钉住。
+///
+/// 顺序是产品行为：**Gitee 镜像在前、tauri.conf.json 的端点在后**。国内用户靠
+/// 第一组直连 Gitee（比任何公共 GitHub 代理稳），境外用户或镜像挂掉时第二组兜底。
+fn build_candidate_groups(
+    override_endpoints: Option<Vec<url::Url>>,
+    gitee_repo: Option<String>,
+) -> Result<Vec<Option<Vec<url::Url>>>, String> {
+    if let Some(eps) = override_endpoints {
         return Ok(vec![Some(eps)]);
     }
     let mut groups = Vec::new();
-    if let Some(repo) = gitee_repository() {
+    if let Some(repo) = gitee_repo {
         let gitee_url = format!("https://gitee.com/{repo}/raw/releases/latest/updater-gitee.json");
         let gitee =
             url::Url::parse(&gitee_url).map_err(|e| format!("Gitee 更新源 URL 无效: {e}"))?;
@@ -775,5 +786,44 @@ mod tests {
             "应为 owner/repo：{DEFAULT_GITEE_REPOSITORY}"
         );
         assert!(parts.iter().all(|p| !p.trim().is_empty()), "两段都不能为空");
+    }
+
+    /// 顺序本身就是产品行为：Gitee 组必须排第一，配置端点兜底排第二。
+    /// 写反了境外/镜像故障时先撞 GitHub —— 国内用户等于又回到「直连超时」。
+    #[test]
+    fn gitee_group_is_first_then_config_fallback() {
+        let groups = build_candidate_groups(None, Some("lzul/deskpanda".into())).unwrap();
+        assert_eq!(groups.len(), 2);
+        let first = groups[0].as_ref().expect("第一组应显式给 Gitee 端点");
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first[0].as_str(),
+            "https://gitee.com/lzul/deskpanda/raw/releases/latest/updater-gitee.json"
+        );
+        assert!(
+            groups[1].is_none(),
+            "第二组必须是 None（= 用 tauri.conf.json 里的端点兜底）"
+        );
+    }
+
+    /// 没有 Gitee 仓库时只剩兜底组；不能塞一个空组，那会白发一次必然失败的请求。
+    #[test]
+    fn no_gitee_repo_leaves_only_config_fallback() {
+        let groups = build_candidate_groups(None, None).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].is_none());
+    }
+
+    /// `APP_UPDATE_ENDPOINT` 的覆盖语义不能变：只用这一组、不做自动换源
+    /// （本地假源测试 `fake-update-server.mjs` 就靠这条）。
+    #[test]
+    fn explicit_override_ignores_gitee() {
+        let eps = vec![url::Url::parse("http://127.0.0.1:8899/updater.json").unwrap()];
+        let groups = build_candidate_groups(Some(eps), Some("lzul/deskpanda".into())).unwrap();
+        assert_eq!(groups.len(), 1, "覆盖模式下不应再追加 Gitee 组");
+        assert_eq!(
+            groups[0].as_ref().unwrap()[0].as_str(),
+            "http://127.0.0.1:8899/updater.json"
+        );
     }
 }
