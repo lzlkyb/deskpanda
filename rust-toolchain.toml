@@ -1,0 +1,18 @@
+# 🔴 工具链钉版本的唯一源：本机、IDE（rust-analyzer）与 CI 都读这一份。
+#
+# 为什么要钉：CI 原来跟 `latest stable` 走，而本机落后若干版本 ⇒ 新版本新增的
+# clippy lint 与 deprecated 标注**只会把 CI 的 `-D warnings` 打红，本地永远全绿**，
+# 红灯只能靠推送后去 Actions 里看才知道。2026-11-20 实测踩了两条：
+#   - `chunks_exact_to_as_chunks`（cargo/clippy 1.100 新增，本机 1.96 没有该 lint，
+#     而它建议的 `as_chunks` 在 1.96 里也还不存在 —— 照 CI 的建议改反而编不过）
+#   - `AtomicI64::fetch_update` → `try_update` 弃用（同上，1.96 里还没有新名字）
+# 钉住之后两侧完全一致：本地 pre-push 跑过的门禁，CI 跑的一定是同一套结果。
+#
+# 升级方式（**有意为之**，不要让版本被动漂移）：
+#   1. 改这里的 `channel`，并同步 `.github/workflows/build.yml` 里四处 `toolchain:`；
+#   2. 本机 `rustup toolchain install <新版本>` 后全量重编一次；
+#   3. 把新版本报出的 lint / 弃用当真实待办逐条修掉（别用 #[allow] 抹平），再提交。
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

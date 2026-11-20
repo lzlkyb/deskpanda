@@ -72,6 +72,35 @@ jobs:
         run: npm run vite:build
         working-directory: desktop
 
+  # 工具链口径自检（3 秒，ubuntu，不编译任何东西）。
+  # 为什么需要：`rust-toolchain.toml` 的 channel 与下面四处 `toolchain:` 是**手写
+  # 同步**的（YAML 里没法引用 toml）。一旦漂了，就会回到「本机全绿、CI 红」的老
+  # 问题——2026-11-20 连红 5 次的直接原因就是本机 1.96 与 CI latest stable 不一致。
+  # 所以用一道门禁把它钉死，顺带禁止 `@stable` 回潮。
+  toolchain-pin:
+    name: 工具链口径一致
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: rust-toolchain.toml 与各作业钉的版本必须相同
+        run: |
+          set -e
+          want=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          if [ -z "$want" ]; then echo "❌ rust-toolchain.toml 里没读到 channel"; exit 1; fi
+          got=$(grep -oE 'toolchain: *[0-9]+\.[0-9]+\.[0-9]+' .github/workflows/build.yml \
+                | sed 's/.*: *//' | sort -u | tr '\n' ' ' | sed 's/ $//')
+          echo "rust-toolchain.toml = $want"
+          echo "build.yml 里钉的    = [$got]"
+          if [ "$got" != "$want" ]; then
+            echo "❌ 不一致：改 channel 时四处 toolchain: 也要一起改"
+            exit 1
+          fi
+          if grep -q 'dtolnay/rust-toolchain[@]stable' .github/workflows/build.yml; then
+            echo "❌ 又出现了 rust-toolchain@stable：必须显式钉版本，否则本机会和 CI 脱节"
+            exit 1
+          fi
+          echo "✅ 工具链口径一致，且没有 latest stable 引用"
+
   # 轻量测试：仅 PR / 非 tag 的 push / 手动触发时跑，保护合入质量（用 dev 编译，快）。
   # tag 发版时跳过本 job —— 由 build-windows 内的 `cargo test --release` 统一覆盖，
   # 避免 dev + release 两遍全量依赖编译。
@@ -85,7 +114,13 @@ jobs:
       SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      # 🔴 版本与仓库根的 rust-toolchain.toml 一致（那里是唯一源，本机/IDE 也读它）。
+      # 为什么不用 `@stable`：跟 latest stable 走的本机会与 CI 脱节，新 lint 只红 CI
+      # 不红本机 —— 弃用与新增 lint 的两次实测见 rust-toolchain.toml 顶部注释。
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
@@ -111,7 +146,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      # 🔴 版本与仓库根的 rust-toolchain.toml 一致（那里是唯一源，本机/IDE 也读它）。
+      # 为什么不用 `@stable`：跟 latest stable 走的本机会与 CI 脱节，新 lint 只红 CI
+      # 不红本机 —— 弃用与新增 lint 的两次实测见 rust-toolchain.toml 顶部注释。
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
       - name: Sccache Setup
         uses: mozilla/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
@@ -162,7 +203,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      # 🔴 版本与仓库根的 rust-toolchain.toml 一致（那里是唯一源，本机/IDE 也读它）。
+      # 为什么不用 `@stable`：跟 latest stable 走的本机会与 CI 脱节，新 lint 只红 CI
+      # 不红本机 —— 弃用与新增 lint 的两次实测见 rust-toolchain.toml 顶部注释。
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
       - name: Sccache Setup
         uses: mozilla/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
@@ -331,7 +378,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      # 🔴 版本与仓库根的 rust-toolchain.toml 一致（那里是唯一源，本机/IDE 也读它）。
+      # 为什么不用 `@stable`：跟 latest stable 走的本机会与 CI 脱节，新 lint 只红 CI
+      # 不红本机 —— 弃用与新增 lint 的两次实测见 rust-toolchain.toml 顶部注释。
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
