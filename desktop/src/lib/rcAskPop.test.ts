@@ -96,9 +96,11 @@ describe("跨端接线守卫", () => {
   });
 
   it("三条命令都在 invoke_handler 里注册过（定义在 rc/ask_pop.rs，注册守卫扫不到它）", () => {
-    const MAIN_RS = read("../../src-tauri/src/main.rs");
+    // 注册表在 `app.rs` 而不是 `main.rs`：后者是薄壳（`tauri::mobile_entry_point`
+    // 的 JNI 符号必须落在 lib 目标），应用体整体搬去了 app.rs——见 main.rs 模块文档。
+    const APP_RS = read("../../src-tauri/src/app.rs");
     for (const cmd of ["rc_ask_state", "rc_ask_hide", "rc_ask_reopen"]) {
-      expect(MAIN_RS, `${cmd} 没进 invoke_handler`).toContain(`rc::ask_pop::${cmd}`);
+      expect(APP_RS, `${cmd} 没进 invoke_handler`).toContain(`rc::ask_pop::${cmd}`);
     }
   });
 

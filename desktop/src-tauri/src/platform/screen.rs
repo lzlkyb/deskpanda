@@ -19,12 +19,25 @@
 //! 所以整屏兜底是**逐显示器 BitBlt 再拼合**（[`capture_virtual_screen_rgba`]）：
 //! 每块只触碰本显示器的 DC 区域，天然不存在跨屏拷贝。
 
+//! # 平台边界
+//!
+//! 采集 / 光标 / 工作区全是 Win32 绑定 ⇒ 真实实现按 `cfg(windows)` 门控，
+//! 其余平台（macOS / Linux / **Android**）走同签名的诚实 stub：
+//! 枚举返回 `Err("多屏枚举目前仅支持 Windows")`、抓帧返回
+//! `Err("远程画面目前仅支持 Windows")`、光标回 `(0, 0)`、工作区回 1920x1080
+//! （与拆分前 `pastePanda` 的 `screenshot.rs` / `tray_manager.rs` 同一套口径）。
+//! 调用点（`rc/video/encode.rs` 等）本身按平台分派，stub 只是让**类型与符号**
+//! 在所有目标上都存在——Android 构建要把 `rc` 整棵树编进去，少一个符号就整树红。
+
+#[cfg(windows)]
 use windows::Win32::Foundation::{BOOL, LPARAM, POINT, RECT};
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors,
     GetDC, GetMonitorInfoW, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     HBITMAP, HDC, HGDIOBJ, HMONITOR, MONITORINFO, SRCCOPY,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -46,6 +59,7 @@ pub struct MonitorInfo {
 }
 
 /// 枚举所有显示器（远程多屏切换）。
+#[cfg(windows)]
 pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
     struct Ctx {
         list: Vec<MonitorInfo>,
@@ -102,6 +116,15 @@ pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
     Ok(ctx.list)
 }
 
+/// 非 Windows 桩：多屏枚举是 Win32 能力（`EnumDisplayMonitors`）。
+///
+/// 诚实报错而不返回空 Vec：空 Vec 会让调用方以为「这台机器没有显示器」，
+/// 会话 UI 直接不渲染逐屏切换器——用户看到的是功能凭空消失且零提示。
+#[cfg(not(windows))]
+pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
+    Err("多屏枚举目前仅支持 Windows".into())
+}
+
 /// 指定显示器的桌面矩形 `(x, y, w, h)`（与截帧同一坐标系，供键鼠映射）。
 pub fn monitor_region(index: i32) -> Result<(i32, i32, i32, i32), String> {
     let list = list_monitors()?;
@@ -113,6 +136,7 @@ pub fn monitor_region(index: i32) -> Result<(i32, i32, i32, i32), String> {
 }
 
 /// 光标当前位置（物理像素，虚拟屏幕坐标——与 [`monitor_region`] 同口径）。
+#[cfg(windows)]
 pub fn get_cursor_pos() -> (i32, i32) {
     let mut pt = POINT::default();
     unsafe {
@@ -121,7 +145,16 @@ pub fn get_cursor_pos() -> (i32, i32) {
     (pt.x, pt.y)
 }
 
+/// 非 Windows 桩：`GetCursorPos` 是 Win32。回 `(0, 0)` 而不是 `Err`——
+/// 签名就是 `(i32, i32)`，且唯一消费方（`rc/ask_pop` 的浮层落位）在 Android
+/// 根本不编译浮层窗口路径，回原点不会把任何弹窗摆到错误的位置。
+#[cfg(not(windows))]
+pub fn get_cursor_pos() -> (i32, i32) {
+    (0, 0)
+}
+
 /// 虚拟屏幕尺寸与原点 `(width, height, origin_x, origin_y)`。
+#[cfg(windows)]
 fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
     unsafe {
         (
@@ -144,6 +177,7 @@ fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 /// 编码偶发失败会持续泄漏一个 DC 加一张 4K DIB（约 33MB），
 /// GDI 对象有每进程配额，泄到上限后所有画面都会失败。
 /// 所以可失败部分收进闭包，出来后无论成败都走同一段清理。
+#[cfg(windows)]
 pub fn grab_rect_rgba(
     origin_x: i32,
     origin_y: i32,
@@ -217,8 +251,20 @@ pub fn grab_rect_rgba(
 }
 
 /// `GetDC(NULL)` 用的空窗口句柄。
+#[cfg(windows)]
 fn hwnd_null() -> windows::Win32::Foundation::HWND {
     windows::Win32::Foundation::HWND(std::ptr::null_mut())
+}
+
+/// 非 Windows 桩：GDI 抓帧（见 [`grab_rect_rgba`] 的 Windows 实现）。
+#[cfg(not(windows))]
+pub fn grab_rect_rgba(
+    _origin_x: i32,
+    _origin_y: i32,
+    _width: i32,
+    _height: i32,
+) -> Result<Vec<u8>, String> {
+    Err("远程画面目前仅支持 Windows".into())
 }
 
 /// 指定显示器的 RGBA（不编码）。
@@ -235,6 +281,7 @@ pub fn capture_monitor_rgba(index: i32) -> Result<(i32, i32, Vec<u8>), String> {
 /// 整个虚拟屏幕的 RGBA（多显示器拼合）。
 ///
 /// 🔴 逐显示器 BitBlt 再拼合，理由见模块文档（混合 DPI 下整块 BitBlt 会错位）。
+#[cfg(windows)]
 pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     let (width, height, origin_x, origin_y) = virtual_screen_metrics();
     if width <= 0 || height <= 0 {
@@ -267,7 +314,14 @@ pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     Ok((width, height, canvas))
 }
 
+/// 非 Windows 桩：整屏拼合同样是 GDI 能力。
+#[cfg(not(windows))]
+pub fn capture_virtual_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
+    Err("远程画面目前仅支持 Windows".into())
+}
+
 /// 仅主屏的 RGBA（单显示器场景更省编码）。
+#[cfg(windows)]
 pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     let (width, height) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
     if width <= 0 || height <= 0 {
@@ -275,6 +329,12 @@ pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
     }
     let rgba = grab_rect_rgba(0, 0, width, height)?;
     Ok((width, height, rgba))
+}
+
+/// 非 Windows 桩：主屏抓帧（`GetSystemMetrics` + GDI）。
+#[cfg(not(windows))]
+pub fn capture_primary_screen_rgba() -> Result<(i32, i32, Vec<u8>), String> {
+    Err("远程画面目前仅支持 Windows".into())
 }
 
 /// 显示器工作区（物理像素，含原点）+ 该屏缩放因子。
@@ -297,6 +357,7 @@ pub struct MonitorWorkArea {
 ///   任务栏在上或左侧时坐标系直接错位；
 /// - 把「逻辑」尺寸当「物理」尺寸参与物理坐标钳制，高 DPI（125%/150%）屏上
 ///   弹窗实际物理高度 = 逻辑×缩放，按逻辑高度钳制后底部仍会超出屏幕。
+#[cfg(windows)]
 pub fn get_monitor_work_area(px: f64, py: f64) -> MonitorWorkArea {
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -344,5 +405,19 @@ pub fn get_monitor_work_area(px: f64, py: f64) -> MonitorWorkArea {
         work_w: (work.right - work.left) as f64,
         work_h: (work.bottom - work.top) as f64,
         scale,
+    }
+}
+
+/// 非 Windows 桩：`MonitorFromPoint` / `GetMonitorInfoW` / `GetDpiForMonitor`
+/// 全是 Win32。回 1920x1080 @ scale 1.0（与拆分前 `tray_manager.rs` 同口径）：
+/// 消费方是弹窗落位钳制，回一个「常规桌面」尺寸至少不会把窗口摆到负坐标。
+#[cfg(not(windows))]
+pub fn get_monitor_work_area(_px: f64, _py: f64) -> MonitorWorkArea {
+    MonitorWorkArea {
+        work_x: 0.0,
+        work_y: 0.0,
+        work_w: 1920.0,
+        work_h: 1080.0,
+        scale: 1.0,
     }
 }

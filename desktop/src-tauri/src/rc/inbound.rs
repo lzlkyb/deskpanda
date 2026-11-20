@@ -25,7 +25,13 @@
 //! `&mut InboundVideo` 只需要 `Send`（owned 的 `DxgiPool` 是）。改回
 //! `&self` 会在 net.rs 的 spawn 处报「future cannot be sent」。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+// `AtomicBool` 全平台用（force_key 字段）；`Ordering` 只被 `media` /
+// `media_pipe`（windows|macos）与 `mac_video`（macos）经 `use super::*` 继承——
+// Android 下这三个子模块不存在，不带这道门控就是 unused import
+// （2026-11-20 Android cargo check 实测）。
+use std::sync::atomic::AtomicBool;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::input::{
@@ -552,6 +558,11 @@ pub(super) async fn handle_inbound_input(
         // 与「改画质」那类只影响发起端自己画面的指令不同档，和键鼠注入同级。
         // 「只看」会话拒绝，并且**明确回一条失败**，免得发起端的按钮点了没反应。
         InputEvent::SetHostMute { on } => {
+            // Android 等宿主没有音频输出链路（见下方 not(windows|macos) 分支），
+            // `on` 在这些平台上生来用不到——显式消费掉，免得 unused_variables
+            // 在 Android 构建里常驻（2026-11-20 清 Android 警告时补）。
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let _ = on;
             let err = if assert_control_allowed(cap).is_err() {
                 Some("当前会话仅为「只看」，无法改对方主机声音".to_string())
             } else {

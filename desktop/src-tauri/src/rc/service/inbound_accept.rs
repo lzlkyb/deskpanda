@@ -221,6 +221,10 @@ pub(in crate::rc) async fn spawn_inbound_video(
     // （音频状态是 Windows 宿主专属字段，mobile 无可置/可清，跳过）
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     svc.audio_set_peer_wants(peer_audio);
+    // 协议签名跨平台一致，参数在 mobile 上生来用不到——显式消费掉，
+    // 免得 unused_variables 常驻（2026-11-20 Android check 实测）。
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = peer_audio;
     let Some(video) = crate::rc::inbound::InboundVideo::try_new(
         svc.clone(),
         peer,

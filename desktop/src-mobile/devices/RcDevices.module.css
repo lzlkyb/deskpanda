@@ -1,0 +1,552 @@
+/* 已批准的 B 方案：实底分组与统一移动字体令牌。 */
+.deviceCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+.deviceCard + .deviceCard {
+  border-top: 1px solid var(--border-color);
+}
+.deviceDetails {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+  min-height: 64px;
+  text-align: left;
+}
+.deviceDetails:active,
+.deviceDetails:hover {
+  background: var(--section-bg);
+  transform: none;
+}
+.connectButton {
+  flex: none;
+  min-width: 64px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent-solid);
+  color: var(--text-on-accent);
+  font-size: var(--mobile-font-secondary);
+  font-weight: 600;
+}
+.connectButton:disabled {
+  background: var(--section-bg);
+  color: var(--text-secondary);
+}
+.connectButton:active:not(:disabled) {
+  background: var(--accent-strong);
+  transform: none;
+}
+.connectionEntry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+.connectionEntry + .connectionEntry {
+  border-top: 1px solid var(--border-color);
+}
+.connectionEntry > span { flex: 1; min-width: 0; }
+.connectionEntry strong { display: block; font-size: var(--mobile-font-body); font-weight: 600; }
+.connectionEntry small { display: block; margin-top: 4px; font-size: var(--mobile-font-secondary); color: var(--text-secondary); overflow-wrap: anywhere; }
+.connectionEntry > svg { flex: none; color: var(--text-secondary); }
+.connectionEntry:active:not(:disabled) { background: var(--section-bg); transform: none; }
+.deviceIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 12px;
+  color: var(--text-secondary);
+  background: var(--section-bg);
+}
+.deviceIconOnline {
+  color: var(--text-secondary);
+  background: var(--section-bg);
+}
+.deviceText {
+  min-width: 0;
+  flex: 1;
+}
+.deviceText strong {
+  display: block;
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.deviceType {
+  font-size: var(--mobile-font-secondary);
+}
+
+.deviceSub {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--mobile-font-secondary);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.chevron {
+  color: var(--text-secondary);
+  flex: none;
+}
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 4px;
+  margin-right: 5px;
+  vertical-align: 2px;
+}
+.dotOk {
+  background: var(--success);
+}
+.dotChecking {
+  background: var(--accent);
+}
+.dotUnknown {
+  background: var(--text-secondary);
+}
+.deviceHero {
+  text-align: center;
+  margin: 8px 0 16px;
+}
+.deviceHero > svg {
+  color: var(--accent-strong);
+  stroke-width: 1.3;
+}
+.deviceHero h2 {
+  font-size: var(--mobile-title-size);
+  margin: 12px 0 4px;
+  overflow-wrap: anywhere;
+}
+.deviceHero p {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.primaryBtn,
+.ghostBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 12px;
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+}
+.primaryBtn {
+  background: var(--accent-solid);
+  color: var(--text-on-accent);
+}
+.ghostBtn {
+  background: var(--section-bg);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.pairCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pairHint,
+.dirHint {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.codeInput {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--section-bg);
+  color: var(--text-primary);
+  font-size: var(--mobile-title-size);
+  text-align: center;
+  letter-spacing: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.codeInput::placeholder {
+  font-size: var(--mobile-font-body);
+  letter-spacing: 0;
+  color: var(--text-secondary);
+}
+.pendingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  border-radius: var(--mobile-radius-group);
+  padding: 16px;
+  margin: 0 0 16px;
+}
+.pendingCard p {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.pendingTitle {
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+}
+/* 入站申请确认卡的按钮行：允许/拒绝并排，允许是主操作。 */
+.askActions {
+  display: flex;
+  gap: 8px;
+}
+.askActions button {
+  flex: 1;
+}
+.pairQr {
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  align-self: center;
+}
+.pairQr[data-ready="0"] {
+  display: none;
+}
+.scanOverlay {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scanHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.scanHead button {
+  width: auto;
+}
+.scanTitle {
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+}
+.scanVideo {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--mobile-radius-group);
+  background: var(--section-bg);
+}
+.filesView {
+  width: 100%;
+}
+.fileLayout, .fileControls, .fileRecords { min-width: 0; }
+:global(html[data-mobile-layout="landscape"]) .deviceCard { padding: 4px 12px; }
+:global(html[data-mobile-layout="landscape"]) .transferActions button { min-height: 64px; flex-direction: row; padding: 12px 8px; gap: 8px; }
+@media (min-width: 700px) {
+  :global(html[data-mobile-layout="landscape"]) .fileLayout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+  :global(html[data-mobile-layout="landscape"]) .fileRecords > div:first-child { margin-top: 0; }
+}
+.peerSelect {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--card-bg);
+  border: 0;
+  border-radius: var(--mobile-radius-group);
+  padding: 16px;
+  color: var(--text-primary);
+  text-align: left;
+}
+.peerSelect strong {
+  display: block;
+  font-size: var(--mobile-font-body);
+  overflow-wrap: anywhere;
+}
+.peerSelect small {
+  display: block;
+  font-size: var(--mobile-font-label);
+  color: var(--text-secondary);
+}
+.peerSelect > span {
+  flex: 1;
+  min-width: 0;
+}
+.peerSelect > svg {
+  color: var(--accent-strong);
+  flex: none;
+}
+.transferActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.transferActions button {
+  flex: 1;
+  min-width: 0;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--mobile-font-body);
+  gap: 8px;
+}
+.transferActions .ghostBtn {
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+.dirCard {
+  background: var(--section-bg);
+  border-radius: 12px;
+  padding: 16px;
+}
+.dirLabel {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+}
+.dirPath {
+  color: var(--text-primary);
+  font:
+    var(--mobile-font-secondary)/1.7 ui-monospace,
+    Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.dirHint {
+  margin-top: 8px;
+}
+.peerPick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.peerChip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  min-height: 48px;
+  background: var(--section-bg);
+  color: var(--text-primary);
+  font-size: var(--mobile-font-body);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.peerChipOn {
+  background: var(--accent-light);
+  color: var(--accent-strong);
+}
+.peerDetails {
+  flex: 1;
+  min-width: 0;
+}
+.peerDetails strong {
+  display: block;
+}
+.fileAsk {
+  padding: 16px;
+  border-radius: var(--mobile-radius-group);
+  background: var(--card-bg);
+  margin: 12px 0;
+}
+.fileAskTitle {
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.fileAskLead {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.fileAskBtns {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fileAskBtns button {
+  flex: 1;
+}
+.fileTasks {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--card-bg);
+  border-radius: var(--mobile-radius-group);
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+}
+.fileTask {
+  background: transparent;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fileTask + .fileTask { border-top: 1px solid var(--border-color); }
+.fileTaskHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.fileDir {
+  flex: none;
+  font-size: var(--mobile-font-label);
+  color: var(--accent-strong);
+}
+.fileDirIn {
+  color: var(--success);
+}
+.fileTaskName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--mobile-font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.fileTaskCancel {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  min-width: 48px;
+  min-height: 48px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--mobile-font-label);
+}
+.fileTaskBar {
+  width: 100%;
+  height: 5px;
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--section-bg);
+  color: var(--accent);
+  accent-color: var(--accent);
+}
+.fileTaskBar::-webkit-progress-bar {
+  background: var(--section-bg);
+}
+.fileTaskBar::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 4px;
+}
+.fileTaskBar::-moz-progress-bar {
+  background: var(--accent);
+}
+.fileTaskLine {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.fileTaskSub,
+.fileTaskPeer {
+  font-size: var(--mobile-font-label);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.filePickInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.unoModes {
+  display: flex;
+  gap: 8px;
+}
+.unoModes > button {
+  flex: 1;
+  font-size: var(--mobile-font-secondary);
+}
+.unoInput {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--section-bg);
+  color: var(--text-primary);
+  font-size: var(--mobile-font-body);
+  resize: vertical;
+}
+.unoFp {
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.unoPickBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.unoFieldHint {
+  margin: 0;
+  font-size: var(--mobile-font-secondary);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  transition: color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.unoFieldHint[data-invalid="true"] {
+  color: var(--danger);
+}
+.unoFieldText {
+  display: block;
+  animation: unoFieldTextIn 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes unoFieldTextIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.unoInput {
+  font-size: var(--mobile-font-body);
+}
+
+.fileUse { display: grid; gap: 8px; }
+.fileUseActions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.fileLayout { display: flex; flex-direction: column; gap: 16px; }
+.fileRecords:has(> p:only-child) { order: 1; }
+.endedRecords { border-top: 1px solid var(--border-color); }
+.endedRecords > summary { min-height: 48px; padding: 12px 4px; color: var(--text-secondary); font-size: var(--mobile-font-secondary); cursor: pointer; }
+@media (min-width: 700px) {
+  :global(html[data-mobile-layout="landscape"]) .fileRecords { grid-column: 2; grid-row: 1; }
+  :global(html[data-mobile-layout="landscape"]) .fileControls { grid-column: 1; grid-row: 1; }
+}

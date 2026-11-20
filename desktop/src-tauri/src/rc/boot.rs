@@ -2,7 +2,7 @@
 //!
 //! # 为什么单独一个文件
 //!
-//! `main.rs` 只管「一个有托盘的桌面窗口」，业务接线按壳子的分层纪律不进它。
+//! `app.rs` 只管「一个有托盘的桌面窗口」，业务接线按壳子的分层纪律不进它。
 //! 而这段接线又必须**贴着 `rc` 看**：事件名、回调语义、单例的唯一性，
 //! 改任何一处都要和 `service::` 的 notify 契约对齐，放在 `rc/` 里改错成本最低。
 //!
@@ -53,7 +53,7 @@ const DB_FILE: &str = "deskpanda.db";
 
 /// 建立 Store 与 `RcService` 单例，并把事件回调接上。
 ///
-/// 调用点：`main.rs` 的 `setup`，**一次**。重复调用会 panic（`AppHandle::manage`
+/// 调用点：`app.rs` 的 `setup`，**一次**。重复调用会 panic（`AppHandle::manage`
 /// 对同一个类型只能存一份），这是刻意的：两份 `RcService` 会让会话状态与
 /// ALPN 路由各说各话（原仓在这一点上踩过）。
 pub fn boot(app: &AppHandle) -> Result<Arc<RcService>, String> {

@@ -34,6 +34,11 @@
       "endpoints": [
         "https://github.com/lzlkyb/deskpanda/releases/latest/download/updater.json"
       ],
+      "apkEndpoints": [
+        "https://gitee.com/lzul/deskpanda/raw/releases/latest/apk-update-gitee.json",
+        "https://ghproxy.net/https://github.com/lzlkyb/deskpanda/releases/latest/download/apk-update-ghproxy.json",
+        "https://github.com/lzlkyb/deskpanda/releases/latest/download/apk-update.json"
+      ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY1RDZEOEE5MzVGQzgyMDgKUldRSWd2dzFxZGpXWmR3K3VML1VYOFp1bFZBK2ltVXlmZjFjWVIxSnNMTkZRend6TXladUVvbzIK",
       "windows": {},
       "dangerousInsecureTransportProtocol": true,

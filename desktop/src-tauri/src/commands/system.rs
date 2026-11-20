@@ -28,12 +28,25 @@ pub async fn save_config(
 }
 
 /// 开机自启状态。
+///
+/// **桌面专属**：`tauri-plugin-autostart` 整个 crate 在 Android/iOS 上是空的
+/// （`#![cfg(not(any(target_os = "android", target_os = "ios")))]`），
+/// `ManagerExt` 符号不存在 ⇒ 手机端只能 stub。手机端没有「开机自启」这个概念
+/// （进程生命周期归系统管），前端 `src-mobile/` 也从不调这两条命令。
 #[tauri::command]
 pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
-    use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch()
-        .is_enabled()
-        .map_err(|e| format!("读取自启状态失败: {e}"))
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        app.autolaunch()
+            .is_enabled()
+            .map_err(|e| format!("读取自启状态失败: {e}"))
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Err("当前平台不支持开机自启".to_string())
+    }
 }
 
 /// 设置开机自启。返回**最终生效状态**（而非 `()`）：
@@ -41,17 +54,25 @@ pub fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
 /// 才能回滚——`invokeOrToast` 对 `Result<()>` 命令无从判断（成功也是 undefined）。
 #[tauri::command]
 pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
-    use tauri_plugin_autostart::ManagerExt;
-    let al = app.autolaunch();
-    if enabled {
-        al.enable().map_err(|e| format!("开启自启失败: {e}"))?;
-    } else {
-        al.disable().map_err(|e| format!("关闭自启失败: {e}"))?;
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let al = app.autolaunch();
+        if enabled {
+            al.enable().map_err(|e| format!("开启自启失败: {e}"))?;
+        } else {
+            al.disable().map_err(|e| format!("关闭自启失败: {e}"))?;
+        }
+        // 读回真源而不是直接返回入参：个别平台（Windows 注册表写入）可能存在延迟，
+        // 以插件自己的状态为准，前端拿它校正 UI。
+        al.is_enabled()
+            .map_err(|e| format!("读取自启状态失败: {e}"))
     }
-    // 读回真源而不是直接返回入参：个别平台（Windows 注册表写入）可能存在延迟，
-    // 以插件自己的状态为准，前端拿它校正 UI。
-    al.is_enabled()
-        .map_err(|e| format!("读取自启状态失败: {e}"))
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, enabled);
+        Err("当前平台不支持开机自启".to_string())
+    }
 }
 
 /// 安装目录（NSIS 安装版即 exe 所在目录；dev 下为目标目录）。

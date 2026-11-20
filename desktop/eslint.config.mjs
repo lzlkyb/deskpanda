@@ -57,7 +57,10 @@ export default tseslint.config(
   },
   {
     // 脚本是 Node 环境，跑在构建/钩子里，不受浏览器规则约束。
-    files: ["scripts/**/*.mjs", "*.config.{ts,mjs,js}"],
+    // fetch / setTimeout / AbortController / FormData 等是 Node 18+ 的全局，
+    // js.configs.recommended 的 no-undef 不认它们（2026-11-20 迁入 android-build /
+    // publish-apk 一族时补，之前本仓脚本没用到网络 API）。
+    files: ["scripts/**/*.mjs", "scripts/**/*.ts", "*.config.{ts,mjs,js}"],
     languageOptions: {
       globals: {
         process: "readonly",
@@ -65,6 +68,19 @@ export default tseslint.config(
         URL: "readonly",
         Buffer: "readonly",
         __dirname: "readonly",
+        fetch: "readonly",
+        Response: "readonly",
+        Headers: "readonly",
+        Request: "readonly",
+        FormData: "readonly",
+        Blob: "readonly",
+        AbortController: "readonly",
+        AbortSignal: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
+        structuredClone: "readonly",
       },
     },
   },

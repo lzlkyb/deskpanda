@@ -1,6 +1,6 @@
 //! 应用共享状态（Tauri Managed State）。
 //!
-//! 范式：`main.rs` 里 `app.manage(Arc::new(AppState::new(...)))`，命令里用
+//! 范式：`app.rs` 里 `app.manage(Arc::new(AppState::new(...)))`，命令里用
 //! `tauri::State<Arc<AppState>>` 取。配置用 `tokio::sync::RwLock` 包着——
 //! 读多写少，且同步回调里只能用 `try_read()`。
 //!
@@ -19,7 +19,7 @@ pub struct AppState {
     /// 配置目录（`{config_dir}`，与 data_dir 相同）。
     pub config_dir: std::path::PathBuf,
     /// 供 notifications feature 关闭时也能注入的 AppHandle 存根。
-    /// 需要发桌面通知的代码统一走 main.rs 的 `notify_toast`（那里按 feature 门控），
+    /// 需要发桌面通知的代码统一走 app.rs 的 `notify_toast`（那里按 feature 门控），
     /// 不要直接持有 AppHandle 到处发。
     pub app_handle: std::sync::Mutex<Option<tauri::AppHandle>>,
 }

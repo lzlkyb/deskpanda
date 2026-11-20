@@ -30,7 +30,6 @@ embed-resource = "3"
 [dependencies]
 # Tauri core
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 # 更新源 env 覆盖（APP_UPDATE_ENDPOINT）构造 Url 用，与插件共用同一份 url 2.x
@@ -91,11 +90,26 @@ socket2 = "0.6"
 deskpanda-rc-scale = { path = "crates/rc-scale" }
 # rc/underlay/fetch.rs 拉取公告（rustls 免 OpenSSL 构建依赖）
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-# rc/input.rs 的剪贴板回退路径
-arboard = { version = "3", features = ["image-data"] }
+# 进程级 rustls crypto provider 预装用（`app.rs` 的 `ensure_crypto_provider`）。
+# 不增加编译量：rustls 0.23 已由 reqwest/iroh 带入且带 ring feature（见
+# `cargo tree --target aarch64-linux-android -e features -p rustls`），这里只是
+# 把「显式装一次 provider」的权利握在自己手里。先例：pastePanda 2026-09-30
+# 真机实测 Android 启动即崩（"No rustls crypto provider is configured"），
+# 崩溃发生在 Tauri 建 WebView 的内部 reqwest 上、cargo check 抓不到。
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # argon2 的 OsRng 依赖 rand_core 的 getrandom feature；主 App 靠其他依赖合并启用，
 # 新仓没有那些依赖，必须显式声明，否则 unop.rs 的 SaltString::generate 编译不过。
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+# 桌面专属依赖（Android/iOS 目标不编译，2026-11-20 手机端迁移 S7 补）：
+# - tauri-plugin-single-instance：单实例是桌面语义，插件本身无 Android 实现；
+# - arboard：跨平台剪贴板 crate，**无 Android 后端**（rc/input.rs 的桌面回退路径用；
+#   Android 侧剪贴板走 WebView 与 Kotlin 插件，不经过它）。
+# pastePanda 同款依赖在 2026-09-29 探针实测过（docs/远程电脑-手机端-P0.5探针报告），
+# 结论：不排除这两条，`cargo` 解析 Android 目标时直接报 no matching package。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+arboard = { version = "3", features = ["image-data"] }
 
 # Windows 专属：DWM 圆角（壳）+ 远程桌面的采集/编码/输入/音频绑定
 [target.'cfg(windows)'.dependencies]

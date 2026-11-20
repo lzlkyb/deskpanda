@@ -9,10 +9,12 @@
 //! 为什么放在 tests/ 而不是 src 里的 #[cfg(test)] mod tests：
 //! 本测试构建 mock 应用会把 wry 运行时的原生对话框代码链进测试二进制，
 //! 导入表含 comctl32.dll!TaskDialogIndirect（仅 comctl32 v6 有）。
-//! build.rs 用 cargo:rustc-link-arg-tests 给测试目标补嵌 comctl32 v6
-//! manifest——但该指令只作用于 tests/ 下的集成测试目标，不覆盖
-//! `cargo test --lib` 的 lib 测试二进制（cargo 会拒绝/不应用，
-//! 详见 build.rs 长注释）。放错目录 = 二进制启动即 0xc0000139。
+//! build.rs 用 compile_for_everything 发的**裸** cargo:rustc-link-arg 给
+//! 所有产物（app bin / lib 单测 / tests/）统一补嵌 comctl32 v6 manifest——
+//! 这是唯一同时覆盖 lib 单测二进制的口径（link-arg-tests 到不了它）。
+//! ⚠️ tauri-build 侧必须同时关掉默认 manifest（new_without_app_manifest），
+//! 否则 app bin 两份 RT_MANIFEST ⇒ CVT1100 / LNK1123，详见 build.rs 长注释。
+//! 放错目录 = 二进制启动即 0xc0000139。
 //!
 //! 依赖说明：`cargo test --release` 时 debug_assertions 关闭，插件会拒绝 http
 //! 更新源，需要 tauri.conf.json 的 plugins.updater.dangerousInsecureTransportProtocol
@@ -162,7 +164,9 @@ fn local_http_source_drives_check_download_and_signature_failure() {
     }
 
     // 第一跳：只检查 ⇒ 应收到 available 且版本为 next_version。
-    check_update(app.handle().clone());
+    // check_update 是 async fn，必须 spawn 才会被 poll（直接调用 future 不会执行，
+    // 事件一个都不会来 —— 2026-11-20 实测：不 spawn 时本断言红）。
+    tauri::async_runtime::spawn(check_update(app.handle().clone()));
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut saw_available = false;
     while Instant::now() < deadline {

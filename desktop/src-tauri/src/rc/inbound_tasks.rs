@@ -474,12 +474,20 @@ pub(super) fn boost_frame(boost: &tokio::sync::Notify) {
 /// 零拷贝门槛：硬件 D3D11-aware H.264 MFT + 单输出捕获范围 + 刷新 ≥100Hz，
 /// 三者缺一就不许选——跑不到的档不卖。会话建立与范围变更时各发一次。
 pub(super) async fn send_caps_frame(
-    svc: &Arc<RcService>,
+    // 只被 `opts = svc.stream_opts_snapshot()` 用，而 opts 仅在 Windows / macOS
+    // 分支消费 ⇒ Android 上参数本身没用。与 `commands/rc.rs` 的 mobile 处理同款
+    // （`cfg_attr(mobile, allow(unused_variables))`），不改成按平台分叉调用点。
+    #[cfg_attr(mobile, allow(unused_variables))] svc: &Arc<RcService>,
     send: &Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
 ) {
     #[cfg(target_os = "windows")]
     let caps = super::gpu::encode_caps();
+    // 只被 Windows / macOS 两个分支消费（fps120/hz 与 fps_high 两道闸都建立在
+    // 采集端能力上；Android 是被控端的查看侧，不上报画面能力）⇒ 按平台取，
+    // 不带 `any(...)` 门控的话 Android 构建下就是 unused variable。
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     let opts = svc.stream_opts_snapshot();
+    #[cfg(target_os = "windows")]
     let single_out = !opts.virtual_screen;
     #[cfg(target_os = "windows")]
     let (fps120, hz) = {

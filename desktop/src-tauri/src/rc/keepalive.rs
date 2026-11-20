@@ -94,7 +94,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             {
                 // 插件类在 gen/android 的 app 包下，活动类加载器按名装载
                 let handle = api
-                    .register_android_plugin("com.pastepanda.app", "RcKeepalivePlugin")
+                    .register_android_plugin("com.pastepanda.deskpanda", "RcKeepalivePlugin")
                     .map_err(|e| e.to_string())?;
                 app.manage(RcKeepalive(handle));
             }

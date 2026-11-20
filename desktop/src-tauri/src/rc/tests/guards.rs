@@ -618,7 +618,7 @@ fn 守卫_COM公寓初始化必须收口() {
 /// ❗ 2026-11-20（S4 第二段补线）从 `cfg(feature = "ui-guards")` 改成**常开**：
 ///   这些接线当时确实还不存在，现在存在了——守卫的审计对象一落地就该一直跑，
 ///   留着 feature 只会让它永远不进 pre-push（门禁那条是 `--no-default-features`）。
-///   同时按本仓结构改了三处路径：`invoke_handler` 在 `main.rs`（不在 `lib.rs`）、
+///   同时按本仓结构改了三处路径：`invoke_handler` 在 `app.rs`（不在 `lib.rs`，也不在 `main.rs`——2026-11-20 手机端迁移 S7 起注册表随应用体搬进 app.rs）、
 ///   `on_change` 挂在 `rc/boot.rs` 的会话回调里、capabilities 只有 `default.json`
 ///   （壳子没有 `desktop-plugins.json`）。
 #[test]
@@ -632,12 +632,12 @@ fn 守卫_入站浮层三处接线() {
         "{} 的 windows 名单里没有 rc-ask —— 浮层收不到任何事件",
         caps.0
     );
-    // 注册表在 main.rs（两段 `generate_handler!`，rc 那条是 `cfg(windows)` 段）。
-    let main_rs = include_str!("../../main.rs");
+    // 注册表在 app.rs（两段 `generate_handler!`，rc 那条是 `cfg(any(windows, target_os = "android"))` 段）。
+    let app_rs = include_str!("../../app.rs");
     assert!(
-        main_rs.contains("rc::ask_pop::rc_ask_state,")
-            && main_rs.contains("rc::ask_pop::rc_ask_hide,")
-            && main_rs.contains("rc::ask_pop::rc_ask_reopen,"),
+        app_rs.contains("rc::ask_pop::rc_ask_state,")
+            && app_rs.contains("rc::ask_pop::rc_ask_hide,")
+            && app_rs.contains("rc::ask_pop::rc_ask_reopen,"),
         "ask_pop 的命令没进 invoke_handler —— 浮层卡片永远空白"
     );
     // 丙-② 加了第二种形态（角标）之后，开关权整块收进 ask_pop：调用方只报「状态变了」。
@@ -689,10 +689,10 @@ fn 守卫_画面暂停五处接线成对() {
         "vpause 控制帧的两端字面量不成对 —— 暂停状态到不了发起端眼前"
     );
     // ⑤ 命令注册 + 状态投影：前端两处数据源（被控端按钮 / 发起端告知）都得有字段。
-    //    注册表在本仓 `main.rs`（不是 `lib.rs`：壳子的 `generate_handler!` 在那里）。
-    let main_rs = include_str!("../../main.rs");
+    //    注册表在本仓 `app.rs`（不是 `lib.rs`：壳子的 `generate_handler!` 在那里）。
+    let app_rs = include_str!("../../app.rs");
     assert!(
-        main_rs.contains("commands::rc_video_pause_set,"),
+        app_rs.contains("commands::rc_video_pause_set,"),
         "rc_video_pause_set 没进 invoke_handler —— 抽屉那颗按钮点了没反应"
     );
     let status = include_str!("../service/lifecycle.rs");
@@ -999,9 +999,9 @@ fn 守卫_会话防休眠六处接线成对() {
         cmd.contains("会话防休眠只支持 Windows 或 Mac 被控端"),
         "不支持的宿主必须明确报错，Windows 与 Mac 使用各自电源守卫"
     );
-    // 命令注册与前端两处成对（注册表在 `main.rs`，见文件头说明）。
+    // 命令注册与前端两处成对（注册表在 `app.rs`，见文件头说明）。
     assert!(
-        include_str!("../../main.rs").contains("commands::rc_set_keep_awake,"),
+        include_str!("../../app.rs").contains("commands::rc_set_keep_awake,"),
         "rc_set_keep_awake 没进 invoke_handler —— 开关点了没反应"
     );
     let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");
@@ -1771,9 +1771,9 @@ fn 守卫_拉黑设备必须当场收会话_邀请作废前后端成对() {
         cmd.contains("pub fn rc_invite_revoke"),
         "rc_invite_revoke 命令不见了 —— 作废入口被删，用户只能干等 TTL"
     );
-    // 注册侧与前端侧成对（注册表在 `main.rs`）。
+    // 注册侧与前端侧成对（注册表在 `app.rs`）。
     assert!(
-        include_str!("../../main.rs").contains("commands::rc_invite_revoke,"),
+        include_str!("../../app.rs").contains("commands::rc_invite_revoke,"),
         "rc_invite_revoke 没进 invoke_handler —— 前端点了没反应"
     );
     let ts_cmd = include_str!("../../../../src/lib/api/rcCommands.ts");

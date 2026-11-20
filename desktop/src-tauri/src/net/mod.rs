@@ -30,6 +30,9 @@ pub mod identity;
 pub mod invite;
 pub mod lan_pair;
 pub mod mcast;
+/// Android 切网通知 → 刷新共享端点（Kotlin `IrohNetworkPlugin` 的 Rust 侧装载点）。
+/// 桌面目标下 `init()` 是空 setup，不注册任何插件。
+pub mod network;
 pub mod path_kind;
 pub mod presence;
 pub mod transport;

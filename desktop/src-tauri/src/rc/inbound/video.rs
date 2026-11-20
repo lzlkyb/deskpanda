@@ -47,6 +47,10 @@ mod want_codec_tests {
     }
 }
 // 推流节拍判据收口在 `rc::pace`（inbound.rs 的主题是会话结构与生命周期）。
+// Windows 限定：三个符号在本文件只被硬编管线（melt_step / henc 提帧 /
+// request_key_after_drop）消费，那些全是 `cfg(target_os = "windows")` 项；
+// Android 下不带这道门控就是 unused imports（2026-11-20 Android check 实测）。
+#[cfg(target_os = "windows")]
 use crate::rc::pace::{auto_key_due, want_fps_for, AUTO_KEY_MIN_GAP_MS};
 
 /// 🔴 可靠流积压熔断（2026-10-03，判据收口为纯函数便于无环境单测）。

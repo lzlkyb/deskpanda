@@ -1,0 +1,13 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev:mobile",
+    "beforeBuildCommand": "npm run build:mobile",
+    "devUrl": "http://localhost:1432",
+    "frontendDist": "../dist-mobile"
+  },
+  "bundle": {
+    "resources": {
+      "resources/ffmpeg/*": null
+    }
+  }
+}

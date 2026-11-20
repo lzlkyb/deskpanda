@@ -20,5 +20,7 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src"]
+  // src-mobile：手机端（Tauri Android）独立入口树，与 src/ 共享 @/ 逻辑层。
+  // 2026-11-20 手机端迁移 S7 补；移动端自己的 html/构建在 vite.config.mobile.ts。
+  "include": ["src", "src-mobile"]
 }

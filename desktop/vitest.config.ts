@@ -35,6 +35,28 @@ const DOM_NEEDED_TS = [
   "src/hooks/useRcSessionPrefs.test.ts",
   "src/hooks/useRcSessionAudio.test.ts",
   "src/hooks/useWindowVisible.test.ts",
+  // 构建脚本（M3 Android 迁移 S7）：prepare-android.test.ts 用 DOMParser 校验
+  // 补丁后的 AndroidManifest.xml 是合法 XML，跑 node 环境会 ReferenceError。
+  "scripts/prepare-android.test.ts",
+  // 手机端（src-mobile，2026-11-20 迁移 S7）：清单与 pastePanda 的 DOM_NEEDED_TS
+  // 中 src-mobile 条目一一对应（ts 测试跑 node 环境会挂的才列这里）。
+  "src-mobile/devices/useMobileFileSend.test.ts",
+  "src-mobile/devices/useMobileReceiveDir.test.ts",
+  "src-mobile/devices/useQrScan.test.ts",
+  "src-mobile/session/mobileInputTelemetry.test.ts",
+  "src-mobile/session/pointerPreference.test.ts",
+  "src-mobile/session/useAutoSuggestToast.test.ts",
+  "src-mobile/session/useDirectSwitchToast.test.ts",
+  "src-mobile/session/useFloatingMouse.test.ts",
+  "src-mobile/session/useImmersiveCapsule.test.ts",
+  "src-mobile/session/useMobileConnectionInfo.test.ts",
+  "src-mobile/session/useRcMobileInput.test.ts",
+  "src-mobile/session/useRcSessionKeepalive.test.ts",
+  "src-mobile/session/useRemoteCursor.test.ts",
+  "src-mobile/session/useSessionClipboard.test.ts",
+  "src-mobile/session/useSessionPointer.test.ts",
+  "src-mobile/session/useTouchGestures.test.ts",
+  "src-mobile/ui/mobileSpring.test.ts",
 ];
 
 const alias = {

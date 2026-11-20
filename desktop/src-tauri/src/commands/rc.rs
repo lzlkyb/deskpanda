@@ -1702,6 +1702,9 @@ const SESSION_CHROME_H: f64 = 36.0;
 const SESSION_CHROME_W: f64 = 2.0;
 
 #[tauri::command]
+// mobile 分支只回一条「仅桌面支持」，拿不到 window——参数在 Android/iOS 上
+// 未使用（2026-11-20 Android check 实测的 unused_variables）。
+#[cfg_attr(mobile, allow(unused_variables))]
 pub fn rc_window_minimize(window: tauri::WebviewWindow) -> Result<(), String> {
     // 窗口最小化/最大化是桌面窗口概念；mobile 会话全屏无此操作，诚实报不支持
     #[cfg(desktop)]

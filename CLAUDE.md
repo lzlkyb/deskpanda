@@ -24,7 +24,7 @@
 | 层 | 资产 | 位置 |
 |----|------|------|
 | UI 风格 | 设计 token + 30+ ui 组件 + layout 壳 + 动效体系 | `src/index.css` `src/components/ui/` `src/components/layout/` `src/lib/motion.ts` |
-| 技术架构 | App 骨架 + 托盘/单实例/窗口销毁重建/DWM 圆角 + 命令分层 + 安全原语 | `src/App.tsx` `src-tauri/src/main.rs` `src-tauri/src/commands/` `security/` |
+| 技术架构 | App 骨架 + 托盘/单实例/窗口销毁重建/DWM 圆角 + 命令分层 + 安全原语 | `src/App.tsx` `src-tauri/src/app.rs` `src-tauri/src/commands/` `security/` |
 | 更新架构 | 单飞闸+退避重试+错误分类 → 前端状态机 → 一键发版链 | `src-tauri/src/commands/update.rs` `src/contexts/UpdateContext.tsx` `src/components/update/` `scripts/release.mjs` `scripts/generate-updater-json.mjs` |
 
 **不抽什么**：任何业务代码（MCP/SSH/对话 GUI/防火墙/备份等）。新功能一律在复制出的
@@ -82,7 +82,7 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd desktop; npm r
 
 模块化、可维护性、扩展性，遵循已有的分层架构：
 
-- **Rust 命令分层**（`src-tauri/src/commands/`）：`mod.rs` 只做 `pub mod` + `pub use` 汇总，具体命令按域拆文件（`system.rs` / `update.rs`）。新增命令三处：写函数 → `pub mod` → `pub use` + `main.rs` 的 `invoke_handler` 注册（三处都有注释标出）。
+- **Rust 命令分层**（`src-tauri/src/commands/`）：`mod.rs` 只做 `pub mod` + `pub use` 汇总，具体命令按域拆文件（`system.rs` / `update.rs`）。新增命令：写函数 → 注册表加一行（同模块内）；新模块才需要 `pub mod` + glob `pub use`（**必须 glob**：`#[tauri::command]` 的 `__cmd__` 包装器靠它带出，显式列名会 E0433）→ `app.rs` 的 `invoke_handler!` 注册（各处都有注释标出）。
 - **前端公共纯函数统一放 `lib/`**，按主题分文件（`utils.ts` 已 500+ 行且不在体量门禁扫描范围，**不要再往里堆**，新建主题文件）。
 
 **前端组件体量限制**（硬性规则，**已由机器执行**）：

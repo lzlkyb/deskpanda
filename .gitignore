@@ -30,5 +30,9 @@ Thumbs.db
 # 测试用独立 target 目录：跑 cargo test 时用 CARGO_TARGET_DIR=target-test 绕开
 desktop/src-tauri/target-test/
 
+# Android 交叉编译独立 target 目录（scripts/android-build.mjs 的 CARGO_TARGET_DIR，
+# 首编全树 10–20 分钟、GB 级）；与 target-test 同款理由
+desktop/src-tauri/target-android/
+
 # 排障临时脚本（下划线前缀），不入库
 _*.ps1
