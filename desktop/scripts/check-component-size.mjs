@@ -28,7 +28,10 @@ import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-const SCAN_DIRS = ["src/components", "src/hooks"];
+// 🔴 2026-11-20 体检补：src/contexts 此前不在扫描范围——UpdateContext.tsx 568 行
+// 是全仓最大非测试 tsx、近两倍红线，却完全不受棘轮约束（contexts 里的组件不是
+// 「components 目录的组件」，门禁眼里它不存在）。补入后按棘轮登记存量。
+const SCAN_DIRS = ["src/components", "src/hooks", "src/contexts"];
 
 const MAX_LINES = 300;
 const MAX_HOOKS = 8;
@@ -55,6 +58,8 @@ const BASELINE = {
   "src/hooks/useRcFrames.ts": { lines: 519, hooks: 19 },
   "src/hooks/useRcInboundControls.ts": { lines: 140, hooks: 10 },
   "src/hooks/useRcInput.ts": { lines: 452, hooks: 9 },
+  // 2026-11-20 扫描范围补入 src/contexts 时按实测登记（全仓最大非测试 tsx）。
+  "src/contexts/UpdateContext.tsx": { lines: 568, hooks: 19 },
 };
 
 function walk(dir, out = []) {
