@@ -120,10 +120,14 @@ describe("rttGrade（分档阈值）", () => {
 });
 
 describe("pathKindLabel / pathKindHint（走哪条路）", () => {
-  it("三档文案与 Rust PathKind::label 同构", () => {
+  it("各档文案与 Rust PathKind::label 同构（P1 起 v4/v6 分报）", () => {
     expect(pathKindLabel("lan")).toBe("局域网直连");
     expect(pathKindLabel("direct")).toBe("公网直连");
     expect(pathKindLabel("relay")).toBe("绕中继");
+    expect(pathKindLabel("lan-v6")).toBe("局域网直连(IPv6)");
+    expect(pathKindLabel("direct-v6")).toBe("公网直连(IPv6)");
+    // 🔴 旧值是历史事实，永不改文案——只往新值里加
+    expect(pathKindLabel("direct-v6")).not.toBe(pathKindLabel("direct"));
   });
 
   it("未知 / 空串 → 空文案，界面不显示这一格（不猜）", () => {
@@ -135,6 +139,11 @@ describe("pathKindLabel / pathKindHint（走哪条路）", () => {
   it("绕中继必须给解释：延迟高≠故障", () => {
     expect(pathKindHint("relay")).toContain("正常");
     expect(pathKindHint("")).toBe("");
+  });
+
+  it("v6 两档有各自的提示（P1 验收探针）", () => {
+    expect(pathKindHint("direct-v6")).toContain("IPv6");
+    expect(pathKindHint("lan-v6")).toContain("IPv6");
   });
 });
 

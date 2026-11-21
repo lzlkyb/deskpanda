@@ -170,7 +170,9 @@ export function linkStateHint(s: RcLinkState): string {
  */
 export function pathKindLabel(k: string | undefined): string {
   if (k === "lan") return "局域网直连";
+  if (k === "lan-v6") return "局域网直连(IPv6)";
   if (k === "direct") return "公网直连";
+  if (k === "direct-v6") return "公网直连(IPv6)";
   if (k === "relay") return "绕中继";
   return "";
 }
@@ -182,7 +184,9 @@ export function pathKindLabel(k: string | undefined): string {
 export function pathKindHint(k: string | undefined): string {
   if (k === "relay") return "中继转发，延迟高于直连属正常";
   if (k === "direct") return "已打洞成功，不经中继";
+  if (k === "direct-v6") return "已通过 IPv6 打洞直连，不经中继";
   if (k === "lan") return "同一局域网，延迟最低";
+  if (k === "lan-v6") return "同一局域网(IPv6)，延迟最低";
   return "";
 }
 
