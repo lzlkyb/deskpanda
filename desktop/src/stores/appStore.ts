@@ -54,21 +54,13 @@ interface AppState {
   config: AppConfig;
   /** 是否已经从后端读过一次。未读过时不要用 config 的值做「用户选择」判断。 */
   configLoaded: boolean;
-  /**
-   * 来源应用图标的提取结果缓存（`null` = 提取过但不出来，别再试）。
-   * 消费者是 `lib/source-mappings.ts`，它用 `getState()` 读写以避免循环引用。
-   */
-  realIconCache: Record<string, string | null>;
   setConfig: (config: AppConfig) => void;
   updateConfig: (partial: Partial<AppConfig>) => void;
-  setRealIconUrl: (key: string, url: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   config: DEFAULT_CONFIG,
   configLoaded: false,
-  realIconCache: {},
-  setRealIconUrl: (key, url) => set((s) => ({ realIconCache: { ...s.realIconCache, [key]: url } })),
   setConfig: (config) => {
     if (typeof config.window_animation === "boolean") setMotionPreference(config.window_animation);
     set({ config, configLoaded: true });

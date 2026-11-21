@@ -49,7 +49,7 @@ tokio = { version = "1", features = ["full"] }
 # Serialization（配置 JSON 持久化 + 更新事件推送）
 serde = { version = "1", features = ["derive"] }
 # `preserve_order` 不是可选项：rc 有一条**跨端字节契约**测试
-# （`rc::wts_watch::frame_bytes_are_pinned`）钉住 `{"t":"wts","locked":…}` 的字段顺序，
+# （`rc::wts_watch::frame_bytes_are_pinned`）钉住 `{"t":"wts", "locked":…}` 的字段顺序，
 # 控端按这两个字节串解析。不开这个 feature，`serde_json::json!` 走 BTreeMap 会按
 # 字典序输出成 `{"locked":…,"t":"wts"}`，契约当场失效（且只在测试红，线上是静默不兼容）。
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -85,7 +85,6 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 hostname = "0.4"
 futures-util = "0.3"
-thiserror = "2"
 # 设备表 / 设置（rc 的 rc_devices 等）
 rusqlite = { version = "0.31", features = ["bundled"] }
 # 局域网发现：逐块网卡组播（见 net/mcast.rs 的「为什么不能用 INADDR_ANY」）
