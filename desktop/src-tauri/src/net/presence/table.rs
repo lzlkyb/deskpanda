@@ -8,11 +8,43 @@ use super::wire::{
 };
 use super::STALE_MS;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::{Arc, Mutex};
 
-/// 单个节点最多记几个地址（多网卡 / VPN）。同时也是「拨号尝试次数」的上限。
-const MAX_ADDRS_PER_NODE: usize = 4;
+/// 单个节点最多记几个地址（多网卡 / VPN / 双协议族）。同时也是「拨号尝试次数」
+/// 的上限。
+///
+/// 🔴 P1-b 从 4 提到 6：双栈下一块网卡就占 3 条（v4 + 全局/ULA v6 + fe80），
+///    再来一条 VPN 就破 4——按旧上限，v6 候选会被「最久没刷新」的淘汰规则
+///    挤出去（各地址由同一份心跳同时刷新，新鲜度几乎并列），等于双栈白做。
+const MAX_ADDRS_PER_NODE: usize = 6;
+
+/// 把源地址的端口换成包里自报的**端点**端口，其余一切原样保留。
+///
+/// 🔴 必须以 `SocketAddr` 整体传递而不能先拆 `.ip()`：v6 link-local（fe80::）
+///    的 scope_id（网卡 zone）只活在 `SocketAddrV6` 里，`.ip()` 一拆就丢；
+///    而 fe80 没有 zone 在别的网卡上必然拨不通。「IP 取源地址」这条铁律不变，
+///    只是把「IP」完整到含 zone。
+fn with_port(src: SocketAddr, port: u16) -> SocketAddr {
+    match src {
+        SocketAddr::V4(v4) => SocketAddr::V4(SocketAddrV4::new(*v4.ip(), port)),
+        SocketAddr::V6(v6) => SocketAddr::V6(SocketAddrV6::new(
+            *v6.ip(),
+            port,
+            v6.flowinfo(),
+            v6.scope_id(),
+        )),
+    }
+}
+
+/// 是不是 v6 link-local（fe80::/10）地址。
+///
+/// 这类地址跨网卡即失效、zone 只在本机有意义——所以它只配当**末位**候选：
+/// 排序垫底、淘汰先走。但绝不能干脆不记：访客 Wi-Fi 这类「只发 fe80」的网段，
+/// 它是唯一的 v6 路（P1-b 的目标场景之一）。
+fn is_link_local_v6(a: &SocketAddr) -> bool {
+    matches!(a, SocketAddr::V6(v6) if v6.ip().is_unicast_link_local())
+}
 
 /// 一个**明文包**（[`WireKind`] 里非 `Addr` 的那几种）通过全部校验之后的形态。
 ///
@@ -160,6 +192,7 @@ impl PresenceTable {
 
     /// 解析 + 校验 + 记录，一处收口（规则 #11）。
     ///
+    /// `src` 传**完整源地址**（含 v6 的 scope_id，见 [`with_port`]）；
     /// `is_paired` 用闭包传进来而不是直接查库：这样本模块不依赖 `DataStore`，
     /// 单测不起库就能覆盖全部分支。
     ///
@@ -171,7 +204,7 @@ impl PresenceTable {
     pub fn hear(
         &self,
         packet: &[u8],
-        src_ip: IpAddr,
+        src: SocketAddr,
         my_node_id: &str,
         is_paired: &dyn Fn(&str) -> bool,
         now_ms: i64,
@@ -199,7 +232,7 @@ impl PresenceTable {
         //   顺序在这里是语义，不只是性能：附近设备按定义就是还没配对的邻居，
         //   若先过 `is_paired`，它们会全部落进 `Heard::Unpaired` 而消失。
         if wire.kind.is_plain() {
-            return self.hear_plain(&wire, src_ip, now_ms);
+            return self.hear_plain(&wire, src, now_ms);
         }
         if !is_paired(&wire.node_id) {
             return Heard::Unpaired {
@@ -238,7 +271,7 @@ impl PresenceTable {
             };
         }
 
-        let addr = SocketAddr::new(src_ip, wire.port);
+        let addr = with_port(src, wire.port);
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let entry = map.entry(wire.node_id.clone()).or_default();
         // ❗ 必须在下面刷新 `seen` **之前**算：刷完之后永远是「新鲜」，跃变就测不到了。
@@ -256,9 +289,19 @@ impl PresenceTable {
             None => {
                 entry.addrs.push((addr, now_ms));
                 if entry.addrs.len() > MAX_ADDRS_PER_NODE {
-                    // 淘汰最久没刷新的，而不是最先加进来的：
-                    // 网卡换了之后老地址不会再被刷新，正好被挤掉。
-                    entry.addrs.sort_by_key(|(_, seen)| *seen);
+                    // 淘汰次序（而不是最先加进来的）：**fe80 先走**，同层里最久
+                    // 没刷新的走。各地址由同一份心跳同时刷新、新鲜度几乎并列——
+                    // 不把 fe80 排在淘汰队首，被挤掉的就轮到 v4/全局 v6 这类真候选
+                    // （P1-b）。网卡换掉的老地址不会再被刷新，同样落在这条规则的
+                    // 后半段被挤掉。
+                    // 升序排「fe80 在前、同层内最旧在前」，再 remove(0)：
+                    // 元组自然序里 false < true，直接按 (is_fe80, seen) 升序会把
+                    // 最旧的**非** fe80 排到队首——挤错方向（单测钉着这条）。
+                    entry.addrs.sort_by(|(a, sa), (b, sb)| {
+                        is_link_local_v6(b)
+                            .cmp(&is_link_local_v6(a))
+                            .then_with(|| sa.cmp(sb))
+                    });
                     entry.addrs.remove(0);
                 }
             }
@@ -280,7 +323,7 @@ impl PresenceTable {
     /// 顺序沿用 [`PresenceTable::hear`] 那套：便宜的先做、验签在动任何状态之前，
     /// **用途标识（`app`）排在验签之后**（同一条理由：只有持合法私钥的设备
     /// 才可能把这条判定的日志打出来，同网段乱发的人刷不了我们的日志）。
-    fn hear_plain(&self, wire: &Wire, src_ip: IpAddr, now_ms: i64) -> Heard {
+    fn hear_plain(&self, wire: &Wire, src: SocketAddr, now_ms: i64) -> Heard {
         let Ok(sig) = decode_sig(&wire.sig) else {
             return Heard::Bad("明文包里的签名解不开".to_string());
         };
@@ -320,11 +363,16 @@ impl PresenceTable {
             ts: wire.ts,
             // IP 取源地址（同地址公告那条路上的一条铁律），端口取包里自报的
             // **端点**端口——两者合起来是对端自报的可达地址。
-            src: SocketAddr::new(src_ip, wire.port),
+            src: with_port(src, wire.port),
         })
     }
 
-    /// 某个节点当前可拨的地址，最近刷新的排前面。已过期的不返回。
+    /// 某个节点当前可拨的地址。已过期的不返回。
+    ///
+    /// 排序契约（P1-b 起两级）：**非 fe80 在前、fe80 末位兜底**；同层内最近
+    /// 刷新的排前面。消费方（`rc::service::peer_addr`）把整表塞给 iroh 竞速，
+    /// 这里的顺序主要服务「逐个尝试」类消费方与日志可读性——fe80 跨网卡即失效，
+    /// 永远不该排在真候选前面。
     pub fn addrs_of(&self, node_id: &str, now_ms: i64) -> Vec<SocketAddr> {
         let map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         let Some(e) = map.get(node_id) else {
@@ -336,7 +384,12 @@ impl PresenceTable {
             .filter(|(_, seen)| now_ms - *seen <= STALE_MS)
             .copied()
             .collect();
-        live.sort_by_key(|(_, seen)| -*seen);
+        live.sort_by(|(a, sa), (b, sb)| {
+            is_link_local_v6(a)
+                .cmp(&is_link_local_v6(b))
+                // 同层内最近刷新的在前（false < true，fe80 恒沉底）
+                .then_with(|| sb.cmp(sa))
+        });
         live.into_iter().map(|(a, _)| a).collect()
     }
 
@@ -360,5 +413,226 @@ impl PresenceTable {
     pub fn forget(&self, node_id: &str) {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         map.remove(node_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::presence::wire::signing_bytes;
+
+    /// 造一把身份：与 `identity::NodeIdentity` 同一套 ring ed25519，但不走
+    /// `load_or_create`——它经 dpapi 动 OS 钥匙串，测试不该碰真密钥库。
+    fn identity(seed: u8) -> (String, ring::signature::Ed25519KeyPair) {
+        use ring::signature::KeyPair;
+        let kp = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap();
+        let node_id = kp
+            .public_key()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        (node_id, kp)
+    }
+
+    /// 做一份**线上格式逐字节同构**的地址公告（v1、kb、带签名；`kind=Addr`
+    /// 按 serde 约定不写进 JSON——见 `Wire::kind` 的注释，本测试照办）。
+    fn addr_packet(kp: &ring::signature::Ed25519KeyPair, port: u16, ts: i64) -> (String, Vec<u8>) {
+        use base64::Engine;
+        use ring::signature::KeyPair;
+        let node_id: String = kp
+            .public_key()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(kp.sign(&signing_bytes(&node_id, port, ts)));
+        let packet = serde_json::json!({
+            "v": 1,
+            "node_id": node_id,
+            "port": port,
+            "ts": ts,
+            "app": "kb",
+            "sig": sig,
+        })
+        .to_string()
+        .into_bytes();
+        (node_id, packet)
+    }
+
+    fn v6(ip: &str, port: u16, scope: u32) -> SocketAddr {
+        SocketAddr::V6(SocketAddrV6::new(ip.parse().unwrap(), port, 0, scope))
+    }
+
+    fn v4(o: [u8; 4], port: u16) -> SocketAddr {
+        SocketAddr::V4(SocketAddrV4::new(o.into(), port))
+    }
+
+    #[test]
+    fn 换端口保留v6的zone() {
+        let out = with_port(v6("fe80::1", 54321, 7), 5009);
+        match out {
+            SocketAddr::V6(a) => {
+                assert_eq!(a.port(), 5009, "端口换成包里自报的端点端口");
+                assert_eq!(
+                    a.scope_id(),
+                    7,
+                    "🔴 scope_id 不能在换端口时丢——fe80 没有 zone 跨网卡即不可拨"
+                );
+            }
+            _ => panic!("v6 进 v6 出"),
+        }
+        match with_port(v4([192, 168, 1, 9], 54321), 5009) {
+            SocketAddr::V4(a) => assert_eq!(a.port(), 5009),
+            _ => panic!("v4 进 v4 出"),
+        }
+    }
+
+    #[test]
+    fn v6源地址连zone一起入表() {
+        let (_, kp) = identity(9);
+        let ts = 100_000i64;
+        let (peer_id, packet) = addr_packet(&kp, 4919, ts);
+        let table = PresenceTable::new(PresenceApp::Kb);
+        let heard = table.hear(
+            &packet,
+            v6("fe80::a", 55555, 5),
+            "me",
+            &|id| id == peer_id,
+            ts,
+        );
+        assert!(
+            matches!(heard, Heard::Fresh { .. }),
+            "合法公告该收下：{heard:?}"
+        );
+        let addrs = table.addrs_of(&peer_id, ts);
+        assert_eq!(addrs.len(), 1);
+        match &addrs[0] {
+            SocketAddr::V6(a) => {
+                assert_eq!(a.port(), 4919, "端口取包里自报的端点端口，不是源端口");
+                assert_eq!(a.scope_id(), 5, "源地址的 zone 原样入表");
+            }
+            other => panic!("族不该变：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn fe80末位兜底_哪怕最新听到() {
+        let (_, kp) = identity(3);
+        let table = PresenceTable::new(PresenceApp::Kb);
+        let mut ts = 1_000i64;
+        let mut last_id = String::new();
+        // 按时间序听：fe80（最早）、v4、fd00（最新）。fe80 是最旧的真实场景是
+        // 「先在 v6-only 网段遇到、后来拿到了 v4/ULA」；这里钉的是更狠的一条：
+        // 哪怕 fe80 反着来、最新听到，也压不过真候选。
+        for src in [
+            v6("fe80::1", 1, 2),
+            v4([192, 168, 1, 9], 1),
+            v6("fd00::9", 1, 0),
+        ] {
+            ts += 1;
+            let (peer_id, packet) = addr_packet(&kp, 4919, ts);
+            last_id = peer_id;
+            let _ = table.hear(&packet, src, "me", &|id| id == last_id, ts);
+        }
+        let addrs = table.addrs_of(&last_id, ts);
+        assert_eq!(addrs.len(), 3);
+        assert_eq!(
+            addrs[0],
+            v6("fd00::9", 4919, 0),
+            "ULA 排最前（最新刷新的真候选）"
+        );
+        assert_eq!(addrs[1], v4([192, 168, 1, 9], 4919), "v4 在 fe80 前");
+        assert_eq!(
+            addrs[2],
+            v6("fe80::1", 4919, 2),
+            "🔴 fe80 恒沉底——跨网卡即失效，只配末位兜底"
+        );
+    }
+
+    #[test]
+    fn 地址满员先挤fe80() {
+        let (_, kp) = identity(4);
+        let table = PresenceTable::new(PresenceApp::Kb);
+        let mut ts = 1_000i64;
+        let mut peer_id = String::new();
+        let srcs = [
+            v4([10, 0, 0, 1], 1),
+            v6("fe80::1", 1, 3),
+            v4([10, 0, 0, 2], 1),
+            v6("fe80::2", 1, 4),
+            v4([10, 0, 0, 3], 1),
+            v6("fd00::1", 1, 0),
+        ];
+        for src in srcs {
+            ts += 1;
+            let (id, packet) = addr_packet(&kp, 4919, ts);
+            peer_id = id;
+            let _ = table.hear(&packet, src, "me", &|i| i == peer_id, ts);
+        }
+        assert_eq!(table.addrs_of(&peer_id, ts).len(), MAX_ADDRS_PER_NODE);
+        // 第 7 条：一个全局 v6。挤掉的必须是 fe80（最旧那条），v4/ULA/新地址全保。
+        ts += 1;
+        let (_, packet) = addr_packet(&kp, 4919, ts);
+        let _ = table.hear(
+            &packet,
+            v6("2001:db8::1", 1, 0),
+            "me",
+            &|i| i == peer_id,
+            ts,
+        );
+        let addrs = table.addrs_of(&peer_id, ts);
+        assert_eq!(addrs.len(), MAX_ADDRS_PER_NODE, "上限就是上限");
+        assert!(
+            !addrs.contains(&v6("fe80::1", 4919, 3)),
+            "被挤掉的应是 fe80::1（最旧的 fe80）"
+        );
+        assert!(
+            addrs.contains(&v6("fe80::2", 4919, 4)),
+            "fe80::2 更新，这一轮轮不到它"
+        );
+        for a in [
+            v4([10, 0, 0, 1], 4919),
+            v4([10, 0, 0, 2], 4919),
+            v4([10, 0, 0, 3], 4919),
+            v6("fd00::1", 4919, 0),
+            v6("2001:db8::1", 4919, 0),
+        ] {
+            assert!(addrs.contains(&a), "真候选不该被 fe80 连坐挤掉：缺 {a}");
+        }
+    }
+
+    /// P1-b 的底线：v4-only 路径逐字节不变（收下、入表、出表都是 v4 原样）。
+    #[test]
+    fn v4路径零变化() {
+        let (_, kp) = identity(5);
+        let ts = 100_000i64;
+        let (peer_id, packet) = addr_packet(&kp, 4919, ts);
+        let table = PresenceTable::new(PresenceApp::Kb);
+        let heard = table.hear(
+            &packet,
+            v4([192, 168, 31, 77], 55555),
+            "me",
+            &|id| id == peer_id,
+            ts,
+        );
+        match heard {
+            Heard::Fresh {
+                addr,
+                returned,
+                legacy,
+                ..
+            } => {
+                assert_eq!(addr, v4([192, 168, 31, 77], 4919));
+                assert!(returned, "第一份公告就是跃变");
+                assert!(!legacy);
+            }
+            other => panic!("合法 v4 公告该收下：{other:?}"),
+        }
+        assert_eq!(
+            table.addrs_of(&peer_id, ts),
+            vec![v4([192, 168, 31, 77], 4919)]
+        );
     }
 }

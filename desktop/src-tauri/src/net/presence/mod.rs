@@ -103,7 +103,7 @@
 //! [`spawn`] **里面**——放外面的话，将来接线的人会忘。
 
 use super::identity::NodeIdentity;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use wire::MAX_PACKET;
@@ -115,13 +115,18 @@ mod wire;
 
 pub use nearby::{Nearby, Neighbor, NEARBY_TTL_MS};
 pub use socket::{
-    announce_once, bind_listener, bind_listener_on, hello_packet, send_all, Announce,
+    announce_once, bind_listener, bind_listener_on, hello_packet, send_all, Announce, Listener,
 };
 pub use table::{Heard, PlainHandler, PlainPacket, PresenceTable};
 pub use wire::{build, build_kind, Extras, PresenceApp, WireKind, NAME_MAX_CHARS};
 
 /// 组播组，沿用 `lan_sync`。
 pub const GROUP: Ipv4Addr = Ipv4Addr::new(224, 1, 1, 1);
+/// IPv6 侧的组播组（P1-b）：`ff02::` link-local 域（不跨路由器，与 v4 组播的
+/// 可达域对齐），低 32 位与 [`GROUP`] 同编号（224.1.1.1 ↔ e001:0101，
+/// 镜像关系有守卫单测钉着）。两族各在各的组里喊**同一份字节**的公告——
+/// 线上格式零改动，新旧版本互通。
+pub const GROUP_V6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0xe001, 0x0101);
 /// 宣告端口。**不是** `lan_sync` 的 5007，见模块说明。
 pub const PORT: u16 = 5008;
 /// 两次宣告的间隔（秒）。
@@ -220,7 +225,7 @@ pub fn spawn(p: PresenceStart) {
         // 监听可用临时端口（测试传 0），**广播不能**：往 0 号端口发等于没发。
         let announce_port = if port == 0 { PORT } else { port };
         let listener = match socket::bind_listener_on(port) {
-            Ok(s) => s,
+            Ok(l) => l,
             Err(e) => {
                 // bind 失败必须复位 running，否则再也起不来（同 lan_sync 的 C8）
                 log::warn!("[Presence] {}", e);
@@ -233,8 +238,13 @@ pub fn spawn(p: PresenceStart) {
         //    日志却写 5008，两套日志一模一样——「端口 5008」出现两次，正是 09-17
         //    那个 bug 的指纹。用途（`app`）同理：它是事后认串台的依据。
         log::info!(
-            "[Presence] 地址宣告已启动，监听 {}，广播 {}（{}）",
+            "[Presence] 地址宣告已启动，监听 {}（v6{}），广播 {}（{}）",
             port,
+            if listener.v6.is_some() {
+                "已开"
+            } else {
+                "缺席"
+            },
             announce_port,
             app.label()
         );
@@ -247,6 +257,99 @@ pub fn spawn(p: PresenceStart) {
         // 网络断了的时候每 5 秒一条会淹掉日志，而那条信息量并不随时间增加。
         let mut hello_failed = false;
         let mut buf = [0u8; MAX_PACKET + 1];
+        // 一份收到的包怎么处理。抽成闭包是因为 v4 / v6 两个套接字收到的包
+        // 走**完全一样**的路（协议族只体现在源地址里）——两份各写一遍必然漂移。
+        //
+        // 🔴 传**完整源地址**（`SocketAddr`）而不是 `src.ip()`：v6 link-local
+        //    （fe80::）的 scope_id（网卡 zone）只活在 `SocketAddrV6` 里，`.ip()`
+        //    一拆就丢；而 fe80 没有 zone 在别的网卡上就拨不通。入表/连接全程保留
+        //    scope_id（P1-b），分级规则在 `table` 那边。
+        let on_packet = |payload: &[u8], src: std::net::SocketAddr| {
+            let heard = table.hear(
+                payload,
+                src,
+                &my_id,
+                &|id| is_paired(id),
+                chrono::Utc::now().timestamp_millis(),
+            );
+            match heard {
+                Heard::Fresh {
+                    node_id,
+                    addr,
+                    returned,
+                    legacy,
+                } => {
+                    log::debug!("[Presence] {} 在 {}", &node_id[..8], addr);
+                    // 🔴 只在**跃变**时叫醒（它刚回来），不是每份心跳都叫。
+                    //   每份都叫的后果见 `Heard::Fresh::returned` 的注释：
+                    //   休眠会被封顶在 15 秒，而且是广播式的、一台喂气全体醒。
+                    if returned {
+                        // ❗ info 级：正常的周期心跳走上面那条 debug 就够了，
+                        //   而「从完全听不到到听得见」是状态跃变——正是 09-17
+                        //   那次「rc 静默收不到包」最难查的地方，默认级别要看得见。
+                        //
+                        // ❗ `legacy` 也只在跃变时报（跃变罕见，不会刷屏）。
+                        //   它的价值是回答「对端到底升没升级」：旧版本的对端广播
+                        //   端口写死成同步那个，串台污染可能仍在——而这从界面上
+                        //   完全看不出来，只有这里能说清。
+                        log::info!(
+                            "[Presence] 端口 {}：听到 {} 的地址 {}{}",
+                            announce_port,
+                            &node_id[..8],
+                            addr,
+                            if legacy {
+                                "（旧版公告，无用途标识——这台对端该升级了）"
+                            } else {
+                                ""
+                            }
+                        );
+                        on_fresh(&node_id);
+                    }
+                }
+                // 自己的包与未配对设备的包是常态，不值得记日志
+                Heard::Mine | Heard::Unpaired { .. } => {}
+                // 明文包（招呼 / 配对握手）交给注册过的处理器。
+                // 地址表一个字都不记——理由见 `table::hear_plain`。
+                Heard::Plain(p) => {
+                    if !table.dispatch_plain(&p) {
+                        // 没人接就留一条 debug：静默丢弃比报错难查一个量级
+                        // （知识库同步那套没注册处理器，这是它的常态）。
+                        log::debug!(
+                            "[Presence] 收到一份{}（来自 {}），本套 presence 没有消费方，已忽略",
+                            p.kind.label(),
+                            &p.node_id[..8]
+                        );
+                    }
+                }
+                // 🔴 重放要记（debug 级）。正常情况下它极少出现，
+                // 但对端做一次 NTP 回拨 / 改时区之后，它**所有**的新公告都会
+                // 被这条严格递增判成重放并丢掉，表现是「对方明明开着却一直显示
+                // 离线」，且 STALE_MS 过后地址失效、不会自愈。
+                // 静默丢弃的话这种情况完全无从查起。
+                Heard::Replay { node_id } => {
+                    log::debug!(
+                        "[Presence] {} 的公告时间戳没有前进，按重放丢弃（对端是不是回拨过时钟？）",
+                        &node_id[..8]
+                    );
+                }
+                Heard::OutOfWindow { node_id, skew_ms } => {
+                    log::warn!(
+                        "[Presence] {} 的公告时间差 {}ms，超窗已丢弃（对一下两台机器的时钟）",
+                        &node_id[..8],
+                        skew_ms
+                    );
+                }
+                // 🔴 09-17 那次就是这条路径**静默通过**：包进错表、校验照过、
+                //   表被写脏，日志里一个字都没有。现在明确报一句。
+                Heard::WrongApp { claimed } => log::warn!(
+                    "[Presence] 端口 {}（{}）收到了「{}」的公告——对端把端口配错了，已丢弃",
+                    announce_port,
+                    app.label(),
+                    claimed.label()
+                ),
+                Heard::Bad(why) => log::warn!("[Presence] {}", why),
+            }
+        };
         while running.load(Ordering::SeqCst) {
             let now = chrono::Utc::now().timestamp_millis();
             if now - last_announce >= ANNOUNCE_INTERVAL_SECS as i64 * 1000 {
@@ -297,100 +400,38 @@ pub fn spawn(p: PresenceStart) {
                     last_hello = now;
                 }
             }
-            // 读超时 2 秒，所以这个循环最慢 2 秒转一圈，停止请求最多等 2 秒
-            match listener.recv_from(&mut buf) {
-                Ok((len, src)) => {
-                    let heard = table.hear(
-                        &buf[..len],
-                        src.ip(),
-                        &my_id,
-                        &|id| is_paired(id),
-                        chrono::Utc::now().timestamp_millis(),
-                    );
-                    match heard {
-                        Heard::Fresh {
-                            node_id,
-                            addr,
-                            returned,
-                            legacy,
-                        } => {
-                            log::debug!("[Presence] {} 在 {}", &node_id[..8], addr);
-                            // 🔴 只在**跃变**时叫醒（它刚回来），不是每份心跳都叫。
-                            //   每份都叫的后果见 `Heard::Fresh::returned` 的注释：
-                            //   休眠会被封顶在 15 秒，而且是广播式的、一台喂气全体醒。
-                            if returned {
-                                // ❗ info 级：正常的周期心跳走上面那条 debug 就够了，
-                                //   而「从完全听不到到听得见」是状态跃变——正是 09-17
-                                //   那次「rc 静默收不到包」最难查的地方，默认级别要看得见。
-                                //
-                                // ❗ `legacy` 也只在跃变时报（跃变罕见，不会刷屏）。
-                                //   它的价值是回答「对端到底升没升级」：旧版本的对端广播
-                                //   端口写死成同步那个，串台污染可能仍在——而这从界面上
-                                //   完全看不出来，只有这里能说清。
-                                log::info!(
-                                    "[Presence] 端口 {}：听到 {} 的地址 {}{}",
-                                    announce_port,
-                                    &node_id[..8],
-                                    addr,
-                                    if legacy {
-                                        "（旧版公告，无用途标识——这台对端该升级了）"
-                                    } else {
-                                        ""
-                                    }
-                                );
-                                on_fresh(&node_id);
-                            }
-                        }
-                        // 自己的包与未配对设备的包是常态，不值得记日志
-                        Heard::Mine | Heard::Unpaired { .. } => {}
-                        // 明文包（招呼 / 配对握手）交给注册过的处理器。
-                        // 地址表一个字都不记——理由见 `table::hear_plain`。
-                        Heard::Plain(p) => {
-                            if !table.dispatch_plain(&p) {
-                                // 没人接就留一条 debug：静默丢弃比报错难查一个量级
-                                // （知识库同步那套没注册处理器，这是它的常态）。
-                                log::debug!(
-                                    "[Presence] 收到一份{}（来自 {}），本套 presence 没有消费方，已忽略",
-                                    p.kind.label(),
-                                    &p.node_id[..8]
-                                );
-                            }
-                        }
-                        // 🔴 重放要记（debug 级）。正常情况下它极少出现，
-                        // 但对端做一次 NTP 回拨 / 改时区之后，它**所有**新公告都会
-                        // 被这条严格递增判成重放并丢掉，表现是「对方明明开着却一直显示
-                        // 离线」，且 STALE_MS 过后地址失效、不会自愈。
-                        // 静默丢弃的话这种情况完全无从查起。
-                        Heard::Replay { node_id } => {
-                            log::debug!(
-                                "[Presence] {} 的公告时间戳没有前进，按重放丢弃（对端是不是回拨过时钟？）",
-                                &node_id[..8]
-                            );
-                        }
-                        Heard::OutOfWindow { node_id, skew_ms } => {
-                            log::warn!(
-                                "[Presence] {} 的公告时间差 {}ms，超窗已丢弃（对一下两台机器的时钟）",
-                                &node_id[..8],
-                                skew_ms
-                            );
-                        }
-                        // 🔴 09-17 那次就是这条路径**静默通过**：包进错表、校验照过、
-                        //   表被写脏，日志里一个字都没有。现在明确报一句。
-                        Heard::WrongApp { claimed } => log::warn!(
-                            "[Presence] 端口 {}（{}）收到了「{}」的公告——对端把端口配错了，已丢弃",
-                            announce_port,
-                            app.label(),
-                            claimed.label()
-                        ),
-                        Heard::Bad(why) => log::warn!("[Presence] {}", why),
-                    }
-                }
+            // v4 侧阻塞收（读超时 2 秒）：它同时是整个循环的**节拍器**——
+            // 公告/招呼的定时、`running` 的检查、下面 v6 的抽干，都跟着它的醒来走。
+            match listener.v4.recv_from(&mut buf) {
+                Ok((len, src)) => on_packet(&buf[..len], src),
                 Err(e)
                     if matches!(
                         e.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) => {}
-                Err(e) => log::warn!("[Presence] 接收失败：{}", e),
+                Err(e) => log::warn!("[Presence] 接收失败（v4）：{}", e),
+            }
+            // v6 侧非阻塞抽干（P1-b）：v4 每醒一次（最坏 2 秒）就把这边的存量
+            // 全部收完。v6 公告的处理延迟上界 = v4 读超时，对 15 秒的心跳与
+            // 5 秒的招呼周期都无感；`WouldBlock` 就是「抽干了」，不是错误。
+            if let Some(v6) = listener.v6.as_ref() {
+                loop {
+                    match v6.recv_from(&mut buf) {
+                        Ok((len, src)) => on_packet(&buf[..len], src),
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(e) => {
+                            log::warn!("[Presence] 接收失败（v6）：{}", e);
+                            break;
+                        }
+                    }
+                }
             }
         }
         log::info!("[Presence] 地址宣告已停止");
