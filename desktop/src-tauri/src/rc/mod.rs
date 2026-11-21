@@ -17,14 +17,9 @@ pub mod host_capability;
 pub mod inbound;
 pub mod inbound_tasks;
 pub mod input;
-// 🔴 macOS 采集/输入/编码三件套（原 `#[path = "../macos/remote_*.rs"]`）**本仓未迁**。
-// 它们依赖 `src/macos/` 下一整套 Objective-C 桥接（`av1_bridge.c`、
-// `remote_capture.m`、`remote_audio_encoder.m` 等）与对应的 build.rs 链接配置，
-// 属于拆分方案 S6「macOS 交付」阶段（2026-11-20 已决断：本轮保留 mac 构建、
-// 只出壳子 + 前端降级提示；迁入范围清单见该文档 S6.2）。
-// 删掉声明而不是留着空指向：留着的后果是 `cargo fmt` / 任何按模块遍历的工具
-// 都会去读一个不存在的文件而直接失败（本次就是被它挡在门禁 [2/7]）。
-// 恢复方式：把原仓 `src/macos/` 与这三行一起搬回来。
+// macOS 采集/输入/编码三件套（S6 迁入，2026-11-21）。`#[path]` 指向 `src/macos/`
+// 的桥接实现，依赖同目录的 Objective-C/C 源与 build.rs 的 mac 段链接配置；
+// 迁入范围与对账判据见拆分方案 S6.2/S6.3。
 pub mod join;
 pub mod jpeg;
 /// 被控端会话防休眠（Windows 电源执行状态锁）。**跨平台声明**：非 Windows 由内部
@@ -36,6 +31,15 @@ pub mod keepalive;
 pub mod link;
 pub mod link_sched;
 pub mod local_input;
+#[cfg(target_os = "macos")]
+#[path = "../macos/remote_capture.rs"]
+pub(crate) mod mac_capture;
+#[cfg(target_os = "macos")]
+#[path = "../macos/remote_input.rs"]
+pub(crate) mod mac_input;
+#[cfg(target_os = "macos")]
+#[path = "../macos/remote_video.rs"]
+pub(crate) mod mac_video;
 pub(crate) mod media;
 pub(crate) mod media_flow;
 pub mod mono;

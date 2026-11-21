@@ -1586,11 +1586,18 @@ pub fn rc_encode_caps() -> Result<RcEncodeCaps, String> {
             monitors: c.monitors,
         })
     }
-    // ❗ 原仓这里还有一条 `#[cfg(target_os = "macos")]` 分支（`rc::mac_video` +
-    // `macos::screen`）。本仓未迁 macOS 采集/编码桥接，`rc` 整体按 `cfg(windows)`
-    // 门控 ⇒ 那条分支在这里既编不过也不可能被执行，已删除。macOS 交付时按
-    // `docs/DeskPanda-拆分方案-2026-11-19.md` 的 S6 整块补齐。
-    #[cfg(not(target_os = "windows"))]
+    // S6 迁入（2026-11-21，原仓 pastePanda 同款口径）：VideoToolbox 硬编探测 +
+    // 主屏刷新率 + SCK 显示器数。
+    #[cfg(target_os = "macos")]
+    {
+        Ok(RcEncodeCaps {
+            h264_gpu: crate::rc::mac_video::hardware_available(false),
+            hevc_hw: crate::rc::mac_video::hardware_available(true),
+            refresh_hz: crate::rc::mac_video::scope_support(-1, false).0,
+            monitors: crate::macos::screen::monitors()?.len() as u32,
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Ok(RcEncodeCaps {
             h264_gpu: false,

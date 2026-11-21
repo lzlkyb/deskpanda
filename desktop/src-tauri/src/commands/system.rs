@@ -184,10 +184,16 @@ pub fn open_file_location(path: String) -> Result<(), String> {
             .map_err(|e| format!("打开文件夹失败: {e}"))?;
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        // macOS 的 reveal 桥接（`open::file(_, true)`）尚未迁入，见 S6。
-        // 诚实报错：静默失败会让用户以为点了没反应。
+        // S6 迁入的 reveal 桥接：`open -R` 让 Finder 选中目标；桥接内部先
+        // canonicalize，目标不存在时回落父目录。
+        crate::macos::open::file(std::path::Path::new(&path), true)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        // 其余平台（Android 等）的 reveal 桥接未迁。诚实报错：静默失败会让用户
+        // 以为点了没反应。
         let _ = path;
         Err("当前平台不支持在文件管理器中定位".to_string())
     }

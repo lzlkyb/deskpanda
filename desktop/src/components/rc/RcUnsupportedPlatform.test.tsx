@@ -8,27 +8,26 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { RcUnsupportedPlatform } from "./RcUnsupportedPlatform";
 
-describe("RcUnsupportedPlatform（macOS 降级通知）", () => {
-  it("标题点明平台不支持，正文指路 Windows", () => {
-    render(<RcUnsupportedPlatform platform="macos" />);
-
-    expect(screen.getByText("远程电脑暂不支持 macOS")).toBeTruthy();
-    expect(screen.getByText(/请在 Windows 电脑上安装 DeskPanda/)).toBeTruthy();
-  });
-
-  it("附注交代本机仍可用的部分，并回显平台原值", () => {
-    render(<RcUnsupportedPlatform platform="macos" />);
-
-    expect(screen.getByText(/托盘常驻、检查更新与退出/)).toBeTruthy();
-    expect(screen.getByText("macos")).toBeTruthy();
-  });
-
-  it("🔴 非 mac 平台不谎称 macOS：标题走通用措辞，平台照实回显", () => {
+describe("RcUnsupportedPlatform（降级通知；S6 后受众只剩 linux 等平台）", () => {
+  it("标题走通用措辞，正文指路桌面双平台", () => {
     render(<RcUnsupportedPlatform platform="linux" />);
 
     expect(screen.getByText("远程电脑暂不支持当前系统")).toBeTruthy();
-    expect(screen.queryByText("远程电脑暂不支持 macOS")).toBeNull();
+    expect(screen.getByText(/请在 Windows 或 macOS 电脑上安装 DeskPanda/)).toBeTruthy();
+  });
+
+  it("附注交代本机仍可用的部分，并回显平台原值", () => {
+    render(<RcUnsupportedPlatform platform="linux" />);
+
+    expect(screen.getByText(/托盘常驻、检查更新与退出/)).toBeTruthy();
     expect(screen.getByText("linux")).toBeTruthy();
+  });
+
+  it("🔴 标题不再按平台分支：mac 已交付（S6），不存在「暂不支持 macOS」的文案", () => {
+    render(<RcUnsupportedPlatform platform="linux" />);
+
+    expect(screen.queryByText(/暂不支持 macOS/)).toBeNull();
+    expect(screen.queryByText(/暂不支持 Linux/)).toBeNull();
   });
 
   it("平台值缺失（理论上前提是 degraded 必有值）时回显「未知」而不是空白", () => {

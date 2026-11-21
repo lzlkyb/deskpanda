@@ -42,27 +42,29 @@ pub mod app;
 pub mod branding;
 pub mod commands;
 pub mod config;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub mod dpapi;
+// S6（macOS 交付，2026-11-21 迁入）：rc 真正依赖的原仓 `macos/` 桥接子集
+// （采集/编码/音频/注入 + av1 + screen + open），paste 主产品的桥接不迁——
+// 模块清单与取舍理由见 `src/macos/mod.rs` 头注释与拆分方案 S6.2。
+#[cfg(target_os = "macos")]
+pub mod macos;
 // `net`（共享 iroh 端点）与 `platform` 从 `cfg(windows)` 放宽到
 // **含 Android**：手机端是被控/发起两端之一，`rc` 整棵树要在 Android 上编译，
 // 而 `commands/net_diag.rs` 与 `rc/service` 的 `MonitorInfo` 字段都指回这两棵树。
+// S6 起同样含 macOS（桌面三平台共用同一棵协议/传输树）。
 // 平台差异不收在模块声明上（那会让 Android 少符号整树红），收在文件内部：
 // `platform::screen` 的 Win32 函数带 `cfg(windows)` + 非 Windows stub，
 // `net` 内部仅 identity.rs 有一处 macOS 分支。见 `platform/mod.rs` 模块文档。
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub mod net;
 pub mod paths;
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 pub mod platform;
-// 🔴 远程桌面当前**只交付 Windows**：采集（DXGI Desktop Duplication）、编码
-// （Media Foundation）、音频（WASAPI）、输入注入全是 Win32 绑定。
-// macOS 分支（`mac_capture` / AV1 / 录屏）在原仓里依赖一整套 `.m` + `.c` 桥接，
-// 尚未迁入 ⇒ macOS 构建只出壳子，不会假装有远程桌面。
-// 见 `docs/DeskPanda-拆分方案-2026-11-19.md` 的 S6。
-// Android 不在上述「未交付」之列：手机端远程面（`src-mobile/` + Kotlin 插件）
-// 2026-11-20 迁入，`rc` 作为被控端协议栈整体参与 Android 编译——采集/编码那些
-// Windows 专属子模块在 `rc/mod.rs` 里已按平台门控，解禁的只是协议/状态/传输层。
+// 远程桌面交付平台：**Windows 与 macOS**（S6，2026-11-21 起桌面双平台）+
+// Android（手机端被控/查看侧）。平台专属子模块（Windows 的 DXGI/MF、macOS 的
+// 三件套 `#[path]` 声明）在 `rc/mod.rs` 内部按平台门控；这里只放行整棵协议/
+// 状态/传输树。历史口径（2026-11-20 前只交付 Windows）见拆分方案 S6.1。
 //
 // 🔴 Android 构建下 `rc` 有 20+ 条 dead_code，**模块级收口**（不逐条 allow）：
 // 共享协议/状态层里只被 **Windows 采集/编码/注入侧**消费的条目（流控常量
@@ -74,8 +76,11 @@ pub mod platform;
 // 逐条加 allow 是 20+ 处噪音、逐条加 cfg 门控又有改坏 Windows 构建的风险，
 // 故在模块声明处一次性收口。死代码的主门禁仍是 Windows 构建（那里一条都没有）。
 // 取证见 `docs/DeskPanda-手机端远程迁移方案-2026-11-20.md` 的执行记录章节。
-#[cfg(any(windows, target_os = "android"))]
-#[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
+// 死代码豁免同口径扩到 macOS（S6）：mac 消费的是协议/传输/编码侧,
+// Windows 专属消费的条目（scaled_dimensions / classify_open 等）在 mac
+// 上无引用——平台分工，主门禁仍是 Windows 构建（哪里一条都没有）。
+#[cfg_attr(any(target_os = "android", target_os = "macos"), allow(dead_code))]
 pub mod rc;
 pub mod security;
 pub mod state;

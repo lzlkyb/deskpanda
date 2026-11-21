@@ -26,10 +26,12 @@ easytier-underlay = []
 tauri-build = { version = "2", features = [] }
 # 给 cargo test 目标补嵌 comctl32 v6 manifest（缘由见 build.rs 长注释）
 embed-resource = "3"
+# macOS 桥接（S6）：build.rs 的 mac 段用它编译 src/macos/ 下的 .m/.c
+cc = "1"
 
 [dependencies]
 # Tauri core
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 # 更新源 env 覆盖（APP_UPDATE_ENDPOINT）构造 Url 用，与插件共用同一份 url 2.x
@@ -55,6 +57,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # 日志（env_logger 初始化在 main.rs）
 log = "0.4"
 env_logger = "0.11"
+
+# macOS AV1 编解码 dylib 的按需加载（S6）：dylib 缺失只降级 AV1 档，不影响 AVC 路径
+libloading = "0.8"
 
 # 托盘图标代码绘制（PNG 解码 + 缩放 + 状态圆点）
 png = "0.17"

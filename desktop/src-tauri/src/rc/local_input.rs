@@ -275,6 +275,19 @@ pub use win::{
     is_locked, is_watching, last_kbd_ms, last_mouse_ms, set_swallow, start_watching, stop_watching,
 };
 
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn pp_rc_should_swallow(injected: bool, own: bool, gate: bool) -> bool {
+    should_swallow(injected, own, gate)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn refresh_lock_lease() {
+    extern "C" {
+        fn pp_rc_lock_refresh();
+    }
+    unsafe { pp_rc_lock_refresh() }
+}
+
 #[cfg(test)]
 mod tests {
     // 测试名有意用中文（守卫/回归钉的业务语义直接写在名字里）。
@@ -323,17 +336,4 @@ mod tests {
         // 活动戳比收回时刻还老（上一场会话的残留）：按收回时刻算，不能被旧值续命
         assert!(hold_should_return(t0, t0 - 60_000, t0 + lim, lim));
     }
-}
-
-#[cfg(target_os = "macos")]
-#[no_mangle]
-pub extern "C" fn pp_rc_should_swallow(injected: bool, own: bool, gate: bool) -> bool {
-    should_swallow(injected, own, gate)
-}
-#[cfg(target_os = "macos")]
-pub(crate) fn refresh_lock_lease() {
-    extern "C" {
-        fn pp_rc_lock_refresh();
-    }
-    unsafe { pp_rc_lock_refresh() }
 }

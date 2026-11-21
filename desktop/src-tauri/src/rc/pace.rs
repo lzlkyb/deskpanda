@@ -34,9 +34,14 @@ pub(crate) fn boost_gap_ms(interval_ms: u64) -> u64 {
 /// 自然 GOP」缩短成一圈。但 IDR 本身是整帧大包：不限频就会「拥塞→弃帧→
 /// 要 IDR→更拥塞」自激成风暴。500ms 意味着最差每秒 2 个 IDR——比 1s 的
 /// 自然 GOP 密一倍，是自愈加速而不是每帧重来。
+// 消费方在 Windows 采集/编码侧（dxgi 驱动的 IDR 节拍）；mac 路径由
+// remote_video.m 自理节拍，mac 构建下无引用——平台分工，不是死代码（同 lib.rs
+// 对 Android 的口径，但逐项收口不整模块放行）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) const AUTO_KEY_MIN_GAP_MS: u128 = 500;
 
 /// 是否该**主动**要一个 IDR（限频判据，纯函数便于单测）。
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn auto_key_due(
     last: Option<std::time::Instant>,
     now: std::time::Instant,

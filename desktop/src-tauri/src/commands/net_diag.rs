@@ -11,18 +11,18 @@
 
 use serde::Serialize;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::net;
 
 /// `rc_net_diag` 的返回：快照 + 取不到快照时的原因。
 #[derive(Serialize)]
 pub struct NetDiag {
     /// `None` = 端点未绑定（远程电脑从未开启过联网业务）。
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub snapshot: Option<net::diagnostics::NetDiagSnapshot>,
-    /// 非 Windows：`NetDiagSnapshot` 住在 windows 门控的 `net` 模块里，这里
-    /// 恒为 `None`（序列化成 `null`，与前端 `NetDiagSnapshot | null` 契约一致）。
-    #[cfg(not(windows))]
+    /// 其余平台：`NetDiagSnapshot` 不编译，恒 `None`（序列化成 `null`，
+    /// 与前端 `NetDiagSnapshot | null` 契约一致）。
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub snapshot: Option<()>,
     /// 快照为空时给前端的一句话原因（有快照时为空串）。
     pub unavailable_reason: String,
@@ -30,21 +30,20 @@ pub struct NetDiag {
 
 /// 本机网络画像 + 打洞可行性判定（本地显示用）。
 ///
-/// 🔴 命令本体**不**随平台门控（`main.rs` 两段都要注册——mac 上诊断卡片一进
-/// App 就调它，漏注册就是 2026-11-20 修过的「命令不存在」）；门控的只是
-/// 实现：探测住在 `net` 模块（`#[cfg(windows)]`），非 Windows 直接给真话。
+/// 🔴 命令本体**不**随平台门控（`app.rs` 两段都要注册——前端一进 App 就调它，
+/// 漏注册就是 2026-11-20 修过的「命令不存在」）；门控的只是实现：探测住在
+/// `net` 模块。S6 起 `net` 在 Windows/macOS 都编译 ⇒ 桌面双平台走真探测；
+/// 其余平台（Android 等）暂无诊断面板消费方，保持诚实降级。
 #[tauri::command]
 pub async fn rc_net_diag() -> Result<NetDiag, String> {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
-        // 远程电脑整体未交付（拆分方案 S6 之前只有壳子），没有共享端点可问。
-        // 按三档真话口径直说，不装作「探测未完成」。
         Ok(NetDiag {
             snapshot: None,
-            unavailable_reason: "远程电脑功能仅支持 Windows，本平台没有网络诊断".into(),
+            unavailable_reason: "当前平台没有网络诊断".into(),
         })
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let Some(ep) = net::endpoint::existing() else {
             return Ok(NetDiag {

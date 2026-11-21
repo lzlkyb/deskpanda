@@ -37,7 +37,7 @@
 //!
 //! - 桌面专属：托盘、单实例、开机自启、updater 插件、窗口装饰与全部窗口事件；
 //! - Android 新增：`rc::boot::boot`（原 `cfg(windows)`）随 `rc` 模块同一道门控
-//!   `any(windows, target_os = "android")`；系统下载目录接 `init_android_receive_dir`；
+//!   `any(windows, target_os = "android", target_os = "macos")`；系统下载目录接 `init_android_receive_dir`；
 //! - 命令注册两段：第 1 段 `any(windows, android)`（rc 全家 + 手机端五条），
 //!   第 2 段 `not(any(...))`（壳子命令 + 桌面 no-op 的手机端四条）。
 //!   `commands/mod.rs` 的 `registry_guard` 单测从**本文件**抠两段做比对，漏同步会红。
@@ -46,7 +46,7 @@ use tauri::Manager;
 #[cfg(feature = "notifications")]
 use tauri_plugin_notification::NotificationExt;
 
-#[cfg(any(windows, target_os = "android"))]
+#[cfg(any(windows, target_os = "android", target_os = "macos"))]
 use crate::rc;
 use crate::{commands, config, AppState};
 // `branding` 只被两处消费：`notify_toast`（notifications feature）与托盘
@@ -405,7 +405,7 @@ pub fn run() {
     // 远程桌面链路（Windows / Android）：前台服务保活 + 共享 iroh 端点。
     // 两个 `init()` 都随 `rc` / `net` 模块同一道门控（macOS / Linux 无这些模块），
     // 桌面是 no-op（keepalive 只在 Android 装 Kotlin 插件，见 `rc::keepalive`）。
-    #[cfg(any(windows, target_os = "android"))]
+    #[cfg(any(windows, target_os = "android", target_os = "macos"))]
     let builder = builder
         .plugin(rc::keepalive::init())
         .plugin(crate::net::network::init());
@@ -434,7 +434,7 @@ pub fn run() {
             // Windows / Android 都有 `rc::`（手机端是被控/发起两端之一，协议栈
             // 整体进 Android 包）；macOS / Linux 构建里整棵不存在，所以命令层
             // 也只在 Windows/Android 段注册（见下方「命令注册」段）。
-            #[cfg(any(windows, target_os = "android"))]
+            #[cfg(any(windows, target_os = "android", target_os = "macos"))]
             rc::boot::boot(&handle)
                 .map_err(|e| std::io::Error::other(format!("远程电脑初始化失败：{e}")))?;
 
@@ -600,13 +600,13 @@ pub fn run() {
     //
     // ❗ 这里为什么是两段而不是一段：`tauri::generate_handler!` 不接受逐项
     // `#[cfg]`（它只吃 `path` 列表）。而 `commands::rc*` 三块依赖 `rc::`，
-    // 后者整体按 `cfg(any(windows, target_os = "android"))` 门控（采集/编码/音频/
+    // 后者整体按 `cfg(any(windows, target_os = "android", target_os = "macos"))` 门控（采集/编码/音频/
     // 输入注入是 Win32 绑定，但协议/状态/传输层要随手机端远程面一起进 Android 包）
     // ⇒ macOS / Linux 构建里那些符号根本不存在，整条列表编不过。
     //
     // **两段里的壳子命令必须一致**：`commands/mod.rs` 的 `registry_guard`
     // 单测会从本文件里抠出两个列表做子集比对，漏同步会直接红。
-    #[cfg(any(windows, target_os = "android"))]
+    #[cfg(any(windows, target_os = "android", target_os = "macos"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         // —— 壳子（全平台）——
         commands::get_config,
@@ -731,7 +731,7 @@ pub fn run() {
         commands::rc_nearby_confirm,
         commands::rc_nearby_cancel,
     ]);
-    #[cfg(not(any(windows, target_os = "android")))]
+    #[cfg(not(any(windows, target_os = "android", target_os = "macos")))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         // 与上面 Windows/Android 段的壳子部分**必须一致**（见段首注释）。
         commands::get_config,
