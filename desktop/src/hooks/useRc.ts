@@ -12,8 +12,6 @@
 import { useEffect } from "react";
 import { useWindowVisible } from "@/hooks/useWindowVisible";
 import { useRcStore } from "@/stores/rcStore";
-import type { RcInvite, RcInviteCreated, RcIdentity } from "@/lib/api/rc";
-
 export function useRc(enabled: boolean) {
   const visible = useWindowVisible();
   const status = useRcStore((s) => s.status);
@@ -101,4 +99,3 @@ export function useRc(enabled: boolean) {
 }
 
 export type UseRc = ReturnType<typeof useRc>;
-export type { RcInvite, RcInviteCreated, RcIdentity };

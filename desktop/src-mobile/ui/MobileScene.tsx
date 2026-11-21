@@ -13,14 +13,3 @@ export function MobileScene({ active, paged = false, interactive = active, class
   }, [active, paged]);
   return <section ref={ref} hidden={!active && !paged} inert={!interactive} aria-hidden={!interactive} aria-label={label} className={`${styles.scene} ${className}`}>{children}</section>;
 }
-
-export function useTaskScene(ref: React.RefObject<HTMLElement | null>, task: string, active: boolean) {
-  const previous = useRef(task);
-  useLayoutEffect(() => {
-    const before = previous.current; previous.current = task;
-    if (!active || !ref.current || task === before) return;
-    const motion = createSceneMotion(ref.current);
-    motion.enter(task === "list" ? "back" : "forward");
-    return () => motion.dispose();
-  }, [ref, task, active]);
-}

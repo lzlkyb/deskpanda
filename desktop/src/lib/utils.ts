@@ -80,23 +80,6 @@ export function rcCheckTime(checkedAt: number): string {
 }
 
 /**
- * 解析库内时间字符串（`"2026-10-24 09:20:01"`，Rust 落库格式）→ 毫秒数。
- *
- * 🔴 **历史时间的唯一解析口径**（规则 11 收口）：此前 events.ts 手拆一份、
- * appStore/TrashPanel/milestones 各写一份 `replace(" ", "T")`、relativeTime
- * 裸 `new Date(s)`——裸解析对带空格格式在 Safari/WebKit 返回 Invalid Date
- * （macOS 上全量卡片时间变「NaN月NaN日 周undefined」）。
- *
- * 手拆而不是 `new Date(s)`：不依赖各引擎对非 ISO 格式的宽容度。
- * 解不出来返 `NaN`，调用方自判。
- */
-export function parseHistoryTime(s: string): number {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s);
-  if (!m) return NaN;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
-}
-
-/**
  * 配对码 → 人眼比对用的展示形态（4 位一组，如 `4182 0620`）。
  *
  * 🔴 **三条配对路共用的唯一展示口径**（规则 11 收口，2026-09-29）：
@@ -146,15 +129,6 @@ export function pairCodeDigest(code: string): string {
   return String(h % 100000000).padStart(8, "0");
 }
 
-/** 截断文本 */
-export function truncate(text: string, maxLen: number): string {
-  if (!text) return "";
-  const cleaned = text.replace(/\r/g, " ").replace(/\n/g, " ");
-  // 按 Unicode 码点切分，避免 UTF-16 代理对（如 emoji）被从中间切断产生孤立代理项
-  const codePoints = Array.from(cleaned);
-  return codePoints.length > maxLen ? codePoints.slice(0, maxLen).join("") + "..." : cleaned;
-}
-
 /**
  * 字节数 → 人类可读（B/KB/MB/GB）。**全项目唯一权威版**（规则 11 收口，
  * 2026-09-22）：此前 `lib/rcFile.ts` 与 `lib/imageFormat.ts` 各有一份、
@@ -177,20 +151,6 @@ export function formatBytes(n: number): string {
 export function formatRate(bytesPerSec: number): string {
   if (!Number.isFinite(bytesPerSec) || bytesPerSec < 1024) return "—";
   return `${formatBytes(bytesPerSec)}/s`;
-}
-
-/**
- * 把 catch 到的未知错误转成可展示文案。
- *
- * Tauri 的 invoke 失败时抛的是**字符串**（Rust 端 `Err(String)`），
- * 而前端自己的异常抛的是 Error，两者得分开取：
- * 直接 String(e) 会把 Error 变成 "Error: xxx"，把普通对象变成 "[object Object]"。
- */
-export function errText(e: unknown, fallback: string): string {
-  if (typeof e === "string" && e.trim()) return e;
-  if (e instanceof Error && e.message) return e.message;
-  const s = e == null ? "" : String(e);
-  return s && s !== "[object Object]" ? s : fallback;
 }
 
 /**
@@ -330,24 +290,7 @@ export function clampRcFloatingMousePosition(x: number, y: number, width: number
 
 // ==================== 壳子（Deskbase）保留的工具函数 ====================
 
-export async function copyText(
-  text: string,
-  onSuccess: () => void,
-  onError?: (e: unknown) => void,
-): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    onSuccess();
-  } catch (e) {
-    onError?.(e);
-  }
-}
-
 /** 字节数格式化为带单位的人类可读文本（B/KB/MB/GB），SecurityTab 与版本历史弹框共用（规则 11）。 */
-
-export function formatBytesPerSec(bytesPerSec: number): string {
-  return `${formatBytes(bytesPerSec)}/s`;
-}
 
 /**
  * 键盘事件是否发生在输入法组词（IME composition）过程中。

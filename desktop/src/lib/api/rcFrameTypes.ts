@@ -12,17 +12,6 @@ export interface RcFrameRect {
   h: number;
 }
 
-export interface RcFramePayload {
-  jpeg_base64: string;
-  at_ms: number;
-  full: boolean;
-  width: number;
-  height: number;
-  rect: RcFrameRect | null;
-  codec: "jpeg" | "h264" | "hevc" | "av1";
-  key: boolean;
-}
-
 /** 旧 JSON 轮询路径的帧已废弃，新路径：批量原始二进制（无 base64 / JSON 开销）。 */
 export interface RcBinFrame {
   /** Native AV1 RGBA; metadata counts compressed wire bytes, not raw IPC. */
@@ -55,8 +44,6 @@ export interface RcAudioFrame {
   ptsMs: number;
   data: Uint8Array;
 }
-
-export type RcAudioItem = { type: 0; cfg: RcAudioCfg } | ({ type: 1 } & RcAudioFrame);
 
 export type RcInputEvent =
   | { kind: "frame_presented"; session_id: string; at_ms: number }

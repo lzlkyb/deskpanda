@@ -59,7 +59,7 @@ const BASELINE = {
   "src/hooks/useRcInboundControls.ts": { lines: 140, hooks: 10 },
   "src/hooks/useRcInput.ts": { lines: 452, hooks: 9 },
   // 2026-11-20 扫描范围补入 src/contexts 时按实测登记（全仓最大非测试 tsx）。
-  "src/contexts/UpdateContext.tsx": { lines: 568, hooks: 19 },
+  "src/contexts/UpdateContext.tsx": { lines: 550, hooks: 19 },
 };
 
 function walk(dir, out = []) {

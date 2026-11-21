@@ -104,7 +104,7 @@ export function runningTasks(tasks: RcFileTask[]): RcFileTask[] {
  * 收口在此（规则 11.1）：底栏摘要 `barSummary` 和会话出口条 `RcCapsuleOutlet`
  * 读的是同一个「当前任务」，两处各写一遍 reduce 会出现两条进度互相打脸。
  */
-export function currentRunTask(tasks: RcFileTask[]): RcFileTask | null {
+function currentRunTask(tasks: RcFileTask[]): RcFileTask | null {
   const run = runningTasks(tasks);
   if (run.length === 0) return null;
   const transferring = run.filter((t) => t.state === "transferring");

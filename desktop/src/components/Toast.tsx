@@ -65,9 +65,9 @@ export const UNDO_WINDOW_MS = 6000;
  * - success：[`SUCCESS_TOAST_MS`] 一闪而过（复制/粘贴是高频操作，4 秒太吵）；
  * - info：维持 4s（被动通知需要读完）。
  */
-export const ERROR_TOAST_MS = 12000;
-export const ERROR_ACTION_TOAST_MS = 30000;
-export const SUCCESS_TOAST_MS = 2000;
+const ERROR_TOAST_MS = 12000;
+const ERROR_ACTION_TOAST_MS = 30000;
+const SUCCESS_TOAST_MS = 2000;
 
 /**
  * 一条 toast 的关闭计时器。

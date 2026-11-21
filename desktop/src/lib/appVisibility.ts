@@ -43,7 +43,7 @@ function recompute() {
 }
 
 /** 订阅可见性变化（非 React 消费者与单测用；React 里直接用 `useAppHidden()`）。 */
-export function subscribeAppVisibility(listener: () => void): () => void {
+function subscribeAppVisibility(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -51,7 +51,7 @@ export function subscribeAppVisibility(listener: () => void): () => void {
 }
 
 /** 读当前值（store 的 getSnapshot）。 */
-export function isAppHidden(): boolean {
+function isAppHidden(): boolean {
   return hidden;
 }
 
@@ -107,13 +107,4 @@ export function initAppVisibility(): () => void {
     disposeInner = undefined;
   };
   return disposeInner;
-}
-
-/** 仅测试用：重置模块级状态，避免用例间污染。 */
-export function __resetAppVisibilityForTest() {
-  disposeInner?.();
-  listeners.clear();
-  hiddenByHost = false;
-  hidden = false;
-  initialized = false;
 }

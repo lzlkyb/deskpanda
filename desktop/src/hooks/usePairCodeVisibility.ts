@@ -30,7 +30,7 @@ import { rcShortPairCode } from "@/lib/api/rc";
 import { logger } from "@/lib/logger";
 
 /** 亮码自动收回的默认时长（长期凭证在用）。 */
-export const PAIR_CODE_VISIBLE_MS = 60_000;
+const PAIR_CODE_VISIBLE_MS = 60_000;
 
 export type PairCodeVisibility = "masked" | "shown";
 
@@ -112,7 +112,7 @@ export function useCountdown(expiresAt: number | 0): [number, boolean] {
 }
 
 /** 到期换新的一次性提示：换码那一刻置 true，用户任一动作后消。 */
-export function useOneShotNotice() {
+function useOneShotNotice() {
   const [shown, setShown] = useState(false);
   const fired = useRef(false);
   /** 码换代时调用。同一代只响一次。 */

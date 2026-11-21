@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /** 手机方向来自系统；输入法缩小布局视口时不能误切换为横屏。 */
-export function getMobileLandscape() {
+function getMobileLandscape() {
   if (window.matchMedia("(pointer: coarse)").matches) {
     if (window.screen.orientation?.type) return window.screen.orientation.type.startsWith("landscape");
     if (typeof window.orientation === "number") return Math.abs(window.orientation) === 90;

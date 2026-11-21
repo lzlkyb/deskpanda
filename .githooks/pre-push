@@ -1,18 +1,21 @@
 #!/bin/sh
 # ──────────────────────────────────────────────────
-#  pre-push — push 前自动跑完整门禁（前端 + Rust）
+#  pre-push — push 前自动跑完整门禁（前端 + Rust，9 项）
 #
 #  安装：cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 #  跳过：git push --no-verify
 #
-#  为什么把这五项都放进钩子：
+#  为什么把这些项都放进钩子：
 #  一条规则要么由机器把关，要么就会烂掉。CLAUDE.md 要求「提交前跑 cargo fmt +
 #  clippy，保持零警告」，但之前没有任何东西执行它——clippy 只在 tag 触发的
-#  macOS job 里跑，于是可以连着 push 十次都不知道有警告。
+#  macOS job 里跑，于是可以连着 push 十次都不知道有警告。死代码同理：
+#  「保持没有死代码」写进规范文档没人执行，就等于没有——knip / cargo machete
+#  就是这条规范的机器执行版（详见 docs/代码整洁与防死代码规范-2026-11-21.md）。
 #
-#  顺序按「失败越快越靠前」排：fmt 瞬完、tsc/vitest 几秒、clippy 与 test 最慢。
+#  顺序按「失败越快越靠前」排：fmt / 体量瞬完、eslint / knip / machete 几秒、
+#  tsc / vitest 几十秒、clippy 与 cargo test 最慢。
 #
-#  ⚠️ 本钩子自己要跑两次 cargo（clippy + test），push 前不要另外手动起
+#  ⚠️ 本钩子自己要跑两次 cargo（machete + clippy + test），push 前不要另外手动起
 #     独立的 cargo test，否则会争抢 target/ 构建锁导致钩子失败。
 # ──────────────────────────────────────────────────
 
@@ -20,19 +23,19 @@ set -e
 
 echo ""
 echo "══════════════════════════════════════════════"
-echo "  Pre-push: 运行门禁（7 项）..."
+echo "  Pre-push: 运行门禁（9 项）..."
 echo "══════════════════════════════════════════════"
 echo ""
 
 # ── 组件体量（纯读文件，最快，放最前）──
 # 规则 7 的机器执行版：行数 + 单文件里的 useState/useEffect 总数。
 # 存量超标文件走棘轮基线（只许变小），新文件必须直接合规。
-echo "[1/7] 组件体量门禁 ..."
+echo "[1/9] 组件体量门禁 ..."
 (cd desktop && node scripts/check-component-size.mjs)
 echo ""
 
 # ── Rust 格式（瞬完，最常见的低级失败放最前）──
-echo "[2/7] cargo fmt --check ..."
+echo "[2/9] cargo fmt --check ..."
 if ! (cd desktop/src-tauri && cargo fmt --check >/dev/null 2>&1); then
   echo "  ❌ 格式不合规。在 desktop/src-tauri 下跑一句 'cargo fmt' 即可修复。"
   exit 1
@@ -44,13 +47,27 @@ echo ""
 # 上它的唯一理由是 react-hooks 那两条规则：依赖数组不全 / hooks 调用顺序问题
 # 会造成“闭包拿陈旧值”，而 tsc 完全看不出来。存量违规记在 eslint-suppressions.json
 # 里（棘轮，只许减少），新违规直接拦。
-echo "[3/7] eslint ..."
+echo "[3/9] eslint ..."
 (cd desktop && npx eslint .)
 echo "  ✅ eslint 通过"
 echo ""
 
+# ── 前端死代码（knip）──
+# 与 tsc 分工：tsc noUnusedLocals 管**模块内**未用声明，knip 管**跨模块**的
+# 未用文件 / 导出 / 依赖 / 未列依赖。当前基线为 0（全净），直接严格模式。
+# knip --fix 只摘 export 关键字，之后 tsc 会级联报出模块内未用——两者交替
+# 跑到都不报为止（这就是规范里的不动点流程）。
+echo "[4/9] knip（前端死代码）..."
+if ! (cd desktop && npx knip --no-progress); then
+  echo "  ❌ 存在死代码。先跑 'cd desktop && npx knip' 看清单；"
+  echo "     确认是真死后删掉，误报就改进 desktop/knip.json 的 entry（教 knip，别静默）。"
+  exit 1
+fi
+echo "  ✅ 无死代码"
+echo ""
+
 # ── 前端类型 ──
-echo "[4/7] 前端 tsc --noEmit ..."
+echo "[5/9] 前端 tsc --noEmit ..."
 (cd desktop && npx tsc --noEmit)
 echo "  ✅ 前端类型检查通过"
 echo ""
@@ -58,19 +75,32 @@ echo ""
 # ── 前端单测 ──
 # 单测盖的是真机难复现的纯计算（更新状态机、错误分类、随包记录汇总等）。
 # 不跑它们等于白写——历史上这里曾因"没有单测"被跳过整整两年。
-echo "[5/7] 前端 vitest ..."
+echo "[6/9] 前端 vitest ..."
 (cd desktop && npm test --silent)
 echo "  ✅ 前端单测通过"
 echo ""
 
+# ── Rust 未用依赖（cargo machete，文本级扫描，瞬完）──
+# Rust 代码级死代码由 clippy 的 dead_code lint 覆盖，依赖级归 machete。
+# 注意它是文本匹配：经 build.rs / 特性开关间接使用的依赖可能误报，
+# 误报用 ignore 配置排除并注明理由，不要直接删。
+echo "[7/9] cargo machete（Rust 未用依赖）..."
+if ! (cd desktop/src-tauri && cargo machete); then
+  echo "  ❌ 存在未使用的 Rust 依赖。确认无用后从 Cargo.toml 删除；"
+  echo "     误报（build.rs / 特性间接使用）在 machete.toml 里 ignore 并写理由。"
+  exit 1
+fi
+echo "  ✅ 无未用依赖"
+echo ""
+
 # ── Rust 静态检查（与 CI 的 macOS job 同等严格）──
-echo "[6/7] cargo clippy -D warnings ..."
+echo "[8/9] cargo clippy -D warnings ..."
 (cd desktop/src-tauri && cargo clippy --all-targets --no-default-features -- -D warnings)
 echo "  ✅ clippy 零警告"
 echo ""
 
 # ── Rust 测试 ──
-echo "[7/7] Rust cargo test ..."
+echo "[9/9] Rust cargo test ..."
 (cd desktop/src-tauri && cargo test --no-default-features)
 echo "  ✅ Rust 测试通过"
 echo ""

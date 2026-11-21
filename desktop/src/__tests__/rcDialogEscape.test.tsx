@@ -61,7 +61,6 @@ vi.mock("@/hooks/useRcNearbyPair", () => ({
 
 // 各屏内容与 Esc 无关，换成空壳 —— 免得把 CodeMirror / 剪贴板 / 倒计时拖进来。
 vi.mock("@/components/settings/RcShortPairPane", () => ({ RcShortPairPane: () => null }));
-vi.mock("@/components/settings/RcPairModeSelect", () => ({ RcPairModeSelect: () => null }));
 vi.mock("@/components/settings/RcPairCreatePane", () => ({ RcPairCreatePane: () => null }));
 vi.mock("@/components/settings/RcPairPastePane", () => ({ RcPairPastePane: () => null }));
 vi.mock("@/components/settings/RcPairPin", () => ({ RcPairPin: () => null }));

@@ -18,7 +18,7 @@ export const MOTION = {
 } as const;
 
 /** 远程工作台动效：一套 cadence 管 controls / content / layers。 */
-export const WB_MOTION = {
+const WB_MOTION = {
   fast: 0.15,
   base: 0.2,
   panel: 0.3,

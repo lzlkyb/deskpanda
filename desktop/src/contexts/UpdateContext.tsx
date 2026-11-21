@@ -78,24 +78,6 @@ export interface FriendlyError {
   raw: string;
 }
 
-/**
- * 后端 `update:error` 的机器可读原因码（Rust 侧 `classify_update_error` 产出）。
- *
- * 为什么要有它：原先只有一段原始英文错误，前端靠 `includes("fetch")` 猜原因。
- * 插件的 manifest 错误文案恰好含 "fetch"，于是「源上 404」被翻译成「你的网络有问题」，
- * 而真正的 `error sending request` 反而落到兜底 —— 两个方向都错（2026-10-22 实测）。
- * 有了 code 之后文案由后端定性、前端只负责措辞。
- */
-export type UpdateErrorCode =
-  | "manifest"
-  | "network"
-  | "timeout"
-  | "signature"
-  | "install"
-  | "config"
-  | "stale"
-  | "unknown";
-
 /** code → 用户文案。键必须与 Rust 侧 `classify_update_error` 的返回值一一对应。 */
 const ERROR_TEXT: Record<string, string> = {
   manifest: "更新服务器上暂时没有可用的更新信息，请稍后重试",

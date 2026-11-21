@@ -45,7 +45,7 @@ export function formatWhen(ts: number): string {
  * - **对端 pong 的新鲜度**才答「链路还活着吗」（`linkStateOf`）。
  * - 只有「我操作了、但操作之后一直没有新帧」才是真问题（`actionUnansweredMs`）。
  */
-export const FRAME_IDLE_MS = 2500;
+const FRAME_IDLE_MS = 2500;
 
 /**
  * 「有后果的操作」之后多久还没画面变化 = 该提示。
@@ -67,9 +67,9 @@ export const HEARTBEAT_STALE_MS = 6000;
 export const HEARTBEAT_FAIL_MS = 12000;
 
 /** RTT 分档阈值（ms）。参考 Parsec 的口径：<30 好，<60 对多数人可接受。 */
-export const RTT_GOOD_MS = 30;
-export const RTT_OK_MS = 60;
-export const RTT_FAIR_MS = 200;
+const RTT_GOOD_MS = 30;
+const RTT_OK_MS = 60;
+const RTT_FAIR_MS = 200;
 
 export type RttGrade = "good" | "ok" | "fair" | "poor" | "unknown";
 

@@ -22,10 +22,3 @@ export async function readClipboardText(): Promise<string> {
     return "";
   }
 }
-
-/**
- * 写纯文本到剪贴板。写入后由 Rust 侧回读校验，不一致会抛错。
- */
-export async function copyOnly(text: string): Promise<void> {
-  await invoke("copy_only", { text });
-}

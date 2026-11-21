@@ -12,8 +12,6 @@
 //
 // realSetTimeout 在**模块装载时**取，早于任何 `vi.useFakeTimers()`：假计时器会替换
 // globalThis.setTimeout，之后再取就只会拿到那个永不推进的假钟。
-import { act } from "@testing-library/react";
-
 const realSetTimeout = globalThis.setTimeout;
 
 const DEFAULT_MAX_TICKS = 200;
@@ -26,22 +24,4 @@ export async function waitUntilContent(probe: () => boolean, label: string, maxT
     await oneRealTick();
   }
   throw new Error(`等不到「${label}」：${maxTicks} 拍真实宏任务后判据仍不成立（取数没落地，不是断言写错）`);
-}
-
-/**
- * 判据读的是**渲染出来的 DOM** 时用这一条。
- *
- * 与 waitUntilContent 的差别只有一件：每一拍都包在 `act` 里，于是取数落地触发的
- * setState 会在下一拍复查之前真的提交到 DOM（裸 `await` 时 React 的提交排在另一个
- * 宏任务上，判据可能晚一拍才成立——不致错，但白等）。
- * 只有 jsdom 环境的测试文件该引它；node 环境的纯逻辑用例用 waitUntilContent。
- */
-export async function waitUntilRenderedContent(probe: () => boolean, label: string, maxTicks = DEFAULT_MAX_TICKS): Promise<void> {
-  for (let tick = 0; tick < maxTicks; tick++) {
-    if (probe()) return;
-    await act(async () => {
-      await oneRealTick();
-    });
-  }
-  throw new Error(`等不到「${label}」：${maxTicks} 拍 act 内的真实宏任务后判据仍不成立（取数没落地，不是断言写错）`);
 }

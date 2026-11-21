@@ -104,6 +104,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # argon2 的 OsRng 依赖 rand_core 的 getrandom feature；主 App 靠其他依赖合并启用，
 # 新仓没有那些依赖，必须显式声明，否则 unop.rs 的 SaltString::generate 编译不过。
 rand_core = { version = "0.6", features = ["getrandom"] }
+# cargo machete（未用依赖扫描）会误报 rand_core：它看不见 unop.rs 里的
+# `argon2::password_hash::rand_core::OsRng` 再导出路径，更不懂「为了开 feature
+# 而声明」的依赖——删掉它 OsRng 就没有 getrandom，SaltString::generate 直接编译
+# 不过（见上方注释）。已用 `cargo tree -e features -i rand_core@0.6.4` 实证：
+# getrandom 特性在全图只有本声明在启用。
+[package.metadata.cargo-machete]
+ignored = ["rand_core"]
 
 # 桌面专属依赖（Android/iOS 目标不编译，2026-11-20 手机端迁移 S7 补）：
 # - tauri-plugin-single-instance：单实例是桌面语义，插件本身无 Android 实现；

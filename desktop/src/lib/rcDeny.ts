@@ -1,6 +1,6 @@
 /** RC 远程错误分档：稳定 code → 标题 + 下一步提示。 */
 
-export type RcErrorKind =
+type RcErrorKind =
   | "disabled"
   | "device_denied"
   | "not_paired"

@@ -19,7 +19,7 @@ export const APP_INFO = {
   description: "DeskPanda —— 一个桌面应用",
 } as const;
 
-export type ChangeCategory = "feat" | "improve" | "fix" | "sec";
+type ChangeCategory = "feat" | "improve" | "fix" | "sec";
 
 /**
  * 存储键/localStorage 前缀用的应用短名，由显示名推导（改名自动跟随）。
@@ -30,14 +30,7 @@ export const APP_SLUG = APP_INFO.name
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "");
 
-export const CATEGORY_LABELS: Record<ChangeCategory, string> = {
-  feat: "新增",
-  improve: "改进",
-  fix: "修复",
-  sec: "安全",
-};
-
-export interface ChangelogItem {
+interface ChangelogItem {
   category: ChangeCategory;
   text: string;
 }

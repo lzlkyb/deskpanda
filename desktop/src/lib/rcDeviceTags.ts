@@ -13,11 +13,11 @@ import type { RcDeviceTag } from "@/lib/api/rc";
 
 export const TAG_COLOR_KEYS = ["red", "amber", "green", "cyan", "blue", "violet"] as const;
 export type TagColorKey = (typeof TAG_COLOR_KEYS)[number];
-export const DEFAULT_TAG_COLOR: TagColorKey = "blue";
+const DEFAULT_TAG_COLOR: TagColorKey = "blue";
 export const MAX_TAGS_PER_DEVICE = 6;
-export const MAX_TAG_NAME_CHARS = 12;
+const MAX_TAG_NAME_CHARS = 12;
 
-export function isTagColorKey(x: string): x is TagColorKey {
+function isTagColorKey(x: string): x is TagColorKey {
   return (TAG_COLOR_KEYS as readonly string[]).includes(x);
 }
 

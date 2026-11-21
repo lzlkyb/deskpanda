@@ -23,9 +23,9 @@ export interface RcFsHintMetrics {
 }
 
 /** 低于此高度视为「舞台太矮，该全屏」。 */
-export const FS_HINT_STAGE_MIN_H = 360;
+const FS_HINT_STAGE_MIN_H = 360;
 /** 显示边相对远端内容低于此比例 → 绝对坐标放大比明显，鼠标会显得更快。 */
-export const FS_HINT_SCALE = 0.55;
+const FS_HINT_SCALE = 0.55;
 
 /**
  * 是否展示非全屏轻提示。

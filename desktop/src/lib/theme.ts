@@ -1,25 +1,13 @@
-/**
- * 主题定义 — 6 套配色方案（远程工作台沿用 pastePanda 的视觉体系）。
- *
- * 两套「主题」概念在本仓并存，别混：
- * - **本模块的 ThemeKey**（`ocean`/`midnight`/…）：真源是 `styles/theme.css` 的
- *   `[data-theme="…"]` 变量块，rc 的所有 CSS Module 都靠这些 `--x` 变量上色。
- * - **壳子遗留的 `.dark` class**（Tailwind dark: 前缀用）：只剩壳子原生的几个
- *   ui 组件在用。`applyTheme` 会同时维护两者，所以两边都不会掉色——但**新增样式
- *   请只用 `var(--*)`**，不要再往 `.dark` 上挂东西，那是待拆除的兼容层。
- */
-import { useEffect, useState } from "react";
-
 export type ThemeKey = "ocean" | "ocean-dark" | "midnight" | "forest" | "blossom" | "dawn";
 
-export interface Theme {
+interface Theme {
   key: ThemeKey;
   displayName: string;
   /** 是否为暗色主题 */
   dark: boolean;
 }
 
-export const THEMES: Theme[] = [
+const THEMES: Theme[] = [
   // key 是后端存储值 + theme.css 的 [data-theme] 锚点，改名只改 displayName。
   { key: "ocean", displayName: "月白", dark: false },
   { key: "ocean-dark", displayName: "深海", dark: true },
@@ -55,7 +43,7 @@ export function normalizeTheme(value: unknown): ThemeKey {
  *
  * 服务于「不跟 `[data-theme]` 全套变量、只要亮暗二档」的宿主。
  */
-export function isDarkTheme(value: unknown): boolean {
+function isDarkTheme(value: unknown): boolean {
   return THEMES.find((t) => t.key === normalizeTheme(value))?.dark ?? false;
 }
 
@@ -109,7 +97,7 @@ export function applyTheme(themeKey: ThemeKey) {
 }
 
 /** 切主题并持久化；返回实际生效的主题。 */
-export function setTheme(themeKey: ThemeKey): ThemeKey {
+function setTheme(themeKey: ThemeKey): ThemeKey {
   applyTheme(themeKey);
   safeSetItem("theme", themeKey);
   window.dispatchEvent(new CustomEvent<ThemeKey>("themechange", { detail: themeKey }));
@@ -127,17 +115,6 @@ export function toggleTheme(): ThemeKey {
 }
 
 /** 获取当前主题 */
-export function getCurrentTheme(): ThemeKey {
+function getCurrentTheme(): ThemeKey {
   return normalizeTheme(document.documentElement.getAttribute("data-theme") ?? DEFAULT_THEME);
-}
-
-/** 当前主题（跟随 `themechange` 事件，供设置页色板与图标同步）。 */
-export function useThemeKey(): ThemeKey {
-  const [key, setKey] = useState<ThemeKey>(() => getCurrentTheme());
-  useEffect(() => {
-    const onChange = () => setKey(getCurrentTheme());
-    window.addEventListener("themechange", onChange);
-    return () => window.removeEventListener("themechange", onChange);
-  }, []);
-  return key;
 }

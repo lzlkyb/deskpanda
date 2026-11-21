@@ -20,7 +20,6 @@ import type {
   RcMonitorInfo,
   RcSession,
   RcStatus,
-  RcSyncOffer,
   RcTargetDevice,
   RcUnoCreated,
 } from "./rcTypes";
@@ -49,18 +48,6 @@ export function rcProbeTargets(nodeIds: string[]): Promise<Record<string, boolea
   return invoke<Record<string, boolean>>("rc_probe_targets", { nodeIds });
 }
 
-export function rcSyncOffers(): Promise<RcSyncOffer[]> {
-  return invoke<RcSyncOffer[]>("rc_sync_offers");
-}
-
-export function kbSyncAllowFromRc(nodeId: string, name: string): Promise<void> {
-  return invoke("kb_sync_allow_from_rc", { nodeId, name });
-}
-
-export function kbSyncDenyFromRc(nodeId: string): Promise<void> {
-  return invoke("kb_sync_deny_from_rc", { nodeId });
-}
-
 export function rcInviteCreate(name: string): Promise<RcInviteCreated> {
   return invoke<RcInviteCreated>("rc_invite_create", { name });
 }
@@ -70,16 +57,8 @@ export function rcInviteRevoke(): Promise<void> {
   return invoke("rc_invite_revoke");
 }
 
-export function rcExchangeBegin(code: string): Promise<RcExchangeStarted> {
-  return invoke<RcExchangeStarted>("rc_exchange_begin", { code });
-}
-
 export function rcShortPairCode(): Promise<RcInviteCreated> {
   return invoke<RcInviteCreated>("rc_short_pair_code");
-}
-
-export function rcShortPairBegin(ownCode: string, peerCode: string): Promise<RcExchangeStarted> {
-  return invoke<RcExchangeStarted>("rc_short_pair_begin", { ownCode, peerCode });
 }
 
 export function rcShortPairCancel(): Promise<void> {
@@ -279,10 +258,6 @@ export function rcDeviceAutoAcceptSet(nodeId: string, on: boolean): Promise<void
 
 export function rcEndSession(): Promise<void> {
   return invoke("rc_end_session");
-}
-
-export function rcRequireActive(): Promise<RcSession> {
-  return invoke<RcSession>("rc_require_active");
 }
 
 // ── G3 音频 ─────────────────────────────────────────────────────────────

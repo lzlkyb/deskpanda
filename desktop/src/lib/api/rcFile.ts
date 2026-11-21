@@ -12,7 +12,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /** 请求方向：对方要发给我（push）／对方要我把文件发给他（pull）。 */
-export type RcFileAskKind = "push" | "pull";
+type RcFileAskKind = "push" | "pull";
 
 /** 任务方向（本机视角）。 */
 export type RcFileTaskDir = "send" | "recv";

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { rcSessionHistory, type RcHistoryItem } from "@/lib/api/rc";
 
-export interface RcHistoryData {
+interface RcHistoryData {
   list: RcHistoryItem[];
   loading: boolean;
   err: string | null;

@@ -61,7 +61,7 @@ export interface RcAskHost {
 /** 桌面浮层的形态，与 `src-tauri/src/rc/ask_pop.rs` 的 `FloatMode::as_str` 逐字同口径。 */
 export type RcAskMode = "ask" | "capsule" | "hidden";
 
-export interface RcJoinRequest {
+interface RcJoinRequest {
   node_id: string;
   first_seen_ms: number;
   last_seen_ms: number;
@@ -69,7 +69,7 @@ export interface RcJoinRequest {
 }
 
 /** 无人值守固定密码的开启状态（Q2 方案 C）。后端绝不回传密码或其哈希。 */
-export interface RcUnoPassInfo {
+interface RcUnoPassInfo {
   /** 密码接入授予的能力档上限。 */
   cap: RcCapability;
   /** true = 允许跨网（false = 仅局域网，默认）。 */
@@ -81,7 +81,7 @@ export interface RcUnoPassInfo {
 /** 🔴 P1-4（2026-09-23 审计）：一次非阻塞发起失败的**带归因**投影（后端同名结构）。
  * 失败槽是全局单值而写它的路径有多条（手动发起 / 自动重连、多台设备），
  * 旧裸文案会归因漂移；`peer`/`session_id` 供展示侧把错误挂回正确的设备。 */
-export interface RcOutboundError {
+interface RcOutboundError {
   peer: string;
   session_id: string;
   /** 给用户看的文案（原 `Option<String>` 的内容）。 */
@@ -286,7 +286,7 @@ export interface RcPathChanged {
   to: string;
 }
 
-export type RcPresence = "live" | "recent" | "seen" | "never";
+type RcPresence = "live" | "recent" | "seen" | "never";
 
 /** 设备彩色标签（对齐 RustDesk TagPainter：行上只画色点，文字进悬停）。 */
 export interface RcDeviceTag {
@@ -342,12 +342,6 @@ export interface RcTargetDevice {
   remark?: string;
 }
 
-export interface RcSyncOffer {
-  node_id: string;
-  name: string;
-  paired_at: string;
-}
-
 export interface RcIdentity {
   node_id: string;
   fingerprint: string;
@@ -374,7 +368,7 @@ export interface RcInvite {
 }
 
 /** 在效的无人值守接入码摘要（Q2）。后端绝不给码本身——码只有生成那一刻可见。 */
-export interface RcUnoInfo {
+interface RcUnoInfo {
   /** 过期时刻（epoch 毫秒）。 */
   expires_ms: number;
   /** true = 24 小时内不限次。 */

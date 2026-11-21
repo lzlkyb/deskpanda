@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": [
+    "index.html",
+    "rcask.html",
+    "motion-preview.html",
+    "src/design-preview/main.tsx",
+    "src/design-preview/motion.tsx",
+    "src-mobile/index.html",
+    "scripts/*.mjs",
+    "scripts/*.d.mts",
+    "public/mobile-boot.css"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx,css}",
+    "src-mobile/**/*.{ts,tsx,css}",
+    "scripts/**/*.{mjs,d.mts}"
+  ],
+  "ignore": [],
+  "ignoreDependencies": []
+}

@@ -22,17 +22,3 @@
 export function isConfirmLayerPresent(except?: Element | null): boolean {
   return Array.from(document.querySelectorAll(".z-confirm")).some(layer => layer !== except);
 }
-
-/**
- * 设置页视角：有浮层盖着它，或有控件正在吃键盘。
- * 命中就整页快捷键让路——否则会出现「Esc 关不掉删除确认框」「录制快捷键时按 `/`
- * 把焦点抢走、录制被 `onBlur` 取消」这类**看着像弹框坏了**的静默失效。
- *
- * `[data-hotkey-recording]` 由 `HotkeyRecorder` 在录制态挂上（它自己没有 window 监听，
- * 只能靠上层让路）。
- */
-export function blocksPageShortcuts(): boolean {
-  return (
-    document.querySelector(".dialog-backdrop, .shortcut-overlay, [data-hotkey-recording]") !== null
-  );
-}

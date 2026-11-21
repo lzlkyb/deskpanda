@@ -35,7 +35,7 @@ function isVersionSkipped(version: string): boolean {
   return localStorage.getItem(`${SKIP_VERSION_PREFIX}${version}`) === "1";
 }
 
-export function fmtBytes(n: number): string {
+function fmtBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0 KB";
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;

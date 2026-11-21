@@ -138,7 +138,7 @@ export function visibleQualities(opts: {
 }
 
 /** 自动档实际生效档位的短文案（后端 RcStatus.active_quality）。 */
-export function activeQualityLabel(active: string | undefined): string {
+function activeQualityLabel(active: string | undefined): string {
   return qualityLabel(active || "balanced");
 }
 
@@ -194,11 +194,6 @@ export const RC_BITRATE_OPTIONS: readonly RcBitrateOption[] = [
     meta: "默认",
   },
 ];
-
-/** 下拉当前值的短文案（未知 pct 直接显示百分比，不猜档名）。 */
-export function bitrateLabel(pct: number): string {
-  return RC_BITRATE_OPTIONS.find((o) => o.pct === pct)?.label ?? `${pct}%`;
-}
 
 /**
  * 短文案。给宽度受限的位置用（HUD、画面占位提示）。

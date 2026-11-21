@@ -34,14 +34,6 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
-// 模块级单例：供非组件代码（如 lib/tauri.ts 的 invokeOrToast）直接调用 toast。
-// 由 ToastProvider 挂载时写入实现；未挂载时调用为 no-op。
-let toastImpl: ((message: string, variant?: ToastVariant) => void) | null = null;
-
-export function toast(message: string, variant: ToastVariant = "info") {
-  toastImpl?.(message, variant);
-}
-
 let toastId = 0;
 const TOAST_LIFETIME = 3500;
 
@@ -87,12 +79,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const removeToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-
-  // 将实现暴露给模块级单例（供非组件调用，如 invokeOrToast）
-  useEffect(() => {
-    toastImpl = addToast;
-    return () => { if (toastImpl === addToast) toastImpl = null; };
-  }, [addToast]);
 
   return (
     <ToastContext.Provider value={{ toast: addToast }}>

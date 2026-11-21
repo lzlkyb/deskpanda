@@ -3,7 +3,7 @@ import type { TargetAndTransition, Transition } from "framer-motion";
 import { useInterfaceMotion } from "@/components/MotionPolicy";
 import { CONTROL_TRANSITION, PANEL_TRANSITION, CONTENT_TRANSITION } from "@/lib/motion";
 
-export interface DialogMotionProps {
+interface DialogMotionProps {
   initial: TargetAndTransition;
   animate: TargetAndTransition;
   exit: TargetAndTransition;

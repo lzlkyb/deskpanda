@@ -67,7 +67,7 @@ const REVEAL_THROUGH_MS = 200;
 /** 无交互这么久后淡出。 */
 const AUTO_HIDE_MS = 2500;
 /** 连接成功后的首显时长（用户指定：15s 再隐藏）。 */
-export const INITIAL_SHOW_MS = 15000;
+const INITIAL_SHOW_MS = 15000;
 
 /** 一次 mousemove 该对浮条做什么——纯判断，守卫单测钉住（规则 11.1）。 */
 export type RcRevealGesture = "hold" | "keep" | "dwell" | "idle";

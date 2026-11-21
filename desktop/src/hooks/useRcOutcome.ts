@@ -17,7 +17,7 @@ import { pushRcOutlet, clearRcOutlet, type RcOutletEntry } from "@/stores/rcOutl
 import { rcOutletKindOfToast } from "@/lib/rcOutlet";
 
 /** 出口条的入参（`kind` 之外的字段原样透传）。 */
-export type RcOutletPush = Omit<RcOutletEntry, "id" | "kind"> & { kind?: RcOutletEntry["kind"] };
+type RcOutletPush = Omit<RcOutletEntry, "id" | "kind"> & { kind?: RcOutletEntry["kind"] };
 
 export interface RcOutcome {
   /** toast + 出口条，一次调用两处都到。 */

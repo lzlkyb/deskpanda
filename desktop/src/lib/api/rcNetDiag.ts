@@ -22,7 +22,7 @@ export interface FamilyMapping {
   observed: string | null;
 }
 
-export interface RelayLatencyEntry {
+interface RelayLatencyEntry {
   probe: string;
   relay: string;
   ms: number;

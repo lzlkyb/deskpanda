@@ -54,5 +54,3 @@ export function useRcLocalAbility() {
 
   return { monitors, caps, loadError, reload, capsUnknown, monitorsUnknown, qualities };
 }
-
-export type RcLocalAbility = ReturnType<typeof useRcLocalAbility>;

@@ -21,7 +21,7 @@ export type WbMainMode = "inbound" | "outbound" | "pending" | "idle";
  * 判分支的地方都从这里拿，两处各写一遍 phase 比较迟早会漏掉一个分支
  * （本文件顶部的说明就是这么来的）。
  */
-export function sessionMode(session: RcSession | null | undefined): WbMainMode {
+function sessionMode(session: RcSession | null | undefined): WbMainMode {
   const phase = session?.phase;
   if (!phase || phase === "idle") return "idle";
   // inbound_pending 目前后端不产出（RcSession 类型里有、Rust 侧无赋值点），

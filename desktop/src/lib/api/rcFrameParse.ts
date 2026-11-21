@@ -9,13 +9,8 @@ import type {
   RcAudioCfg,
   RcAudioFrame,
   RcBinFrame,
-  RcFramePayload,
   RcFrameRect,
 } from "./rcFrameTypes";
-
-export function rcLatestFrame(): Promise<RcFramePayload | null> {
-  return invoke<RcFramePayload | null>("rc_latest_frame");
-}
 
 /**
  * 解析 `rc_drain_frames` 返回的原始字节。布局见后端 `encode_frame_batch`

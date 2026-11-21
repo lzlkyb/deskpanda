@@ -29,7 +29,7 @@ const LABELS: Record<string, string> = { 新增: "新增", 变更: "改进", 优
 const PRIVATE = new Set(["用户摘要", "技术细节", "实现说明", "开发者"]);
 
 /** Only stable semantic versions participate in ranges; unknown versions get latest-only notes. */
-export function compareReleaseVersions(a: string, b: string): number | null {
+function compareReleaseVersions(a: string, b: string): number | null {
   const parse = (version: string) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version)?.slice(1).map(Number);
   const left = parse(a), right = parse(b);
   if (!left || !right) return null;
