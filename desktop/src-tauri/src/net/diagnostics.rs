@@ -92,6 +92,11 @@ pub struct NetDiagSnapshot {
     /// 两个协议族各自的观测明细（前端展开用）。
     pub family_v4: FamilyMapping,
     pub family_v6: FamilyMapping,
+    /// 当前 home 中继 URL（P0 决策 C1）。`None` = 还没选中 / 未启用中继。
+    /// 注意这是「实际连接着的中继」，与 `preferred_relay`（探测偏好）是两回事。
+    pub home_relay: Option<String>,
+    /// home 中继是否已连接。iroh 1.1 只有 `is_connected()` 两态（无 connecting）。
+    pub home_relay_connected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,7 +169,14 @@ pub async fn snapshot(ep: &Endpoint) -> Option<NetDiagSnapshot> {
     let report = tokio::time::timeout(Duration::from_secs(8), fut)
         .await
         .ok()?;
-    Some(to_snapshot(&report))
+    let mut snap = to_snapshot(&report);
+    // P0 决策 C1：中继可见层。net_report 只知道「探测时刻」的偏好，
+    // 「现在实际连着谁」来自 home_relay_status（与 RcStatus 同一个取数口）。
+    if let Some((url, connected)) = crate::net::relay_config::home_relay(ep) {
+        snap.home_relay = Some(url);
+        snap.home_relay_connected = connected;
+    }
+    Some(snap)
 }
 
 fn to_snapshot(report: &NetReport) -> NetDiagSnapshot {
@@ -199,6 +211,9 @@ fn to_snapshot(report: &NetReport) -> NetDiagSnapshot {
             report.mapping_varies_by_dest_ipv6,
             report.global_v6.as_ref(),
         ),
+        // 由 snapshot() 在 net_report 之外补填（home_relay_status 与报告无关）。
+        home_relay: None,
+        home_relay_connected: false,
     }
 }
 

@@ -24,6 +24,7 @@
 import { remoteCodecLabel } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
 import { Info } from "lucide-react";
+import { pathRowValue } from "@/lib/api/rcNetDiag";
 import styles from "./RemoteComputer.module.css";
 import { isSessionEscape } from "@/lib/rcKeyGuard";
 import { registerRcPanel, unregisterRcPanel } from "@/lib/rcPanelFocus";
@@ -66,6 +67,7 @@ export function RcHud({
   scope,
   linkState,
   pathKind,
+  homeRelay,
   linkSched,
   pointerLocked,
   frameSize,
@@ -95,6 +97,7 @@ export function RcHud({
   linkState: RcLinkState;
   /** `lan` / `direct` / `relay`；空串 = 未测到，不显示这一行。 */
   pathKind: string;
+  homeRelay?: string | null; // P0 C1：中继路径时附在「路径」值后
   /**
    * 链路调度相位（P1）：`stable` / `degraded` / `recovering` / 空串。
    * stable 与空串都不出行（stable 是常态，出行就是噪音）——只报异常相位：
@@ -195,7 +198,7 @@ export function RcHud({
     { label: "链路", value: linkStateLabel(linkState), cls: linkCls, hint: "按对端 pong 的新鲜度判定" },
   );
   if (path) {
-    rows.push({ label: "路径", value: path, hint: pathKindHint(pathKind) });
+    rows.push({ label: "路径", value: pathRowValue(pathKind, path, homeRelay), hint: pathKindHint(pathKind) });
   }
   // P1 链路调度相位：只报异常（degraded / recovering），stable 不出行。
   // 与「链路」行是两个维度：链路行答「活没活」，这里答「调度器怎么看它」。

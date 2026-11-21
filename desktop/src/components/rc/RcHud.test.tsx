@@ -140,3 +140,41 @@ describe("RcHud 链路调度相位（P1 link_sched）", () => {
     expect((panel(c4)!.textContent ?? "")).not.toContain("调度");
   });
 });
+
+describe("RcHud 路径行 · P0 C1 中继域名", () => {
+  beforeEach(() => {
+    resetRttTrend();
+  });
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("中继路径时，「路径」值带上 home 中继的域名（验收 §6.5 的判据格）", () => {
+    const { container } = renderHud({
+      pathKind: "relay",
+      homeRelay: "https://relay.example.com/",
+    });
+    fireEvent.click(trigger(container)!);
+    const text = panel(container)!.textContent ?? "";
+    expect(text).toContain("绕中继");
+    expect(text).toContain("（relay.example.com）");
+  });
+
+  it("直连路径不显示中继域名——两维度别混（homeRelay 有值也不出）", () => {
+    const { container } = renderHud({
+      pathKind: "direct",
+      homeRelay: "https://relay.example.com/",
+    });
+    fireEvent.click(trigger(container)!);
+    const text = panel(container)!.textContent ?? "";
+    expect(text).not.toContain("relay.example.com");
+  });
+
+  it("中继路径但没有 homeRelay（未选中/旧后端）——不拼空括号，退回纯路径文案", () => {
+    const { container } = renderHud({ pathKind: "relay" });
+    fireEvent.click(trigger(container)!);
+    const text = panel(container)!.textContent ?? "";
+    expect(text).toContain("绕中继");
+    expect(text).not.toContain("（）");
+  });
+});

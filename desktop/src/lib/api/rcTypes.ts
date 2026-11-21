@@ -125,6 +125,11 @@ export interface RcStatus {
    */
   path_kind?: string;
   /**
+   * 当前 home 中继 URL（P0 C1）。null/undefined = 未选中或未启用——
+   * 与 path_kind 两个维度：路径答「这条会话走哪」，它答「中继层现在连着谁」。
+   */
+  home_relay?: string | null;
+  /**
    * 链路调度相位（P1，2026-10-15）：`stable` / `degraded` / `recovering`；
    * 空串 = 无会话（不显示）。degraded = 心跳/入站证据断供（看门狗口径），
    * recovering = 断供后重新见到证据、恢复观察窗内。与 path_kind 是两个

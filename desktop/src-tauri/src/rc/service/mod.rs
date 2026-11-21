@@ -154,6 +154,9 @@ pub struct RcStatus {
     pub loss_permille: u32,
     /// 会话链路实际走的路：`lan` / `direct` / `relay`；空串 = 未测到（前端不显示这格）。
     pub path_kind: String,
+    /// 当前 home 中继 URL（P0 决策 C1）。`None` = 未选中/未启用——
+    /// 与 `path_kind` 是两个维度：路径答「这条会话走的哪」，它答「中继层现在连着谁」。
+    pub home_relay: Option<String>,
     /// 链路调度相位（P1，2026-10-15）：`stable` / `degraded` / `recovering`；
     /// 空串 = 无会话（前端不显示）。degraded = 证据断供，recovering = 恢复观察窗内。
     pub link_sched: String,
