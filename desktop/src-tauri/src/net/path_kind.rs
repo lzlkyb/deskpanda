@@ -57,10 +57,17 @@ use iroh::TransportAddr;
 ///   充的是 `None`——“没测到”而不是随便猜一档。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PathKind {
-    /// 局域网直连（IP 路径，且是私网地址）。
+    /// 局域网直连（IP 路径，且是私网地址；IPv4）。
     Lan,
-    /// 公网直连（IP 路径，打洞成功）。
+    /// 局域网直连的 IPv6 形态（fe80 链路本地 / ULA 私网段）。
+    ///
+    /// P1（IPv6 直连优先）引入：v6 直连是否真的在发生，验收与排障都要
+    /// **看得见**——v4/v6 分开报，而不是混在同一个「局域网」里。
+    LanV6,
+    /// 公网直连（IP 路径，打洞成功；IPv4）。
     Direct,
+    /// 公网直连的 IPv6 形态（公网 v6 地址——双端有公网 v6 时直连的常见赢家）。
+    DirectV6,
     /// 绕中继。
     Relay,
     /// 一条开放路径都没有。
@@ -73,17 +80,23 @@ impl PathKind {
     pub fn label(self) -> &'static str {
         match self {
             PathKind::Lan => "局域网",
+            PathKind::LanV6 => "局域网(IPv6)",
             PathKind::Direct => "公网直连",
+            PathKind::DirectV6 => "公网直连(IPv6)",
             PathKind::Relay => "绕中继",
             PathKind::None => "离线",
         }
     }
 
     /// 存进库的稳定字符串（不用中文：文案改了不能让库里的值失效）。
+    /// 🔴 新增值只加不改：旧库里已存的 `lan` / `direct` / `relay` 是历史事实；
+    /// 前端对不认识的值一律不渲染那一格（`pathKindLabel` 返回空串），不会炸。
     pub fn as_str(self) -> &'static str {
         match self {
             PathKind::Lan => "lan",
+            PathKind::LanV6 => "lan-v6",
             PathKind::Direct => "direct",
+            PathKind::DirectV6 => "direct-v6",
             PathKind::Relay => "relay",
             PathKind::None => "",
         }
@@ -154,11 +167,24 @@ fn path_kind_with_underlay<'a>(
     }
 }
 
-/// 单条地址属于哪一档。
+/// 单条地址属于哪一档。v4/v6 分开报（P1）：同档里 v6 是独立枚举值。
 fn kind_of_addr(addr: &TransportAddr) -> PathKind {
     match addr {
-        TransportAddr::Ip(sa) if is_lan_ip(sa.ip()) => PathKind::Lan,
-        TransportAddr::Ip(_) => PathKind::Direct,
+        TransportAddr::Ip(sa) => {
+            let ip = sa.ip();
+            let v6 = matches!(ip, std::net::IpAddr::V6(_));
+            if is_lan_ip(ip) {
+                if v6 {
+                    PathKind::LanV6
+                } else {
+                    PathKind::Lan
+                }
+            } else if v6 {
+                PathKind::DirectV6
+            } else {
+                PathKind::Direct
+            }
+        }
         TransportAddr::Relay(_) => PathKind::Relay,
         // `TransportAddr` 是 `#[non_exhaustive]` 的（还有 `Custom`）。
         // 不认识的路径类型当中继算：它至少证明**通**，
@@ -167,11 +193,17 @@ fn kind_of_addr(addr: &TransportAddr) -> PathKind {
     }
 }
 
-/// 优先级：Lan(3) > Direct(2) > Relay(1) > None(0)
+/// 优先级：Lan(5) > LanV6(4) > Direct(3) > DirectV6(2) > Relay(1) > None(0)。
+///
+/// 只作用于「没有任何路径被选中」时的**回退显示**（快照可能正落在路径迁移
+/// 中间的瞬间）。同档 v4 略高于 v6 是刻意的保守口径：两族同时开放而都不在
+/// 传数据时报哪个都只是猜测，报 v4 与历史行为一致，不给老用户无故变标签。
 fn rank(p: PathKind) -> u8 {
     match p {
-        PathKind::Lan => 3,
-        PathKind::Direct => 2,
+        PathKind::Lan => 5,
+        PathKind::LanV6 => 4,
+        PathKind::Direct => 3,
+        PathKind::DirectV6 => 2,
         PathKind::Relay => 1,
         PathKind::None => 0,
     }
@@ -265,6 +297,67 @@ mod tests {
         TransportAddr::Ip(s.parse().unwrap())
     }
 
+    /// P1：v4/v6 分开报——LAN 与公网直连两档各有 v6 形态，互不混报。
+    #[test]
+    fn ipv6_paths_report_own_kinds() {
+        // LAN v6：fe80 链路本地与 ULA 私网段（分族只看地址前缀，与 scope_id 无关）
+        assert_eq!(
+            path_kind_of([(true, &ip("[fe80::1]:18000"))].into_iter()),
+            PathKind::LanV6
+        );
+        assert_eq!(
+            path_kind_of([(true, &ip("[fd00::2]:18000"))].into_iter()),
+            PathKind::LanV6
+        );
+        // 公网 v6
+        assert_eq!(
+            path_kind_of([(true, &ip("[240e:1234::1]:18000"))].into_iter()),
+            PathKind::DirectV6
+        );
+        // v4 的两档保持原样
+        assert_eq!(
+            path_kind_of([(true, &ip("192.168.31.2:18000"))].into_iter()),
+            PathKind::Lan
+        );
+        assert_eq!(
+            path_kind_of([(true, &ip("1.2.3.4:18000"))].into_iter()),
+            PathKind::Direct
+        );
+    }
+
+    /// 🔴 被选中的 v6 路径如实上报——这是 P1 验收「v6 直连是否在赢」的探针，
+    /// 不许被「更高的 v4 档」覆盖（选中优先于 rank）。
+    #[test]
+    fn selected_v6_beats_open_v4_lan() {
+        let v6 = ip("[240e:1234::1]:18000");
+        let lan_v4 = ip("192.168.31.2:18000");
+        assert_eq!(
+            path_kind_of([(true, &v6), (false, &lan_v4)].into_iter()),
+            PathKind::DirectV6
+        );
+        // 反过来：v4 LAN 在传数据，v6 公网只是开着 ⇒ 报 LAN（现状语义不变）
+        assert_eq!(
+            path_kind_of([(false, &v6), (true, &lan_v4)].into_iter()),
+            PathKind::Lan
+        );
+    }
+
+    /// 回退显示（无选中路径）时同档 v4 优先：保守口径，与历史标签一致。
+    #[test]
+    fn fallback_prefers_v4_within_same_tier() {
+        let lan_v4 = ip("192.168.31.2:18000");
+        let lan_v6 = ip("[fd00::2]:18000");
+        assert_eq!(
+            path_kind_of([(false, &lan_v6), (false, &lan_v4)].into_iter()),
+            PathKind::Lan
+        );
+        // 只有 v6 开着时如实报 v6
+        assert_eq!(
+            path_kind_of([(false, &lan_v6)].into_iter()),
+            PathKind::LanV6
+        );
+    }
+
     fn relay() -> TransportAddr {
         TransportAddr::Relay(iroh::RelayUrl::from_str("https://relay.example/").unwrap())
     }
@@ -294,11 +387,12 @@ mod tests {
 
     #[test]
     fn test_ipv6_局域网不能被当成公网直连() {
-        // 只看 v4 的 `is_private()` 就会漏这两个
+        // 只看 v4 的 `is_private()` 就会漏这两个。P1 起 v6 局域网报 `LanV6`
+        //（分族可见），但这条测试钉住的不变量没变：**绝不是** Direct/DirectV6。
         let ula = ip("[fd00::1]:7842");
-        assert_eq!(path_kind_of(std::iter::once((true, &ula))), PathKind::Lan);
+        assert_eq!(path_kind_of(std::iter::once((true, &ula))), PathKind::LanV6);
         let ll6 = ip("[fe80::1]:7842");
-        assert_eq!(path_kind_of(std::iter::once((true, &ll6))), PathKind::Lan);
+        assert_eq!(path_kind_of(std::iter::once((true, &ll6))), PathKind::LanV6);
     }
 
     #[test]
