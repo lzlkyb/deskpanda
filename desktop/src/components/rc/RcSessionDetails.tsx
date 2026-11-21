@@ -33,6 +33,7 @@ export function RcSessionDetails({ session, rc, frames, link, quality, scope, po
             scope={scope}
             linkState={link.state}
             pathKind={rc.status?.path_kind ?? ""}
+            homeRelay={rc.status?.home_relay ?? null}
             linkSched={linkSched}
             pointerLocked={pointerLocked}
             frameSize={frames.size}

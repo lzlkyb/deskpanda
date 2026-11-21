@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import {
+  homeRelayLabel,
   mappingLabel,
   punchSummary,
   rcNetDiag,
@@ -104,6 +105,14 @@ export function RcNetDiagCard() {
                   {snapshot.family_v6.observed ? ` · ${snapshot.family_v6.observed}` : ""}
                 </strong>
               </div>
+              {/* P0 C1：实际连接的中继（自建上线后直接显示自建域名；
+                  现在显示的是 n0 的节点——顺带能看见国内被甩到了哪台）。 */}
+              {homeRelayLabel(snapshot) && (
+                <div className={styles.netDiagRow}>
+                  <span>当前中继</span>
+                  <strong className={styles.mono}>{homeRelayLabel(snapshot)}</strong>
+                </div>
+              )}
               {snapshot.relay_latencies_ms.length > 0 && (
                 <div className={styles.netDiagRow}>
                   <span>最快中继</span>

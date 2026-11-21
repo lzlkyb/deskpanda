@@ -127,6 +127,11 @@ impl RcService {
                 .remote_loss_permille
                 .load(std::sync::atomic::Ordering::Relaxed),
             path_kind: self.link.path_kind_str(),
+            // P0 决策 C1：会话级「当前中继」。与诊断卡同一个取数口
+            // （relay_config::home_relay），别在这里再抄一份判断逻辑。
+            home_relay: self
+                .transport_ready()
+                .and_then(|(ep, _)| crate::net::relay_config::home_relay(&ep).map(|(u, _)| u)),
             // 🔴 P1（2026-10-15）：链路调度相位（stable/degraded/recovering/空）。
             // 诊断卡显示「链路质量」语义用；同时这里顺带消费 Recovering 观察窗
             // （sched_snapshot 内部 poll）。

@@ -35,4 +35,5 @@ pub mod mcast;
 pub mod network;
 pub mod path_kind;
 pub mod presence;
+pub mod relay_config;
 pub mod transport;

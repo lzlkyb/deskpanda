@@ -122,6 +122,9 @@ pub async fn get_or_bind(app_dir: &Path) -> Result<Arc<Endpoint>, String> {
                 ))
                 .build();
             let ep = Endpoint::builder(presets::N0)
+                // P0：中继表由 relay_config 统一给出（常量空 = RelayMode::Default，
+                // 与不调这行逐字节等价；自建就位后改常量即接入，决策 A1/B1）。
+                .relay_mode(crate::net::relay_config::relay_mode())
                 .secret_key(me.iroh_secret())
                 .alpns(shared_alpns())
                 .transport_config(transport)

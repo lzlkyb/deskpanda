@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
+
 /** 打洞可行性判定（与 Rust `PunchExpectation` 对齐，serde snake_case）。 */
 export type PunchExpectation =
   | "direct_likely"
@@ -41,6 +42,10 @@ export interface NetDiagSnapshot {
   verdict: PunchExpectation;
   family_v4: FamilyMapping;
   family_v6: FamilyMapping;
+  /** 当前 home 中继 URL（P0 C1）。null = 未选中/未启用中继。 */
+  home_relay: string | null;
+  /** home 中继是否已连接（iroh 1.1 只有已连/未连两态）。 */
+  home_relay_connected: boolean;
 }
 
 export interface NetDiag {
@@ -69,6 +74,27 @@ export function punchSummary(v: PunchExpectation): string {
     case "unknown":
       return "网络探测尚未完成";
   }
+}
+
+/** 中继 URL → host；解析失败原样返回（URL 来自自家后端，但显示层不该炸）。 */
+function relayHostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** 当前中继一行的展示值（「URL host · 已连接/未连接」）。null = 无中继态整行不出。 */
+export function homeRelayLabel(s: NetDiagSnapshot): string | null {
+  if (!s.home_relay) return null;
+  return `${relayHostOf(s.home_relay)} · ${s.home_relay_connected ? "已连接" : "未连接"}`;
+}
+
+/** 会话 HUD「路径」行的展示值：中继路径且知道 home 中继时附上域名
+ * （P0 C1，验收 §6.5「会话走自建」的判据格）；其余路径原样。 */
+export function pathRowValue(pathKind: string, path: string, homeRelay?: string | null): string {
+  return pathKind === "relay" && homeRelay ? `${path}（${relayHostOf(homeRelay)}）` : path;
 }
 
 /** 映射观测的单族描述（对称性三态 + 无 UDP 的兜底）。 */
