@@ -145,6 +145,8 @@ export interface RcStatus {
   peer_fps120?: boolean;
   /** 发起端视角：被控端是否支持 HEVC 硬编（Q3 caps）。4K60 档门控用。 */
   peer_hevc?: boolean;
+  /** 对端每屏可用显示模式(②分辨率调节)。空/null = 对端不支持或旧版本——前端不显示分辨率入口。 */
+  peer_display_modes?: import("../rcDisplayMode").PeerMonitorModes[] | null;
   /** 对端 AV1 编码器可用：Windows 硬件编码或 Mac SVT 软件编码。 */
   peer_av1?: boolean;
   /** 发起端视角：被控端主屏刷新率（Hz）。0 = 未上报。 */

@@ -31,6 +31,7 @@ import type { UseRc } from "@/hooks/useRc";
 import type { useRcInput } from "@/hooks/useRcInput";
 import type { RcLinkSnapshot } from "@/hooks/useRcLinkState";
 import type { RcCodecChoice } from "@/hooks/useRcCodecChoice";
+import type { RcResolutionChoice } from "@/hooks/useRcResolution";
 import type { useRcRemoteSend } from "@/hooks/useRcRemoteSend";
 import { useRcCapsuleReveal } from "@/hooks/useRcCapsuleReveal";
 import { useRcHoverReveal } from "@/hooks/useRcHoverReveal";
@@ -56,6 +57,7 @@ export function RcSessionCapsule({
   input,
   send,
   codecChoice,
+  resolution,
   quality,
   scopePick,
   bitrate,
@@ -88,6 +90,7 @@ export function RcSessionCapsule({
   input: RcInput;
   send: RcSend;
   codecChoice?: RcCodecChoice;
+  resolution?: RcResolutionChoice;
   /** 会话内生效的画质档 / 画面范围 / 码率倍率（下拉当前值）。 */
   quality: string;
   scopePick: string;
@@ -247,6 +250,7 @@ export function RcSessionCapsule({
           <RcCapsuleMore
             rc={rc}
             codecChoice={codecChoice}
+            resolution={resolution}
             canControl={canControl}
             bitrate={bitrate}
             bitrateOptions={send.bitrateOptions}

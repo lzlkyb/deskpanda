@@ -22,6 +22,7 @@ import type { UseRc } from "@/hooks/useRc";
 import { RcDropdown, type RcDropdownOption } from "./RcDropdown";
 import { RcCodecChoice } from "./RcCodecChoice";
 import type { RcCodecChoice as CodecChoice } from "@/hooks/useRcCodecChoice";
+import type { RcResolutionChoice } from "@/hooks/useRcResolution";
 import { RcAudioBar } from "./RcAudioBar";
 import { RcClipboardBar } from "./RcClipboardBar";
 import { RcFileBar } from "./RcFileBar";
@@ -30,6 +31,7 @@ import styles from "./RemoteComputer.module.css";
 export function RcCapsuleMore({
   rc,
   codecChoice,
+  resolution,
   canControl,
   bitrate,
   bitrateOptions,
@@ -52,6 +54,8 @@ export function RcCapsuleMore({
 }: {
   rc: UseRc;
   codecChoice?: CodecChoice;
+  /** ②分辨率调节下拉;不传/对端无 caps 则整块不渲染。 */
+  resolution?: RcResolutionChoice;
   canControl: boolean;
   /** Q5：当前码率倍率（50–200，100 = 跟随链路）。 */
   bitrate: number;
@@ -108,6 +112,21 @@ export function RcCapsuleMore({
       </div>
 
       {codecChoice && <RcCodecChoice choice={codecChoice} />}
+
+      {resolution && (
+        <>
+          <div className={styles.capMoreSec}>对方分辨率</div>
+          <div className={styles.capMoreBtns}>
+            <RcDropdown label="分辨率" value={resolution.value} options={resolution.options}
+              disabled={resolution.disabled}
+              disabledTitle={resolution.pending ? "正在切换分辨率" : "链路未连通，暂不能切换分辨率"}
+              onPick={key => void resolution.pick(key)} />
+          </div>
+          <div className={styles.capCodecStatus} role="status" aria-live="polite">
+            切对方物理分辨率提升流畅度；会话结束自动还原
+          </div>
+        </>
+      )}
 
       {canControl && (
         <>

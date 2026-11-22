@@ -547,7 +547,7 @@ pub(super) async fn send_caps_frame(
     let av1 = crate::macos::av1::available();
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let av1 = false;
-    let msg = serde_json::json!({
+    let mut msg = serde_json::json!({
         "t": "caps",
         "fps120": fps120,
         "fps_high": fps_high,
@@ -557,6 +557,15 @@ pub(super) async fn send_caps_frame(
         "monitors": monitors,
         "dgram_input": true,
     });
+    // ②分辨率调节：每屏可用模式（发起端下拉数据源）。空表不附
+    // （不支持平台/旧语义），旧对端忽略未知键,三向兼容。
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        let modes = super::display_mode::list_display_modes();
+        if !modes.is_empty() {
+            msg["display_modes"] = serde_json::json!(modes);
+        }
+    }
     if let Ok(b) = serde_json::to_vec(&msg) {
         let mut guard = send.lock().await;
         let _ = write_frame(&mut guard, &b).await;

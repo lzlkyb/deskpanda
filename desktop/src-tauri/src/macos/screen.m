@@ -178,3 +178,97 @@ uint32_t pp_mac_display_hz(uint32_t display){
 // 共享的原生内存释放（screen/remote_capture/remote_video/wic_jpeg 等的
 // read_native 归一出口；原仓住在 paste.m，这里随符号家族归入 screen.m）。
 void pp_mac_free(void *memory) { free(memory); }
+
+// ===== ② 远端分辨率调节（2026-11-22）：显示模式枚举 / 切换 / 会话期还原 =====
+// 枚举只给 CGDisplayModeIsUsableForDesktopGUI 的模式（滤掉 HiDPI 双倍重复档）；
+// w/h 用**像素**宽高（与 SCK 采集同口径）。current 标记当前模式。
+
+int32_t pp_mac_display_modes(uint32_t displayID, uint8_t **output, size_t *length) {
+    if(!output || !length) return 1;
+    *output=NULL; *length=0;
+    @autoreleasepool {
+        CFArrayRef all=CGDisplayCopyAllDisplayModes(displayID,NULL);
+        if(!all) return 2;
+        CGDisplayModeRef cur=CGDisplayCopyDisplayMode(displayID);
+        NSMutableArray *list=[NSMutableArray new];
+        CFIndex n=CFArrayGetCount(all);
+        for(CFIndex i=0;i<n;i++){
+            CGDisplayModeRef mode=(CGDisplayModeRef)CFArrayGetValueAtIndex(all,i);
+            if(!CGDisplayModeIsUsableForDesktopGUI(mode)) continue;
+            double rate=CGDisplayModeGetRefreshRate(mode);
+            uint32_t hz=(rate>0&&rate<=1000)?(uint32_t)llround(rate):0;
+            // 🔴 不能用指针相等比「当前模式」:CGDisplayCopyDisplayMode 返回的
+            // 是新 ref,与数组里的同模式实例指针必不相等——按像素尺寸+刷新率比。
+            BOOL current=NO;
+            if(cur){
+                double curRate=CGDisplayModeGetRefreshRate(cur);
+                uint32_t curHz=(curRate>0&&curRate<=1000)?(uint32_t)llround(curRate):0;
+                current=(CGDisplayModeGetPixelWidth(mode)==CGDisplayModeGetPixelWidth(cur)
+                      && CGDisplayModeGetPixelHeight(mode)==CGDisplayModeGetPixelHeight(cur)
+                      && hz==curHz);
+            }
+            [list addObject:@{
+                @"w":@(CGDisplayModeGetPixelWidth(mode)),
+                @"h":@(CGDisplayModeGetPixelHeight(mode)),
+                @"hz":@(hz),
+                @"current":@(current),
+            }];
+        }
+        if(cur) CGDisplayModeRelease(cur);
+        CFRelease(all);
+        NSData *json=[NSJSONSerialization dataWithJSONObject:list options:0 error:nil];
+        if(!json) return 3;
+        uint8_t *bytes=malloc(json.length); if(!bytes) return 4;
+        memcpy(bytes,json.bytes,json.length); *output=bytes; *length=json.length; return 0;
+    }
+}
+
+// 切换到第一个匹配 w/h（hz>0 时还要求刷新率一致）的可用模式。
+// kCGConfigureForAppOnly：应用退出（含崩溃）时 OS 自动还原——这是 mac 侧
+// 崩溃兜底，Drop 主动还原仍照做（会话正常结束就该回去，不等进程退出）。
+// 成功输出空串，失败输出一行 JSON 错误文案（UTF-8）。
+int32_t pp_mac_set_display_mode(uint32_t displayID,int32_t w,int32_t h,uint32_t hz,
+                               uint8_t **output,size_t *length){
+    if(!output || !length) return 1;
+    *output=NULL; *length=0;
+    if(w<=0||h<=0) { const char *m=("显示模式尺寸无效");
+        *length=strlen(m); *output=(uint8_t*)strdup(m); return 2; }
+    @autoreleasepool {
+        CFArrayRef all=CGDisplayCopyAllDisplayModes(displayID,NULL);
+        if(!all){ const char *m=("读不到显示器可用模式");
+            *length=strlen(m); *output=(uint8_t*)strdup(m); return 3; }
+        CGDisplayModeRef best=NULL;
+        CFIndex n=CFArrayGetCount(all);
+        for(CFIndex i=0;i<n;i++){
+            CGDisplayModeRef mode=(CGDisplayModeRef)CFArrayGetValueAtIndex(all,i);
+            if(!CGDisplayModeIsUsableForDesktopGUI(mode)) continue;
+            if((int32_t)CGDisplayModeGetPixelWidth(mode)!=w) continue;
+            if((int32_t)CGDisplayModeGetPixelHeight(mode)!=h) continue;
+            double rate=CGDisplayModeGetRefreshRate(mode);
+            uint32_t mhz=(rate>0&&rate<=1000)?(uint32_t)llround(rate):0;
+            if(hz>0 && mhz!=hz) continue;
+            best=mode;
+            if(hz==0 || mhz==hz) break; // hz==0：第一个尺寸匹配即可
+        }
+        if(!best){ CFRelease(all);
+            const char *m=("显示器不支持该分辨率（或该尺寸无可用模式）");
+            *length=strlen(m); *output=(uint8_t*)strdup(m); return 5; }
+        CGDisplayConfigRef config=NULL;
+        CGError e=CGBeginDisplayConfiguration(&config);
+        if(e!=kCGErrorSuccess){ CFRelease(all);
+            const char *m=("开始显示配置失败");
+            *length=strlen(m); *output=(uint8_t*)strdup(m); return 6; }
+        e=CGConfigureDisplayWithDisplayMode(config,displayID,best,NULL);
+        if(e!=kCGErrorSuccess){ CGCancelDisplayConfiguration(config); CFRelease(all);
+            const char *m=("应用显示模式失败（可能被系统设置/托管配置拦下）");
+            *length=strlen(m); *output=(uint8_t*)strdup(m); return 7; }
+        e=CGCompleteDisplayConfiguration(config,kCGConfigureForAppOnly);
+        CFRelease(all);
+        if(e!=kCGErrorSuccess){
+            const char *m=("确认显示配置失败");
+            *length=strlen(m); *output=(uint8_t*)strdup(m); return 8;
+        }
+        const char *m="";
+        *length=0; *output=(uint8_t*)strdup(m); return 0;
+    }
+}

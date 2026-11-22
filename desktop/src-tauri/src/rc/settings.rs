@@ -112,6 +112,14 @@ fn setting_event(key: &str, value: &str) -> Result<InputEvent, String> {
             codec: value.into(),
         }),
         ("audio", "on" | "off") => Ok(InputEvent::AudioOn { on: value == "on" }),
+        // ②分辨率调节:编码见 display_mode::encode_setting。🔴 只进 setting_event
+        // (发起端构造);event_setting 不映射它——被控端在 handle_inbound_input
+        // 里有专道(需要 Control 门禁 + guard 生命周期 + caps 重报,通用 tracked
+        // 分支装不下),别把它引回 apply_inbound_setting。
+        ("display_mode", v) => {
+            let (monitor, w, h, hz) = super::display_mode::decode_setting(v)?;
+            Ok(InputEvent::SetDisplayMode { monitor, w, h, hz })
+        }
         ("key_mode", "type" | "direct") => Ok(InputEvent::SetKeyMode { mode: value.into() }),
         _ => Err("不支持的设置或设置值".into()),
     }

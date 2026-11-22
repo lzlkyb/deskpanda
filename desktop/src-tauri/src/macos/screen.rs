@@ -98,6 +98,36 @@ pub(crate) fn native_monitors() -> Result<Vec<NativeMonitor>, String> {
     }
     Ok(list)
 }
+/// 布局变化的分类（②远端分辨率调节,2026-11-22）。
+pub(crate) enum LayoutChange {
+    /// 指纹一致。
+    Same,
+    /// 同一组显示器、同一位置，只有 w/h/scale 变了——**分辨率被切**，
+    /// 采集可以按新几何重建,不必断会话。
+    ModeOnly,
+    /// 显示器增删/位移——维持原熔断口径(布局变了,拼合/区域语义失效)。
+    Structural(&'static str),
+}
+
+/// 把「旧布局快照 vs 当前枚举」分类。原点(x,y)与 display_id 必须逐一相同
+/// 才算 ModeOnly——副屏尺寸变化常引发邻居屏原点重排,那属于 Structural
+/// (多屏重排场景仍按旧行为终止,单屏切换是绝对主流)。
+pub(crate) fn classify_layout_change(old: &[NativeMonitor], new: &[NativeMonitor]) -> LayoutChange {
+    let a = fingerprint(old);
+    let b = fingerprint(new);
+    if a == b {
+        return LayoutChange::Same;
+    }
+    if a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.0 == y.0 && x.1 == y.1 && x.2 == y.2)
+    {
+        return LayoutChange::ModeOnly;
+    }
+    LayoutChange::Structural("远控显示器布局或缩放已变化，请重新连接")
+}
+
 pub(crate) fn fingerprint(list: &[NativeMonitor]) -> Vec<(u32, i32, i32, i32, i32, u64)> {
     list.iter()
         .map(|m| {

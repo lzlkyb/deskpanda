@@ -138,7 +138,10 @@ describe("B 方案配对流程", () => {
     render(<RcPairCard onPaired={vi.fn()} />);
     enter();
     submit();
-    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+    // 🔴 等**失败文案**而不是任意 status 元素——提交中的 pending 态同样有
+    // role=status(「正在完成配对」),旧写法会在 pending 态就放行,下一条
+    // 「开始配对已恢复可用」的断言随即竞态(CI 两次红都在这条,2026-11-22 修)。
+    await waitFor(() => expect(screen.getByText("配对未能完成")).toBeTruthy());
     expect(screen.getByRole("button", { name: "开始配对" })).toBeEnabled();
     enter("87654321");
     expect(screen.queryByText("配对未能完成")).toBeNull();

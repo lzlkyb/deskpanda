@@ -35,6 +35,7 @@ import { RcSessionStage } from "./RcSessionStage";
 import { RcSessionCapsule } from "./RcSessionCapsule";
 import { RcSessionDetails } from "./RcSessionDetails";
 import { useRcCodecChoice } from "@/hooks/useRcCodecChoice";
+import { useRcResolution } from "@/hooks/useRcResolution";
 import styles from "./RemoteComputer.module.css";
 
 export function RcSessionView({
@@ -212,6 +213,13 @@ export function RcSessionView({
     actualCodec: frames.hasFrame ? frames.codec : "", quality: prefs.qPick, connected: link.state === "connected",
     onQuality: prefs.setQPick, onStatus: say,
   });
+  // ②分辨率调节:对端 caps 无 display_modes(旧版本/不支持平台)时
+  // supported=false,capsule 整块不渲染——宁缺毋滥。
+  const resolution = useRcResolution({
+    sessionId: session.id, peerModes: rc.status?.peer_display_modes,
+    connected: link.state === "connected", onStatus: say,
+  });
+  const resolutionChoice = resolution.supported ? resolution : undefined;
 
   return (
     <div className={styles.sessionWrap} ref={wrapRef}>
@@ -251,6 +259,7 @@ export function RcSessionView({
         input={input}
         send={send}
         codecChoice={codecChoice}
+        resolution={resolutionChoice}
         quality={prefs.qPick}
         scopePick={prefs.scopePick}
         bitrate={prefs.bitratePick}

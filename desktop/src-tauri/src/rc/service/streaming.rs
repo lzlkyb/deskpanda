@@ -210,6 +210,9 @@ impl RcService {
 
     /// 发起端：被控端上报的画面能力（P1 caps 控制帧）。UI 据此诚实出 fps120 档。
     /// Q3：caps 带 HEVC 硬编可用性；Q7：caps 顺带带上对端在线显示器列表。
+    // 参数平铺(8 参超 clippy 7 参线):这批值全部来自 caps 帧的一处解析,
+    // 收进结构体的重构留给 caps 整体改造(与 monitors 的先例同款口径)。
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::rc) fn note_peer_caps(
         &self,
         fps120: bool,
@@ -218,6 +221,7 @@ impl RcService {
         av1: bool,
         monitors: Vec<crate::platform::screen::MonitorInfo>,
         dgram_input: bool,
+        display_modes: Vec<crate::rc::display_mode::MonitorModes>,
     ) {
         self.peer_fps120
             .store(fps120, std::sync::atomic::Ordering::Relaxed);
@@ -230,6 +234,10 @@ impl RcService {
         self.peer_dgram_input
             .store(dgram_input, std::sync::atomic::Ordering::Relaxed);
         *self.peer_monitors.lock().unwrap_or_else(|p| p.into_inner()) = monitors;
+        *self
+            .peer_display_modes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = display_modes;
     }
 
     pub fn peer_fps120(&self) -> bool {

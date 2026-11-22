@@ -637,14 +637,26 @@ impl OutboundVideo {
                                 .get("dgram_input")
                                 .and_then(|x| x.as_bool())
                                 .unwrap_or(false);
+                            // ②：每屏可用显示模式（旧版本对端没有 → 空表 ⇒ 前端不显示分辨率入口）
+                            let display_modes: Vec<crate::rc::display_mode::MonitorModes> = v
+                                .get("display_modes")
+                                .and_then(|x| serde_json::from_value(x.clone()).ok())
+                                .unwrap_or_default();
                             // 探针（2026-09-27）：能力上报落日志——被控端硬编可用性
                             // 分诊的第一手证据（caps 一次会话至多几条，量可忽略）。
                             log::info!(
                                 "[RC] 对端 caps：fps120={fps120} hz={hz} hevc硬编={hevc} dgram_input={dgram_input} 显示器 {} 台",
                                 monitors.len()
                             );
-                            self.svc
-                                .note_peer_caps(fps120, hz, hevc, av1, monitors, dgram_input);
+                            self.svc.note_peer_caps(
+                                fps120,
+                                hz,
+                                hevc,
+                                av1,
+                                monitors,
+                                dgram_input,
+                                display_modes,
+                            );
                         }
                         Some("inject_err") => {
                             if let Some(e) = v.get("error").and_then(|x| x.as_str()) {
