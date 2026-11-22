@@ -173,6 +173,9 @@ pub struct RcStatus {
     pub peer_refresh_hz: u32,
     /// 发起端视角：被控端在线显示器列表（Q7 caps）。空 = 未上报（旧版本对端）。
     pub peer_monitors: Vec<crate::platform::screen::MonitorInfo>,
+    /// 发起端视角：被控端每屏可用显示模式（②分辨率调节下拉数据源）。
+    /// 空 = 对端不支持/旧版本——前端不显示分辨率入口。
+    pub peer_display_modes: Vec<crate::rc::display_mode::MonitorModes>,
     /// 发起端视角：被控端是否声明「能读鼠标移动数据报」（R3 caps）。
     /// false = 未上报（官方 7.2.1 及更早）——发起端 UI 据此提示升级对端；
     /// **不改传输**（MouseMove 仍走数据报，旧对端收不到是已知限制）。
@@ -299,6 +302,12 @@ pub struct RcService {
     /// 发起端：被控端在线显示器列表（Q7 caps 控制帧带几何信息）。
     /// 空 = 未上报或对端是旧版本——会话 UI 据此决定出不出逐屏选项。
     peer_monitors: Mutex<Vec<crate::platform::screen::MonitorInfo>>,
+    /// 发起端：被控端每屏可用显示模式（②分辨率调节，caps 帧）。空 = 对端
+    /// 不支持/旧版本——分辨率下拉不出现（宁缺毋滥）。
+    peer_display_modes: Mutex<Vec<crate::rc::display_mode::MonitorModes>>,
+    /// 被控端：本会话生效的分辨率护栏（见 `service/display.rs`）。
+    /// None = 本会话没改过分辨率。end_session 单一收口还原。
+    display_guard: Mutex<Option<crate::rc::display_mode::DisplayModeGuard>>,
     /// 发起端：被控端是否支持 HEVC 硬编（Q3 caps）。false = 不可用/未上报。
     peer_hevc: std::sync::atomic::AtomicBool,
     peer_av1: std::sync::atomic::AtomicBool,
@@ -630,6 +639,11 @@ async fn deny_and_close(
 
 impl RcService {
     pub fn new(store: DataStore) -> Self {
+        // ②分辨率调节的启动兜底：上次进程死在「改了没还原」的状态 → 静默还原。
+        // 必须在 store 被 move 进结构体之前跑。只在 Windows 有意义
+        // （mac 的 AppOnly 会话随进程退出由 OS 还原）。
+        #[cfg(target_os = "windows")]
+        Self::restore_pending_display_mode_at_boot(&store);
         let joins = RcJoins::new();
         // 局域网配对与 presence 收包共用同一个「已配对」判据
         // （见 `rc_paired_fn` 的注释：两个副本迟早对不上）。
@@ -651,6 +665,8 @@ impl RcService {
             peer_fps120: std::sync::atomic::AtomicBool::new(false),
             peer_refresh_hz: std::sync::atomic::AtomicU32::new(0),
             peer_monitors: Mutex::new(Vec::new()),
+            peer_display_modes: Mutex::new(Vec::new()),
+            display_guard: Mutex::new(None),
             peer_hevc: std::sync::atomic::AtomicBool::new(false),
             peer_av1: std::sync::atomic::AtomicBool::new(false),
             peer_dgram_input: std::sync::atomic::AtomicBool::new(false),
@@ -695,6 +711,7 @@ impl RcService {
 }
 
 // —— impl RcService 按功能组平移到子模块（2026-09-22 体量合规）——
+mod display;
 mod frames_clip;
 mod inbound;
 mod inbound_accept;

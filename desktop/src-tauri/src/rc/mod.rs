@@ -9,6 +9,7 @@ pub mod auto_quality;
 pub mod boot;
 pub mod clipboard;
 pub mod discovery;
+pub mod display_mode;
 pub mod file_proto;
 pub mod file_state;
 pub mod file_transfer;

@@ -560,6 +560,70 @@ pub(super) async fn handle_inbound_input(
             }
             return;
         }
+        // ②远端分辨率调节（2026-11-22）：专道处理——需要 Control 门禁、
+        // guard 生命周期、caps 重报，通用 tracked 分支（apply_inbound_setting）
+        // 装不下；回执帧自行构造（编码与发起端 display_mode::encode_setting 同源）。
+        InputEvent::SetDisplayMode { monitor, w, h, hz } => {
+            let value = super::display_mode::encode_setting(*monitor, *w, *h, *hz);
+            let result = if assert_control_allowed(cap).is_err() {
+                Err("当前是只看会话，不能调节分辨率".to_string())
+            } else if *w == 0 && *h == 0 {
+                svc.restore_display_mode();
+                Ok(())
+            } else {
+                svc.apply_display_mode(
+                    *monitor,
+                    &crate::rc::display_mode::DisplayMode {
+                        w: *w,
+                        h: *h,
+                        hz: *hz,
+                    },
+                )
+            };
+            match &result {
+                Ok(()) => {
+                    // 被控端必须看得见（B3 同款）：物理屏幕被改了,不能只 log。
+                    let label = if *w == 0 {
+                        "已恢复原始分辨率".to_string()
+                    } else {
+                        format!(
+                            "显示器{} → {}×{}{}",
+                            monitor + 1,
+                            w,
+                            h,
+                            if *hz > 0 {
+                                format!("@{hz}")
+                            } else {
+                                String::new()
+                            }
+                        )
+                    };
+                    svc.emit_stream_note("display", &label);
+                    // 模式变了 → caps 的 display_modes/monitors 几何都变了,重报
+                    send_caps_frame(svc, send).await;
+                }
+                Err(e) => log::warn!("[RC] 对端要求改分辨率失败：{e}"),
+            }
+            if let Some(id) = request_id {
+                let frame = match &result {
+                    Ok(()) => serde_json::json!({
+                        "t": "setting_ack", "request_id": id, "key": "display_mode",
+                        "status": "accepted", "value": value,
+                    }),
+                    Err(e) => serde_json::json!({
+                        "t": "setting_ack", "request_id": id, "key": "display_mode",
+                        "status": "rejected", "error": e,
+                    }),
+                };
+                if let Ok(bytes) = serde_json::to_vec(&frame) {
+                    let mut guard = send.lock().await;
+                    if let Err(error) = write_frame(&mut guard, &bytes).await {
+                        log::debug!("[RC] 分辨率回执发送失败：{error}");
+                    }
+                }
+            }
+            return;
+        }
         // G3-C：发起端要求静音 / 恢复**本机（被控端）主机扬声器**。
         //
         // 🔴 要求 Control —— 这动的是本机的**物理输出环境**（屋里人听不听得到），

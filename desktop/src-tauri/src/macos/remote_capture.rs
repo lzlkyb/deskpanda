@@ -194,11 +194,7 @@ impl Capture {
         self.scope == (monitor, virtual_screen, fps)
     }
     pub fn frame(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
-        if crate::macos::screen::fingerprint(&self.layout)
-            != crate::macos::screen::fingerprint(&crate::macos::screen::native_monitors()?)
-        {
-            return Err("远控显示器布局或缩放已变化，请重新连接".into());
-        }
+        self.guard_layout()?;
         let selected: Vec<_> = self
             .layout
             .iter()
@@ -215,12 +211,88 @@ impl Capture {
             let (w, h, bytes) = source.1.frame()?;
             image::RgbaImage::from_raw(w, h, bytes).ok_or("远控图像数据无效".into())
         })?;
-        if crate::macos::screen::fingerprint(&self.layout)
-            != crate::macos::screen::fingerprint(&crate::macos::screen::native_monitors()?)
-        {
-            return Err("远控显示器布局或缩放已变化，请重新连接".into());
-        }
+        self.guard_layout()?;
         Ok((frame.width(), frame.height(), frame.into_raw()))
+    }
+
+    /// 布局护栏（②远端分辨率调节改造）：
+    /// - `Same`：无事;
+    /// - `ModeOnly`：分辨率被切——**按新几何重建采集源**（SCK 流重开,
+    ///   带切换瞬态重试窗），会话继续。旧的口径是直接断会话,那正是
+    ///   「远端分辨率调节」要修掉的;
+    /// - `Structural`：维持原熔断（增删屏/位移/区域采集的任何变化）。
+    fn guard_layout(&mut self) -> Result<(), String> {
+        let now = crate::macos::screen::native_monitors()?;
+        match crate::macos::screen::classify_layout_change(&self.layout, &now) {
+            crate::macos::screen::LayoutChange::Same => Ok(()),
+            crate::macos::screen::LayoutChange::ModeOnly => {
+                // 区域采集（录屏路径,scope.0 == -2）不重建:区域语义绑死原布局。
+                if self.scope.0 == -2 {
+                    return Err("远控显示器布局或缩放已变化，请重新连接".into());
+                }
+                self.rebuild_for_mode_change(now)
+            }
+            crate::macos::screen::LayoutChange::Structural(msg) => Err(msg.into()),
+        }
+    }
+
+    /// 分辨率切换后的采集重建：新几何 → 重开各 SCK 流（2s 瞬态重试窗）→
+    /// 全部成功才替换旧源（半重建状态不留给下一帧）。
+    fn rebuild_for_mode_change(
+        &mut self,
+        new_layout: Vec<crate::macos::screen::NativeMonitor>,
+    ) -> Result<(), String> {
+        let (monitor, virtual_screen, fps) = self.scope;
+        let selected: Vec<_> = new_layout
+            .iter()
+            .filter(|m| {
+                if monitor >= 0 {
+                    m.monitor.index == monitor
+                } else {
+                    virtual_screen || m.monitor.primary
+                }
+            })
+            .collect();
+        if selected.is_empty() {
+            return Err("分辨率切换后未找到目标显示器".into());
+        }
+        let geometry: Vec<_> = selected.iter().map(|m| m.monitor.clone()).collect();
+        let region = crate::macos::screen_layout::bounds(&geometry)?;
+        region.validate(40_000_000)?;
+        validate_source_budget(selected.iter().map(|m| &m.monitor))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut sources = Vec::new();
+        for m in selected {
+            // 切模式瞬间 SCK start 可能瞬态失败:小重试窗内重试,窗口用尽才报错。
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match DisplayCapture::start(
+                    m.display_id,
+                    m.monitor.w as u32,
+                    m.monitor.h as u32,
+                    fps,
+                    remaining_ms(deadline)?,
+                    false,
+                ) {
+                    Ok(c) => {
+                        sources.push((m.monitor.index, c));
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt >= 3 || std::time::Instant::now() >= deadline {
+                            return Err(format!("分辨率切换后重建采集失败：{e}"));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+                }
+            }
+        }
+        self.layout = new_layout;
+        self.sources = sources;
+        self.region = region;
+        log::info!("[DisplayMode] 显示器分辨率已变化，采集源按新几何重建");
+        Ok(())
     }
 }
 fn validate_source_budget<'a>(
@@ -281,12 +353,16 @@ impl SurfaceCapture {
     }
     pub fn check(&self) -> Result<(), String> {
         require_host()?;
-        if crate::macos::screen::fingerprint(&self.layout)
-            != crate::macos::screen::fingerprint(&crate::macos::screen::native_monitors()?)
-        {
-            return Err("远控显示器布局或缩放已变化，请重新连接".into());
+        match crate::macos::screen::classify_layout_change(
+            &self.layout,
+            &crate::macos::screen::native_monitors()?,
+        ) {
+            // 分辨率被切:宽高变了 ⇒ 上一层(remote_video)算出的 surface 尺寸
+            // 变了 ⇒ matches 失败 ⇒ surface 自动按新尺寸重建。这里放行即可。
+            crate::macos::screen::LayoutChange::Same
+            | crate::macos::screen::LayoutChange::ModeOnly => Ok(()),
+            crate::macos::screen::LayoutChange::Structural(msg) => Err(msg.into()),
         }
-        Ok(())
     }
     pub(crate) fn handle(&self) -> *mut c_void {
         self.source.0

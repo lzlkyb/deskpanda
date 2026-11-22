@@ -114,7 +114,9 @@ export function RcControlDrawer({
                     : "对方开始接收本机系统声音（你现在播放的声音对方能听到）"
                 : streamNotice.kind === "codec"
                   ? `对方把编码切成了「${remoteCodecLabel(streamNotice.name)}」`
-                  : `对方把画质调成了「${qualityLabel(streamNotice.name)}」`}
+                  : streamNotice.kind === "display"
+                    ? `对方调整了本机分辨率：${streamNotice.name}`
+                    : `对方把画质调成了「${qualityLabel(streamNotice.name)}」`}
               <button
                 type="button"
                 className={styles.scopeNoticeX}

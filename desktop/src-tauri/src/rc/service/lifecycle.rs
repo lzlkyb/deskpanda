@@ -147,6 +147,11 @@ impl RcService {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone(),
+            peer_display_modes: self
+                .peer_display_modes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
             // C3：投影 age（投影时刻 = 现在），裸单调值不出进程。
             pong_age_ms: self.link.pong_age_ms(crate::rc::mono::mono_ms()),
             // clone 而非 take：Overlay/对话框/设置多处 useRc 并发轮询，take 会只有一处看见

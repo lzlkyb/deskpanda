@@ -211,6 +211,9 @@ impl RcService {
             // 丙-③：画面暂停位也随会话收口作废（暂停不是跨会话的隐私意愿，与
             // `audio_local_mute` 相反）；发起端那份「对方已暂停」同理不能留着。
             self.video_pause_reset();
+            // ②分辨率调节：护栏随会话收口——正常结束/掉线/强制结束都把被控端
+            // 分辨率还原到会话前（guard Drop 做平台还原,见 display_mode.rs）。
+            self.restore_display_mode();
             // 丙（2026-10-12，Issue #19）：发起端存的「对方编码档位」同理作废——
             // 留着它，下一场连上另一台机器时会先挂一条上一场的降级说明。
             self.video_pipe_reset();

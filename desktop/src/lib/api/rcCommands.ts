@@ -335,7 +335,7 @@ export function rcSendInput(event: RcInputEvent): Promise<void> {
 }
 
 export type RcSettingKey = "quality" | "audio" | "key_mode";
-export type RcPeerSettingKey = RcSettingKey | "codec";
+export type RcPeerSettingKey = RcSettingKey | "codec" | "display_mode";
 export type RcSettingResult = { status: "accepted" | "unconfirmed"; value: string };
 /** Only a correlated peer receipt establishes acceptance; transport success alone does not. */
 export function rcApplySetting(sessionId: string, key: RcPeerSettingKey, value: string): Promise<RcSettingResult> {

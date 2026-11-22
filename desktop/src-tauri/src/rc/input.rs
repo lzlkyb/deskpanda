@@ -82,6 +82,17 @@ pub enum InputEvent {
     SetCaptureScope {
         scope: String,
     },
+    /// ②远端分辨率调节（2026-11-22）：把被控端 `monitor` 号显示器切到
+    /// `w`×`h`@`hz`（hz=0 = 不指定刷新率）。`w==0 && h==0` = 还原本会话改过的分辨率。
+    ///
+    /// ❗ **要求 Control**：改的是被控端的**物理显示环境**（与会话结束自动还原
+    /// 绑定），与 [`InputEvent::SetHostMute`] 同档——「只看」会话拒绝并回执。
+    SetDisplayMode {
+        monitor: i32,
+        w: i32,
+        h: i32,
+        hz: u32,
+    },
     /// 发起端要求本会话强制走 JPEG（H.264 解不出时回退）。
     SetCodec {
         codec: String,
@@ -891,6 +902,8 @@ fn inject_win(ev: &InputEvent, region: &ScreenRegion, mode: KeyMode) -> Result<(
         InputEvent::SetBitratePct { .. } => Ok(()),
         InputEvent::SetQuality { .. }
         | InputEvent::SetCaptureScope { .. }
+        // ②分辨率调节：不注入（由 inbound.rs 专道处理，含 Control 门禁与还原）
+        | InputEvent::SetDisplayMode { .. }
         | InputEvent::SetCodec { .. }
         | InputEvent::RequestKey
         | InputEvent::AudioOn { .. }
