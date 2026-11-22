@@ -98,6 +98,11 @@ export function rcDeviceRename(nodeId: string, note: string): Promise<void> {
   return invoke("rc_device_rename", { nodeId, note });
 }
 
+/** 设置/清除手动直连地址（IP 直连入口）。null 或空串 = 清除。 */
+export function rcDeviceManualAddrSet(nodeId: string, addr: string | null): Promise<void> {
+  return invoke("rc_device_manual_addr_set", { nodeId, addr: addr || null });
+}
+
 /** 设备彩色标签（2026-09-26 对齐稿①）。整组覆盖式保存；空数组 = 清空。 */
 export function rcDeviceTagsSet(nodeId: string, tags: RcDeviceTag[]): Promise<void> {
   return invoke("rc_device_tags_set", { nodeId, tags });

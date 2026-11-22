@@ -24,6 +24,7 @@ import type { RcDeviceUi } from "@/hooks/useRcDeviceUi";
 import { RcA2ConnectionFacts } from "./RcA2ConnectionFacts";
 import { RcA2DeviceHero } from "./RcA2DeviceHero";
 import { RcA2DeviceOrgEditor } from "./RcA2DeviceOrgEditor";
+import { RcManualAddrRow } from "./RcManualAddrRow";
 import { RcDeviceManageActions } from "./RcDeviceManageActions";
 import { RcRecentSessions } from "./RcRecentSessions";
 import styles from "./RemoteComputerA2.module.css";
@@ -51,6 +52,7 @@ export function RcA2DeviceDetail({
   onRename,
   onSetTags,
   onSetRemark,
+  onSetManualAddr,
   onViewHistory,
   capFor,
   toast,
@@ -77,6 +79,8 @@ export function RcA2DeviceDetail({
   /** 对齐稿①：标签整组覆盖保存 / 描述备注（仅 rc 表设备有落点，同步配对不摆编辑器）。 */
   onSetTags: (id: string, tags: import("@/lib/api/rc").RcDeviceTag[]) => Promise<boolean>;
   onSetRemark: (id: string, remark: string) => Promise<boolean>;
+  /** 不传 = 不显示该行（同 onTrust 的可选口径）。 */
+  onSetManualAddr?: (id: string, addr: string | null) => Promise<boolean>;
   /** 「查看全部」跳到记录页。 */
   onViewHistory: () => void;
   /** hero 大钮的发起档（按设备记忆优先，与侧栏行 meta 同源）。 */
@@ -225,6 +229,9 @@ export function RcA2DeviceDetail({
               busy={busy}
               actions={actions}
             />
+            {target.source === "rc" && onSetManualAddr && (
+              <RcManualAddrRow target={target} busy={busy} onSet={onSetManualAddr} />
+            )}
             {target.source === "rc" && (
               <RcA2DeviceOrgEditor
                 key={target.node_id}
