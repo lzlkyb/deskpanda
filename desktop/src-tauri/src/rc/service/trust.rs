@@ -7,6 +7,57 @@
 use super::*;
 
 const CFG_PEER_ADDRS: &str = "rc_peer_addrs";
+/// 手动直连地址表：node_id -> 规范化字符串（`ip:port`；裸 IP 存成无端口的 ip）。
+const CFG_MANUAL_ADDRS: &str = "rc_manual_addrs";
+
+/// 解析用户手填的直连地址。
+///
+/// 接受三种形态：`1.2.3.4:端口`、`[fd00::9]:端口`、裸 IP（v4 或 v6 字面量，
+/// **不带**方括号/端口）——裸 IP 存为端口 0，拨号时再取对端最新已知端点端口
+/// （端点端口是易失的，存死只会过期）。
+///
+/// 拒绝的：通配地址（0.0.0.0 / `::`——永远拨不通）；带网卡 zone 的 v6
+/// （`fe80::1%en0`——std 不认，且 zone 只在本机有意义）。**回环允许**：
+/// 直连网线/本机调试是合法场景，身份反正由 QUIC 握手校验。
+fn parse_manual_addr(raw: &str) -> Result<std::net::SocketAddr, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("直连地址不能为空".into());
+    }
+    // 先按标准 SocketAddr 试（v4:port 与 [v6]:port 都在这条路上）
+    if let Ok(a) = s.parse::<std::net::SocketAddr>() {
+        if a.ip().is_unspecified() {
+            return Err("0.0.0.0 / :: 不是可拨的地址".into());
+        }
+        return Ok(a);
+    }
+    // 再试裸 IP（v4 或 v6 字面量）
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        if ip.is_unspecified() {
+            return Err("0.0.0.0 / :: 不是可拨的地址".into());
+        }
+        return Ok(std::net::SocketAddr::new(ip, 0));
+    }
+    Err(format!(
+        "「{s}」不是合法的 IP 直连地址（支持 192.168.1.5:4919、[fd00::9]:4919 或裸 IP）"
+    ))
+}
+
+/// 规范化存储格式：裸 IP（端口 0）存 `ip`，否则存 `ip:port`。
+fn manual_addr_to_str(a: &std::net::SocketAddr) -> String {
+    if a.port() == 0 {
+        a.ip().to_string()
+    } else {
+        a.to_string()
+    }
+}
+
+/// 读某台设备的手动直连地址。存的时候校验过格式；这里读坏值**宽容为无**
+/// （配置可能被手改）——别让一条脏配置把拨号整个炸掉。
+fn manual_addr_of(config: &serde_json::Value, peer: &str) -> Option<std::net::SocketAddr> {
+    let s = config.get(CFG_MANUAL_ADDRS)?.get(peer)?.as_str()?;
+    parse_manual_addr(s).ok()
+}
 
 /// 配对时收到的已签名地址供后续重连使用；无缓存时仍走 iroh 自带的地址发现。
 fn saved_peer_addr(config: &serde_json::Value, peer: &str) -> Option<EndpointAddr> {
@@ -33,7 +84,77 @@ impl RcService {
         for socket in presence.addrs_of(peer, now_ms()) {
             addr = addr.with_ip_addr(socket);
         }
+        // 手动直连地址（IP 直连入口）：只是**多给一条候选**——与 presence 学到的、
+        // 中继兜底一起交给 QUIC 竞速（P1 决策 C 同哲学），不覆盖任何已有候选。
+        // 填错的最坏结果是这一条不通，其他路径原样可用。
+        //
+        // 裸 IP（端口 0）：端点端口对端每次重启都可能换，拨号时取**最新**已知端口
+        // （presence 优先于存盘的旧地址）；一个都拿不到就跳过这条候选并留日志，
+        // 绝不往 0 端口拨。
+        if let Some(m) = manual_addr_of(&config, peer) {
+            let resolved = match m.port() {
+                0 => presence
+                    .addrs_of(peer, now_ms())
+                    .first()
+                    .map(|a| a.port())
+                    .or_else(|| addr.ip_addrs().next().map(|a| a.port()))
+                    .map(|p| {
+                        let mut m = m;
+                        m.set_port(p);
+                        m
+                    }),
+                _ => Some(m),
+            };
+            match resolved {
+                Some(m) => addr = addr.with_ip_addr(m),
+                None => log::info!(
+                    "[ManualAddr] {} 存了裸 IP 但拿不到对端已知端口，本次跳过该候选",
+                    &peer[..8.min(peer.len())]
+                ),
+            }
+        }
         Ok(addr)
+    }
+
+    /// 设置/清除某台设备的手动直连地址（IP 直连入口）。
+    ///
+    /// 🔴 前置与 `set_device_trust` 同一条：必须已是本机认可的设备——手动地址
+    ///    是「给已配对设备补一条路」，不是「连陌生设备」的口子（身份由 QUIC
+    ///    握手校验，但 UI 入口也只对已配对设备存在）。
+    pub fn set_manual_addr(&self, peer: &str, addr: Option<&str>) -> Result<(), String> {
+        if !self.has_remote_trust(peer) {
+            return Err("该设备尚未与本机配对，无法设置直连地址".into());
+        }
+        let addr = addr.map(str::trim).filter(|s| !s.is_empty());
+        let mut config = self.store.get_config()?;
+        let obj = config.as_object_mut().ok_or("配置文件不是一个对象")?;
+        match addr.map(parse_manual_addr).transpose()? {
+            None => {
+                if let Some(map) = obj
+                    .get_mut(CFG_MANUAL_ADDRS)
+                    .and_then(|v| v.as_object_mut())
+                {
+                    map.remove(peer);
+                }
+            }
+            Some(a) => {
+                let entry = obj
+                    .entry(CFG_MANUAL_ADDRS)
+                    .or_insert_with(|| serde_json::json!({}));
+                let map = entry.as_object_mut().ok_or("rc_manual_addrs 格式无效")?;
+                map.insert(
+                    peer.to_string(),
+                    serde_json::Value::String(manual_addr_to_str(&a)),
+                );
+            }
+        }
+        self.store.save_config(&config)
+    }
+
+    /// 设备详情用：该设备当前的手动直连地址（存盘原样字符串，空 = 未设置）。
+    pub fn manual_addr_str(&self, peer: &str) -> Option<String> {
+        let config = self.store.get_config().ok()?;
+        manual_addr_of(&config, peer).map(|a| manual_addr_to_str(&a))
     }
 
     pub(in crate::rc) fn save_peer_addr(
@@ -214,5 +335,56 @@ mod short_pair_addr_tests {
         config[CFG_PEER_ADDRS][peer.as_str()] =
             serde_json::to_value(EndpointAddr::new(id)).unwrap();
         assert_eq!(saved_peer_addr(&config, &peer).unwrap().id, id);
+    }
+
+    #[test]
+    fn 手动地址_三种合法形态都解析得动() {
+        use std::net::SocketAddr;
+        let v4 = parse_manual_addr(" 192.168.1.5:4919 ").unwrap();
+        assert_eq!(v4, SocketAddr::from(([192, 168, 1, 5], 4919)));
+        let v6 = parse_manual_addr("[fd00::9]:4919").unwrap();
+        assert_eq!(v6.port(), 4919);
+        assert_eq!(v6.ip().to_string(), "fd00::9");
+        // 裸 IP（v4 / v6）：端口 0 = 拨号时再补
+        assert_eq!(parse_manual_addr("10.0.0.7").unwrap().port(), 0);
+        assert_eq!(parse_manual_addr("fe80::1").unwrap().port(), 0);
+    }
+
+    #[test]
+    fn 手动地址_通配与垃圾串都拒() {
+        assert!(parse_manual_addr("0.0.0.0:4919").is_err(), "通配 v4 不可拨");
+        assert!(parse_manual_addr("[::]:4919").is_err(), "通配 v6 不可拨");
+        assert!(parse_manual_addr("").is_err());
+        assert!(parse_manual_addr("   ").is_err());
+        assert!(parse_manual_addr("not-an-ip").is_err());
+        assert!(parse_manual_addr("192.168.1.5:").is_err());
+        // 回环**允许**：直连网线 / 本机调试是合法场景，身份由 QUIC 握手校验
+        assert!(parse_manual_addr("127.0.0.1:4919").is_ok());
+    }
+
+    #[test]
+    fn 手动地址_存储格式往返一致() {
+        use std::net::SocketAddr;
+        let full = SocketAddr::from(([192, 168, 1, 5], 4919));
+        assert_eq!(manual_addr_to_str(&full), "192.168.1.5:4919");
+        let bare = SocketAddr::from(([10, 0, 0, 7], 0));
+        assert_eq!(manual_addr_to_str(&bare), "10.0.0.7");
+        // 序列化 → 反解析无损（裸 IP 回来还是端口 0）
+        assert_eq!(parse_manual_addr(&manual_addr_to_str(&bare)).unwrap(), bare);
+    }
+
+    #[test]
+    fn 手动地址_坏配置宽容为无_不炸拨号() {
+        let config = serde_json::json!({
+            CFG_MANUAL_ADDRS: {
+                "peer-ok": "192.168.1.5:4919",
+                "peer-bad": "被手改坏的值",
+                "peer-empty": "",
+            }
+        });
+        assert!(manual_addr_of(&config, "peer-ok").is_some());
+        assert!(manual_addr_of(&config, "peer-bad").is_none(), "坏值当没有");
+        assert!(manual_addr_of(&config, "peer-empty").is_none());
+        assert!(manual_addr_of(&config, "peer-missing").is_none());
     }
 }

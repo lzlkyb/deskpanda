@@ -21,7 +21,7 @@ import { useRcWorkbenchClose } from "@/hooks/useRcWorkbenchClose";
 import { usePlatform } from "@/hooks/usePlatform";
 import { fingerprintOf } from "@/lib/fingerprint";
 import { rcDisplayName } from "@/lib/rcDevice";
-import { rcDeviceRename, rcDeviceRemarkSet, rcDeviceTagsSet } from "@/lib/api/rc";
+import { rcDeviceManualAddrSet, rcDeviceRename, rcDeviceRemarkSet, rcDeviceTagsSet } from "@/lib/api/rc";
 import { normalizeHistoryPeer, summarizeHistoryDevices } from "@/lib/rcHistory";
 import { rcPlatformDegraded } from "@/lib/rcPlatform";
 import { readAutoStartChannel } from "@/lib/rcPrefs";
@@ -197,6 +197,7 @@ export function RcWorkbench() {
         onRename={(id, note) => saveDeviceField(() => rcDeviceRename(id, note))}
         onSetTags={(id, tags) => saveDeviceField(() => rcDeviceTagsSet(id, tags))}
         onSetRemark={(id, remark) => saveDeviceField(() => rcDeviceRemarkSet(id, remark))}
+        onSetManualAddr={(id, addr) => saveDeviceField(() => rcDeviceManualAddrSet(id, addr))}
         onViewHistory={() => { setHistoryPeer(selectedId); setPage("history"); }}
         capFor={capOf}
         toast={toast}

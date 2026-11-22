@@ -84,6 +84,10 @@ pub struct RcTargetDevice {
     pub display_name: String,
     /// 方案 D「免确认直连」：这台设备发起远程时跳过人工同意。默认 false。
     pub trusted: bool,
+    /// 手动直连地址（IP 直连入口）：`ip:port` 或裸 `ip`（拨号时自动补对端
+    /// 最新已知端点端口）。作为**额外候选**并入拨号地址集（QUIC 竞速，不覆盖
+    /// presence/中继）；`None` = 未设置。仅 rc 配对设备有值。
+    pub manual_addr: Option<String>,
     /// 决策 10「自动接收」：这台设备**推送**文件过来时跳过确认条。
     /// 与 `trusted` 是两件独立的事（那条管接管屏幕，这条只管自动收文件）。
     ///
@@ -169,6 +173,7 @@ pub fn rc_targets(
         // 🔴 2026-09-21：不再把库里的 `d.conn_state` 传进去——那个字段只写 online
         //    从不写 offline，读它必然产生假在线（详见 `is_rc_online_for` 的说明）。
         let online = is_rc_online_for(&d.node_id, d.last_seen, &live, session_peer.as_deref(), now);
+        let manual_addr = svc.manual_addr_str(&d.node_id);
         out.push(RcTargetDevice {
             denied: deny.get(&d.node_id).copied().unwrap_or(false),
             display_name: display_name_of(&d.note, &d.name),
@@ -185,6 +190,7 @@ pub fn rc_targets(
             last_path: d.last_path,
             note: d.note,
             trusted: d.trusted,
+            manual_addr,
             auto_accept: d.auto_accept,
             os: d.os,
             tags: d.tags,
@@ -221,6 +227,8 @@ pub fn rc_targets(
             note: String::new(),
             // 仅同步配对还没提升进 rc 表，无从谈「免确认」——恒 false。
             trusted: false,
+            // 同理：同步设备没有远程配对，没有直连地址入口——恒 None。
+            manual_addr: None,
             // 同理：它从没发起过文件推送，谈不上「自动接收」——恒 false。
             auto_accept: false,
             // 同理：它从没跑过 rc 会话，没有 Accept 帧可读系统，恒空串。
@@ -1056,6 +1064,23 @@ pub async fn rc_device_auto_accept_set(
     on: bool,
 ) -> Result<(), String> {
     svc.set_device_auto_accept(&node_id, on)?;
+    emit_changed(&app, &svc);
+    Ok(())
+}
+
+/// 设置/清除某台设备的手动直连地址（IP 直连入口）。`addr` 空串或 null = 清除。
+///
+/// 🔴 只对已配对设备生效（`set_manual_addr` 内有门禁）：这是「给认识的设备
+///    补一条路」，不是「连陌生设备」的口子——身份仍由 QUIC 握手校验，
+///    地址填错的最坏结果是这一条候选不通。
+#[tauri::command]
+pub async fn rc_device_manual_addr_set(
+    app: AppHandle,
+    svc: State<'_, Arc<RcService>>,
+    node_id: String,
+    addr: Option<String>,
+) -> Result<(), String> {
+    svc.set_manual_addr(&node_id, addr.as_deref())?;
     emit_changed(&app, &svc);
     Ok(())
 }

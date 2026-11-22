@@ -704,6 +704,21 @@
 .orgSwatchOn {
   border-color: var(--text-primary);
 }
+.manualAddrRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.manualAddrValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.manualAddrHint {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-muted);
+}
 .orgSave {
   margin-top: 8px;
   font-size: 12px;

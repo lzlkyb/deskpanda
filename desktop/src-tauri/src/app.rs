@@ -652,6 +652,7 @@ pub fn run() {
         commands::rc_exchange_check,
         commands::rc_pair,
         commands::rc_device_rename,
+        commands::rc_device_manual_addr_set,
         commands::rc_device_tags_set,
         commands::rc_device_remark_set,
         commands::rc_forget,
